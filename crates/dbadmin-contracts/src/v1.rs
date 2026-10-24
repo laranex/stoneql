@@ -84,8 +84,18 @@ pub struct QueryRequest {
     pub max_bytes: u32,
 }
 
-/// Validates the envelope/limits, never SQL syntax, record values or query execution.
-pub fn decode_query_request(json: &str) -> Result<Envelope<QueryRequest>, CoreError> {
+/// Validates an opaque protocol identifier without interpreting database names or SQL.
+pub fn is_opaque_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+}
+
+pub fn decode_envelope<T: serde::de::DeserializeOwned + Serialize>(
+    json: &str,
+) -> Result<Envelope<T>, CoreError> {
     let bad = || CoreError::rejected(ErrorCode::InvalidRequest);
     if json.len() > 131_072 {
         return Err(bad());
@@ -102,24 +112,20 @@ pub fn decode_query_request(json: &str) -> Result<Envelope<QueryRequest>, CoreEr
     if fields["version"] != 1 {
         return Err(CoreError::rejected(ErrorCode::UnsupportedVersion));
     }
-    let payload = fields["payload"].as_object().ok_or_else(bad)?;
-    if payload.len() != 5
-        || !["connectionId", "database", "sql", "maxRows", "maxBytes"]
-            .iter()
-            .all(|key| payload.contains_key(*key))
-    {
+    let envelope: Envelope<T> = serde_json::from_str(json).map_err(|_| bad())?;
+    if serde_json::to_value(&envelope).map_err(|_| bad())? != object {
         return Err(bad());
     }
-    let envelope: Envelope<QueryRequest> = serde_json::from_str(json).map_err(|_| bad())?;
-    let valid_id = |id: &str| {
-        !id.is_empty()
-            && id.len() <= 128
-            && id
-                .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
-    };
-    if !valid_id(&envelope.request_id)
-        || !valid_id(&envelope.payload.connection_id)
+    if !is_opaque_id(&envelope.request_id) {
+        return Err(bad());
+    }
+    Ok(envelope)
+}
+
+pub fn decode_query_request(json: &str) -> Result<Envelope<QueryRequest>, CoreError> {
+    let bad = || CoreError::rejected(ErrorCode::InvalidRequest);
+    let envelope: Envelope<QueryRequest> = decode_envelope(json)?;
+    if !is_opaque_id(&envelope.payload.connection_id)
         || envelope.payload.sql.len() > 65_536
         || envelope.payload.sql.is_empty()
         || !(1..=1000).contains(&envelope.payload.max_rows)
@@ -160,6 +166,7 @@ pub struct QueryResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorCodeDto {
+    Forbidden,
     InvalidRequest,
     UnsupportedVersion,
     UnsupportedCapability,
@@ -187,6 +194,7 @@ pub struct ErrorDto {
 impl From<CoreError> for ErrorDto {
     fn from(error: CoreError) -> Self {
         let code = match error.code {
+            ErrorCode::Forbidden => ErrorCodeDto::Forbidden,
             ErrorCode::InvalidRequest => ErrorCodeDto::InvalidRequest,
             ErrorCode::UnsupportedVersion => ErrorCodeDto::UnsupportedVersion,
             ErrorCode::UnsupportedCapability => ErrorCodeDto::UnsupportedCapability,
@@ -239,9 +247,69 @@ pub struct CapabilitySnapshot {
     pub capabilities: Vec<CapabilityStatus>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInfoRequest {
+    pub nonce: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HostInfo {
+    pub runtime: String,
+    pub app_version: String,
+    pub session_id: String,
+    pub nonce: String,
+    pub simulated: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeAction {
+    Echo,
+    Ready,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContractProbe {
+    pub session_id: String,
+    pub action: ProbeAction,
+    pub values: Vec<CellValue>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeResult {
+    pub values: Vec<CellValue>,
+    pub simulated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseAction {
+    Prompted,
+    Cancel,
+    Confirm,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseDecision {
+    pub session_id: String,
+    pub action: CloseAction,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct CloseResult {
+    pub closed: bool,
+}
+
 pub fn typescript() -> String {
     let config = ts_rs::Config::default();
     let declarations = [
+        CloseAction::decl(&config),
+        CloseDecision::decl(&config),
+        CloseResult::decl(&config),
+        HostInfoRequest::decl(&config),
+        HostInfo::decl(&config),
+        ProbeAction::decl(&config),
+        ContractProbe::decl(&config),
+        ProbeResult::decl(&config),
         CellValue::decl(&config),
         InputValue::decl(&config),
         QueryRequest::decl(&config),

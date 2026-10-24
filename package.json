@@ -27,6 +27,10 @@
     "rust:boundaries": "node tools/check-rust-boundaries.mjs",
     "contracts:generate": "cargo run --locked -p dbadmin-contracts --example generate",
     "contracts:check": "cargo run --locked -p dbadmin-contracts --example generate -- --check && tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler contracts/tests/v1.ts",
-    "spike:drivers": "node tools/run-driver-spikes.mjs"
+    "spike:drivers": "node tools/run-driver-spikes.mjs",
+    "desktop:build": "npm run build && cargo build --locked -p dbadmin-desktop --features custom-protocol",
+    "desktop:run": "npm run desktop:build && cargo run --locked -p dbadmin-desktop --features custom-protocol",
+    "desktop:test": "cargo test --locked -p dbadmin-desktop --features custom-protocol",
+    "desktop:smoke": "npm run desktop:build && cargo run --locked -p dbadmin-desktop --features custom-protocol -- --smoke-test"
   }
 }

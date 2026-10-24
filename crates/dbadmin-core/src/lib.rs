@@ -65,6 +65,7 @@ pub trait CapabilityProvider {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
+    Forbidden,
     InvalidRequest,
     UnsupportedVersion,
     UnsupportedCapability,
@@ -77,6 +78,7 @@ pub enum ErrorCode {
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
         match self {
+            Self::Forbidden => "This action is not permitted.",
             Self::InvalidRequest => "Invalid request.",
             Self::UnsupportedVersion => "Unsupported protocol version.",
             Self::UnsupportedCapability => "This capability is not supported.",

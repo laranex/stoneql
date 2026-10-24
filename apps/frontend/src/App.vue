@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { hostState, resolveNativeClose } from './services/nativeHost';
+const nativeHostState = hostState();
 import { insertRecords, RecordConstraintError } from './services/recordMutations';
 import { searchRows, searchOperators as availableSearchOperators, type SearchOperator } from './services/search';
 import DatabaseObjects from './components/DatabaseObjects.vue';
@@ -1088,15 +1090,28 @@ async function keyboard(event: KeyboardEvent) {
     settings.value = true;
   }
 }
+function hasUnsavedChanges() {
+  return cellIsDirty() || insertDirty.value ||
+    (connectionDialog.value && JSON.stringify(connectionDraft.value) !== connectionDraftInitial.value) ||
+    (columnDialog.value && JSON.stringify(columnDraft.value) !== columnDraftInitial.value) ||
+    (manager.value && groupEditing.value !== null && !!groupName.value.trim()) ||
+    Object.values(store.workspaces).some((ws) => ws.queries.some((q) => q.sql !== q.saved));
+}
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (
-    cellIsDirty() ||
-    insertDirty.value ||
-    Object.values(store.workspaces).some((ws) => ws.queries.some((q) => q.sql !== q.saved))
-  ) {
-    event.preventDefault();
-    event.returnValue = '';
-  }
+  if (hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ''; }
+}
+let nativeCloseHandling = false;
+async function nativeCloseRequested() {
+  if (nativeCloseHandling) { void resolveNativeClose('prompted').catch(() => {}); return; }
+  if (nativeHostState.kind === 'browser') return;
+  nativeCloseHandling = true;
+  try {
+    const decision = hasUnsavedChanges() ? askDiscard('Close dbAdmin and discard unsaved changes?', 'Close dbAdmin') : Promise.resolve(true);
+    await nextTick();
+    await resolveNativeClose('prompted');
+    await resolveNativeClose((await decision) ? 'confirm' : 'cancel');
+  } catch { notify('Native close could not be confirmed. Your edits remain open.', 'error'); }
+  finally { nativeCloseHandling = false; }
 }
 function repositionEditor() {
   if (editing.value?.anchor) Object.assign(editing.value, positionCellEditor(editing.value.anchor));
@@ -1107,6 +1122,7 @@ onMounted(() => {
   media.addEventListener('change', onThemeChange);
   window.addEventListener('keydown', keyboard);
   window.addEventListener('beforeunload', beforeUnload);
+  window.addEventListener('dbadmin-close-requested', nativeCloseRequested);
 });
 onBeforeUnmount(() => {
   clearTimeout(toastTimer);
@@ -1115,6 +1131,7 @@ onBeforeUnmount(() => {
   media.removeEventListener('change', onThemeChange);
   window.removeEventListener('keydown', keyboard);
   window.removeEventListener('beforeunload', beforeUnload);
+  window.removeEventListener('dbadmin-close-requested', nativeCloseRequested);
 });
 </script>
 
@@ -2127,7 +2144,7 @@ onBeforeUnmount(() => {
       <span class="footer-session"
         ><Terminal :size="12" /><strong>dbAdmin</strong><span class="footer-divider">|</span
         ><span class="session-detail"
-          >Mock transport · All changes are local to this session</span
+          >{{ nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
         ></span
       >
       <div class="footer-controls">

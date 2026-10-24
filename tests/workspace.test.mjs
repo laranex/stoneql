@@ -44,10 +44,10 @@ test('local progress is ignored and never tracked', () => {
 test('frontend remains native-framework independent with only approved Rust foundation paths', async () => {
   const pkg = await json('apps/frontend/package.json');
   assert.ok(!Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).some(name => /tauri/.test(name)));
-  for (const path of ['apps/desktop', 'apps/server']) {
+  for (const path of ['apps/server']) {
     await assert.rejects(stat(new URL(`../${path}`, import.meta.url)), { code: 'ENOENT' });
   }
-  for (const path of ['Cargo.toml', 'crates/dbadmin-core/src/lib.rs', 'crates/dbadmin-contracts/src/lib.rs']) {
+  for (const path of ['Cargo.toml', 'crates/dbadmin-core/src/lib.rs', 'crates/dbadmin-contracts/src/lib.rs', 'apps/desktop/src-tauri/src/lib.rs']) {
     assert.ok((await stat(new URL(`../${path}`, import.meta.url))).isFile());
   }
 });

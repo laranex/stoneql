@@ -2,7 +2,7 @@
 
 **Database management, made familiar.**
 
-A compact phpMyAdmin-inspired Vue database client prototype. Browse, edit, SQL, database objects, connections and transfers use realistic session-only mock data. No production connectivity, Tauri or Axum backend is implemented. The approved M001 Rust foundation and isolated SQLx evaluation do not replace frontend mocks.
+A compact phpMyAdmin-inspired Vue database client prototype. Browse, edit, SQL, database objects, connections and transfers use realistic session-only mock data. No production database connectivity or Axum backend is implemented. A Tauri development host preserves the session mocks. The approved M001 Rust foundation and isolated SQLx evaluation do not replace frontend mocks.
 
 ## Run
 
@@ -31,7 +31,7 @@ npm run docs:preview
 - `.ref/workprogress.md`: ignored local continuity notes; never commit.
 - `.github/workflows/docs.yml`: prepared manually gated GitHub Pages workflow; not deployed.
 
-Desktop/server application paths remain reserved. Shared Rust foundation crates and an isolated driver lab now exist; see [Rust development](docs/development/rust-foundation.md) and [driver evaluation](docs/architecture/driver-evaluation.md). Read [AGENTS.md](AGENTS.md) before changes. The frontend remains browser-runnable without native APIs.
+The desktop development host is documented in [Desktop development](docs/development/desktop-host.md); the server path remains reserved. Shared Rust foundation crates and an isolated driver lab now exist; see [Rust development](docs/development/rust-foundation.md) and [driver evaluation](docs/architecture/driver-evaluation.md). Read [AGENTS.md](AGENTS.md) before changes. The frontend remains browser-runnable without native APIs.
 
 ## Documentation
 

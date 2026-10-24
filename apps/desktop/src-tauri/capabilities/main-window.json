@@ -1,0 +1,12 @@
+{
+  "identifier": "main-window",
+  "description": "Local main-window protocol and confirmed close only. No renderer filesystem, shell, native file dialog or remote-origin grants.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-host-info",
+    "allow-contract-probe",
+    "allow-resolve-close"
+  ]
+}
