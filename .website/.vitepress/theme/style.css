@@ -1,0 +1,10 @@
+:root {
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP', sans-serif;
+  --vp-c-brand-1: #366b9b; --vp-c-brand-2: #477da9; --vp-c-brand-3: #366b9b;
+  --vp-c-brand-soft: rgba(54, 107, 155, .12);
+}
+.dark { --vp-c-brand-1: #91b8df; --vp-c-brand-2: #a6c7e8; --vp-c-brand-3: #416f9b; }
+.diagram { margin: 20px 0; overflow: auto; }
+.diagram svg { max-width: 100%; height: auto; }
+.diagram pre { padding: 12px; font-size: 14px; background: var(--vp-c-bg-soft); }
+.VPHero .image-bg { display: none; }

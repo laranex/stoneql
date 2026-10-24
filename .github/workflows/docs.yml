@@ -1,0 +1,48 @@
+name: Documentation
+on:
+  pull_request:
+    paths: ['docs/**', '.website/**', 'package*.json', '.github/workflows/docs.yml']
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Publish to GitHub Pages
+        type: boolean
+        default: false
+      custom_domain:
+        description: Optional configured custom domain
+        type: string
+        default: ''
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DOCS_REPOSITORY_URL: https://github.com/${{ github.repository }}
+      DOCS_BASE: ${{ inputs.custom_domain != '' && '/' || format('/{0}/', github.event.repository.name) }}
+      DOCS_CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+      - run: npm ci
+      - run: npm run docs:build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .website/dist
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

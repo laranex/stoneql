@@ -1,0 +1,33 @@
+import { test, expect } from '@playwright/test';
+for (const theme of ['light', 'dark']) test(`${theme}: review regression workflows and bounded scrolling`,async({page})=>{
+ await page.addInitScript(value=>localStorage.setItem('dbadmin-theme',value),theme);
+ await page.goto('/');
+ await page.getByRole('button',{name:'Delete record 1',exact:true}).click();
+ const confirm=page.getByRole('alertdialog');
+ await expect(confirm).toContainText('id = 1');
+ await expect(confirm.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
+ await confirm.getByRole('button',{name:'Delete 1 record',exact:true}).click();
+ await expect(confirm.getByRole('alert')).toContainText('RESTRICT');
+ await page.keyboard.press('Escape');
+ await expect(confirm).toHaveCount(0);
+ await page.getByRole('button',{name:'Next page in toolbar',exact:true}).click();
+ await page.getByRole('button',{name:'Next page in toolbar',exact:true}).click();
+ await page.getByRole('tab',{name:/Staging server/}).click();
+ await page.getByRole('tab',{name:/Local development/}).click();
+ await expect(page.getByLabel('Page number',{exact:true})).toHaveValue('3');
+ const wrap=page.locator('.browse-content > .data-grid-wrap');
+ await wrap.evaluate(el=>{el.scrollTop=150;el.scrollLeft=200;});
+ const header=page.locator('.browse-grid thead');
+ expect((await header.boundingBox())!.y).toBeGreaterThanOrEqual((await wrap.boundingBox())!.y-1);
+ await page.screenshot({path:`test-results/remediation-${theme}-grid.png`});
+ await page.getByRole('tab',{name:'Export',exact:true}).click();
+ await page.getByLabel('Export format',{exact:true}).selectOption('CSV');
+ await page.getByRole('button',{name:'Use Custom CSV export',exact:true}).click();
+ await expect(page.getByLabel('Export content',{exact:true})).toHaveValue('data');
+ await expect(page.getByRole('button',{name:'Simulate export',exact:true})).toBeEnabled();
+ await page.locator('.breadcrumb-path').getByRole('button',{name:'acme_store',exact:true}).click();
+ await expect(page.locator('.overview-grid')).toContainText('orders');
+ await page.screenshot({path:`test-results/remediation-${theme}-overview.png`});
+ await page.locator('.database-context-link').filter({hasText:'analytics'}).click();await page.locator('.overview-grid').getByRole('button',{name:'events',exact:true}).click();await page.getByRole('tab',{name:'Operations',exact:true}).click();await page.getByRole('button',{name:'Drop table',exact:true}).click();await page.getByRole('alertdialog').getByRole('button',{name:'Drop table',exact:true}).click();await expect(page.getByRole('tab',{name:'Structure',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.getByRole('button',{name:'Create table',exact:true})).toBeVisible();await expect(page.locator('.overview-grid')).toContainText('No tables or views');
+
+});
