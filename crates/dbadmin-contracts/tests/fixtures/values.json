@@ -1,0 +1,14 @@
+[
+  {"kind":"null"},
+  {"kind":"text","text":""},
+  {"kind":"integer","text":"18446744073709551615"},
+  {"kind":"integer","text":"-9223372036854775808"},
+  {"kind":"decimal","text":"123456789012345678901234567890.4500"},
+  {"kind":"temporal","databaseType":"DATE","text":"0000-00-00"},
+  {"kind":"temporal","databaseType":"TIMESTAMP WITH TIME ZONE","text":"2026-10-25 12:30:00.123456+09:00"},
+  {"kind":"binary","hex":"00ff0180"},
+  {"kind":"unknown","databaseType":"custom_enum","hex":"616374697665"},
+  {"kind":"json","text":"{\"precise\":12345678901234567890,\"n\":null}"},
+  {"kind":"float","text":"NaN"},
+  {"kind":"boolean","value":false}
+]

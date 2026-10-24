@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Current database operations are session mocks. Rust/Tauri/Axum integration is **planned, not implemented or approved**. Do not create backend code until its milestone and design decisions receive explicit human approval.
+dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Current database operations are session mocks. The user has authorized implementation of the revised milestone roadmap and commits for completed work. M001 foundation/evaluation is locally verified; later capabilities must still meet their own acceptance tests. Preserve the UI and browser/mock mode while adding native/server adapters. Never infer signing, publishing, production access or deployment approval from implementation authorization.
 
 ## Start every session
 
@@ -22,13 +22,13 @@ dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve fa
 - `.github/workflows/`: verification and manually gated documentation publication.
 - `tests/`: workspace/documentation regression checks.
 
-`apps/desktop`, `apps/server` and `crates` are reserved architectural paths, not current applications. Do not scaffold placeholders.
+`crates/` contains the approved shared core/contracts foundation; `experiments/sqlx-spike/` is a disposable lab only. `contracts/` holds generated v1 TypeScript source and consumer checks; `tools/` owns orchestration/boundary checks. Create `apps/desktop` and `apps/server` only as their approved milestone implementation needs them; keep shared crates independent of both host frameworks.
 
 ## Architecture and coding
 
 Use Composition API and `<script setup>`, TypeScript, two-space indentation, camelCase functions and PascalCase components. Follow existing patterns and CSS variables. Keep UI, store, schema validation, mock mutations and transport contracts separate. Vue must remain browser-runnable without Tauri imports. Rich autocomplete helpers are not all integrated; verify actual editor behavior before making claims.
 
-Future Rust should use rustfmt, clippy, explicit errors, snake_case modules and focused crates. Shared domain/application services must not import Tauri or Axum. Tauri IPC and HTTP adapters translate the same versioned contracts; database dialect adapters and connection transports remain distinct. Use capabilities rather than pretending unsupported engine features work. Direct/SSH are intended first; Teleport and SSM remain future proposals.
+Rust uses pinned 1.99.1 tooling, rustfmt, Clippy, explicit errors, snake_case modules and focused crates. Shared domain/application services must not import Tauri or Axum. Tauri IPC and HTTP adapters translate the same versioned contracts; database dialect adapters and connection transports remain distinct. Use capabilities rather than pretending unsupported engine features work. Direct/SSH are intended first; Teleport and SSM remain future proposals.
 
 ## Security and data integrity
 
@@ -36,10 +36,10 @@ Never store/log/commit database passwords, private keys, passphrases, access tok
 
 ## Verify and document
 
-Use Node **26** and the root npm workspaces/lockfile. Run `npm test`, `npm run build`, `npm run test:browser` for UI changes, and `npm run docs:build` for documentation/site changes. Root `dev`, `preview`, `docs:dev` and `docs:preview` delegate to the owning workspace. Add regression tests for meaningful defects. Verify both themes, keyboard/dialog behavior and engine capability differences where affected. Browser startup failure or test collection is not a passing browser run. Update public docs when behavior changes; label proposals, simulations, missing features and unverified checks accurately.
+Use Node **26** and the root npm workspaces/lockfile. Run `npm test`, `npm run build`, `npm run test:browser` for UI changes, and `npm run docs:build` for documentation/site changes. Root `dev`, `preview`, `docs:dev` and `docs:preview` delegate to the owning workspace. Add regression tests for meaningful defects. Verify both themes, keyboard/dialog behavior and engine capability differences where affected. Browser startup failure or test collection is not a passing browser run. For Rust changes also run root rust:build, rust:fmt, rust:lint, rust:test, rust:boundaries and contracts:check; use isolated fixtures for spike:drivers, never existing databases. Update public docs when behavior changes; label proposals, simulations, missing features and unverified checks accurately.
 
 ## Planning, progress and Git
 
 Update milestone status only against executed acceptance criteria. Keep unresolved choices **Proposed / awaiting approval**, never Approved by inference. Record decisions once and link related plans. Read/update `.ref/workprogress.md` after meaningful progress and before ending: current task, facts completed, pending work, blockers, exact checks and next steps. Do not duplicate milestone specifications or include secrets.
 
-Use concise Conventional Commit titles when commits are requested; no earlier commit convention is established. Include validation and limitations in review descriptions. Do not commit, push, deploy, discard work or change remotes without explicit instruction. Never include local progress files or generated artifacts in a commit.
+Use concise Conventional Commit titles when commits are requested; no earlier commit convention is established. Include validation and limitations in review descriptions. Do not commit, push, deploy, discard work or change remotes without explicit instruction. Never include local progress files or generated build artifacts in a commit. `contracts/generated/v1.ts` is intentionally tracked generated source; verify deterministic regeneration before review.

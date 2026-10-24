@@ -20,6 +20,7 @@ export const sidebar = [
   { text: 'Development', items: [
     { text: 'Contributing', link: '/development/' },
     { text: 'Verification', link: '/development/verification' },
+    { text: 'Rust Foundation', link: '/development/rust-foundation' },
     { text: 'Documentation', link: '/development/documentation' },
     { text: 'UX Review', link: '/ux-review-remediation' }
   ] }

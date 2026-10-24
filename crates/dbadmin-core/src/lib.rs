@@ -1,0 +1,153 @@
+//! Host- and driver-independent domain vocabulary. No connection implementation.
+use std::{collections::BTreeMap, error::Error, fmt};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    MySql,
+    MariaDb,
+    PostgreSql,
+    Sqlite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransportKind {
+    Direct,
+    Ssh,
+    Teleport,
+    AwsSsm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Capability {
+    ReadOnlyQueries,
+    Mutations,
+    Transactions,
+    Cancellation,
+    MultipleResults,
+    Routines,
+    Events,
+    MaterializedViews,
+    SchemaMetadata,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Support {
+    Supported,
+    Unsupported,
+    Unverified,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Capabilities(BTreeMap<Capability, Support>);
+impl Capabilities {
+    pub fn record(&mut self, capability: Capability, support: Support) {
+        self.0.insert(capability, support);
+    }
+    pub fn support(&self, capability: Capability) -> Support {
+        self.0
+            .get(&capability)
+            .copied()
+            .unwrap_or(Support::Unverified)
+    }
+    pub fn require(&self, capability: Capability) -> Result<(), CoreError> {
+        match self.support(capability) {
+            Support::Supported => Ok(()),
+            Support::Unsupported => Err(CoreError::rejected(ErrorCode::UnsupportedCapability)),
+            Support::Unverified => Err(CoreError::rejected(ErrorCode::UnverifiedCapability)),
+        }
+    }
+}
+
+pub trait CapabilityProvider {
+    fn engine(&self) -> Engine;
+    fn capabilities(&self) -> &Capabilities;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorCode {
+    InvalidRequest,
+    UnsupportedVersion,
+    UnsupportedCapability,
+    UnverifiedCapability,
+    Conflict,
+    ConnectionLost,
+    Cancelled,
+    Internal,
+}
+impl ErrorCode {
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "Invalid request.",
+            Self::UnsupportedVersion => "Unsupported protocol version.",
+            Self::UnsupportedCapability => "This capability is not supported.",
+            Self::UnverifiedCapability => "This capability has not been verified.",
+            Self::Conflict => "The operation conflicts with current state.",
+            Self::ConnectionLost => "The database connection was lost.",
+            Self::Cancelled => "The operation was cancelled.",
+            Self::Internal => "The operation could not be completed.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Rejected,
+    RolledBack,
+    Committed,
+    Unknown,
+}
+
+/// Carries only allowlisted codes/outcomes: raw driver errors and SQL are not diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreError {
+    pub code: ErrorCode,
+    pub outcome: Outcome,
+}
+impl CoreError {
+    pub const fn rejected(code: ErrorCode) -> Self {
+        Self {
+            code,
+            outcome: Outcome::Rejected,
+        }
+    }
+    pub const fn connection_lost() -> Self {
+        Self {
+            code: ErrorCode::ConnectionLost,
+            outcome: Outcome::Unknown,
+        }
+    }
+}
+impl fmt::Display for CoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.code.message())
+    }
+}
+impl Error for CoreError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn capabilities_fail_closed_until_evidenced() {
+        let mut caps = Capabilities::default();
+        assert_eq!(
+            caps.require(Capability::Cancellation).unwrap_err().code,
+            ErrorCode::UnverifiedCapability
+        );
+        caps.record(Capability::Cancellation, Support::Unsupported);
+        assert_eq!(
+            caps.require(Capability::Cancellation).unwrap_err().code,
+            ErrorCode::UnsupportedCapability
+        );
+        caps.record(Capability::ReadOnlyQueries, Support::Supported);
+        assert!(caps.require(Capability::ReadOnlyQueries).is_ok());
+    }
+    #[test]
+    fn connection_loss_never_claims_rollback() {
+        assert_eq!(CoreError::connection_lost().outcome, Outcome::Unknown);
+        assert_eq!(
+            CoreError::connection_lost().to_string(),
+            "The database connection was lost."
+        );
+    }
+}

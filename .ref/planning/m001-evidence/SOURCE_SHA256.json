@@ -1,0 +1,22 @@
+{
+  "Cargo.lock": "275dd7107d5307855e164d762e9858b0f6c79e0c744ed7cfc2d8007830cbc9ff",
+  "Cargo.toml": "de48bb0d97441ec81d4d97eb7ab5f9f15ec0f4187a078f7391631358d7ceece5",
+  "contracts/generated/v1.ts": "522be9b5c1d01d20a99b804fdfd56c1a9a7b003ca8c557d7c6101cb61a12dcc7",
+  "contracts/tests/v1.ts": "787c2c3a17e901ac86f7e952f594a49fe5f05adc8239cb7654c81d0d7be410a2",
+  "crates/dbadmin-contracts/Cargo.toml": "46b8137160d9668fbc12370ee7373a86a8913c2770ed70b3a364ce50a63f5501",
+  "crates/dbadmin-contracts/examples/benchmark.rs": "4fa753ff249c453427f833443c8edf0d9b7d8ba9e6e70469fce7e4038fb647a2",
+  "crates/dbadmin-contracts/examples/generate.rs": "3564b6e27c69b4e98f7e3518638009ae0f408353de82cf51892b54e8dde62f9c",
+  "crates/dbadmin-contracts/src/lib.rs": "a3ff8a3f4a7d248a141fc856e60a3c28aee03261883902343151578e8f75c3a7",
+  "crates/dbadmin-contracts/src/v1.rs": "e0b7e54d0f221d363db876505929013ceef5945bf0e0684204930a399e552ffc",
+  "crates/dbadmin-contracts/tests/fixtures/values.json": "1900e4d72d4be629b3b3c38591a78a37e14125fe73813f579263e64c10d1b41f",
+  "crates/dbadmin-contracts/tests/wire.rs": "ef81906378d10aa75357017af0c06b10b4d109143537a173579dbcb8d0d24a53",
+  "crates/dbadmin-core/Cargo.toml": "86efd00e2738634da57a800f14595bbaa8994a4016788de299ab90a2f93f7605",
+  "crates/dbadmin-core/src/lib.rs": "c04c33d92f44a64ced2783b48e4b7944dbadbcd6d2853c6a78422ff6c30f2c69",
+  "experiments/sqlx-spike/Cargo.toml": "c62bfe4d4aaaf51a0296ab1f245ca6ce4e39b07bb8b4a07ec34dcdd1c38f8966",
+  "experiments/sqlx-spike/fixtures/compose.yml": "18cf3f603345dee7f830addfc3626b42bcb5fe3f53dcf14ec4b676ba4aabe2fe",
+  "experiments/sqlx-spike/src/main.rs": "38909176b9a6e67da7b8245f184f3557e74817273cb5ba816629abe69d8e9580",
+  "rust-toolchain.toml": "d13306be0ecda81ce779baa290ffb417380d525928477f16200884b5169cca33",
+  "tools/check-rust-boundaries.mjs": "c49f7fee0b32061aaf96a4f7ff21ba46daa6a28ce41c834656b8b5af9ea342cc",
+  "tools/fixture-environment.mjs": "30bbfafe7d50838b654a57861a54cf993f11e6718b5455b6bd847374c53267cd",
+  "tools/run-driver-spikes.mjs": "739a5061bc7bff27fd87d3d58e0311307985719f6f067412bcc0149f0a45b0db"
+}

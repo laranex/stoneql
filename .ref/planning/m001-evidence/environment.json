@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-10-24T20:49:50.354Z",
+  "cargoLockSha256": "275dd7107d5307855e164d762e9858b0f6c79e0c744ed7cfc2d8007830cbc9ff",
+  "arch": "arm64",
+  "platform": "darwin",
+  "kernel": "27.0.0",
+  "cpu": "Apple M5",
+  "logicalCpus": 10,
+  "memoryBytes": 25769803776,
+  "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)",
+  "docker": "29.8.2",
+  "images": {
+    "mysql": "sha256:869218921e61d6c3c89820955d63cca42971f0e3e6c1e2792247bbd944ebc6e9",
+    "mariadb": "sha256:bc474f00629f0123c10f9e1bca193a45d18af15a274cf0656acda64f1086c3b6",
+    "postgresql": "sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929"
+  },
+  "cleanup": {
+    "mysql": {
+      "remainingContainers": 0,
+      "remainingNetworks": 0
+    },
+    "mariadb": {
+      "remainingContainers": 0,
+      "remainingNetworks": 0
+    },
+    "postgresql": {
+      "remainingContainers": 0,
+      "remainingNetworks": 0
+    }
+  }
+}

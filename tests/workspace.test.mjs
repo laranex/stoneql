@@ -41,11 +41,14 @@ test('local progress is ignored and never tracked', () => {
   assert.equal(execFileSync('git', ['ls-files', '--', '.ref/workprogress.md'], { encoding: 'utf8' }), '');
 });
 
-test('frontend remains native-framework independent and no Rust placeholders exist', async () => {
+test('frontend remains native-framework independent with only approved Rust foundation paths', async () => {
   const pkg = await json('apps/frontend/package.json');
   assert.ok(!Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).some(name => /tauri/.test(name)));
-  for (const path of ['apps/desktop', 'apps/server', 'crates', 'Cargo.toml']) {
+  for (const path of ['apps/desktop', 'apps/server']) {
     await assert.rejects(stat(new URL(`../${path}`, import.meta.url)), { code: 'ENOENT' });
+  }
+  for (const path of ['Cargo.toml', 'crates/dbadmin-core/src/lib.rs', 'crates/dbadmin-contracts/src/lib.rs']) {
+    assert.ok((await stat(new URL(`../${path}`, import.meta.url))).isFile());
   }
 });
 

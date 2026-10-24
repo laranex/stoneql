@@ -1,0 +1,46 @@
+name: Rust foundation
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  foundation:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: npm ci
+      - run: npm run rust:fmt
+      - run: npm run rust:build
+      - run: npm run rust:lint
+      - run: npm run rust:test
+      - run: npm run rust:boundaries
+      - run: npm run contracts:check
+      - run: node --test tests/workspace.test.mjs tests/driver-fixtures.test.mjs
+      - if: runner.os == 'Linux'
+        run: npm test
+      - if: runner.os == 'Linux'
+        run: npm run build
+      - if: runner.os == 'Linux'
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - if: runner.os == 'Linux'
+        run: cargo audit --deny warnings
+      - if: runner.os == 'Linux'
+        run: npm run spike:drivers
+      - if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: m001-driver-observations
+          path: artifacts/m001/
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.codex/
 *.local
 test-results/
 playwright-report/
@@ -11,3 +12,6 @@ playwright-report/
 .website/cache/
 .website/public/icon.svg
 .website/public/CNAME
+/workprogress.md
+/target/
+/artifacts/m001/

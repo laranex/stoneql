@@ -1,6 +1,12 @@
 # Deployment proposal
 
-**Status: Proposed / awaiting approval.** No Rust applications, packaging, infrastructure or production deployment are created here.
+**Status: Proposed / awaiting approval.** No production Rust applications, packaging, infrastructure or deployment are created here. M001 is a separate library/experiment foundation.
+
+## Independent release gates
+
+M009 is Desktop Release; M011 is Server Release. M010-D and M010-S are separately accepted evidence sets, not a requirement to finish both before either release. Desktop distribution has no Axum, server-vault, server-SLO or server-release prerequisite. Core services/contracts remain shared and framework-independent; server support is retained without scaffolding it early.
+
+Use the [roadmap G1–G6 gates and measurement profile](./roadmap.md#gates-applied-throughout) for security, exact values, compatibility, latency/memory, lifecycle reliability and packaging in every owning milestone. Numerical targets are proposed, not measured or approved. Missing scoped budgets, support matrix or release evidence block the affected track. Scope reduction requires explicit approval and accurate unsupported-feature labels, not silent test omissions.
 
 ## Desktop
 
@@ -22,4 +28,4 @@ The VitePress workflow is prepared separately. It builds pull requests and deplo
 
 ## Release gates and unknowns
 
-Define OS/engine support versions, signing identities, update channels, OIDC deployment, TLS ownership, resource budgets, backup/restore and incident response. Run signed native smoke tests on all three desktop OSes and systemd/container integration tests before claiming deployability. None of these production checks are part of the browser prototype's passing unit suite.
+Define desktop OS/engine versions, signing/update custody and startup/install/upgrade/rollback budgets before M009. Define server OIDC/vault/TLS ownership, Linux compatibility, resource/availability/SLO and RPO/RTO targets before M011. Do not require server decisions for desktop distribution. Run signed native smoke tests on all three desktop OSes and systemd/container integration tests before claiming deployability. None of these production checks are part of the browser prototype's passing unit suite.

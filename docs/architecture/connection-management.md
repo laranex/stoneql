@@ -22,6 +22,10 @@ stateDiagram-v2
 
 Start transport before pool creation, enforce timeouts, and unwind in reverse order on failure. Use bounded pools, idle expiry and explicit disconnect. Transactions lease a physical connection; session variables, temporary objects and raw transaction statements can make a connection unsafe to return to the pool. Reset verifiably or discard it. Lost connections invalidate schema generations and active leases.
 
+## Implementation sequence
+
+M003-L accepts the Direct connection ownership, pool bounds, verified TLS and failure/expiry/disconnect cleanup independently of SQL/UI completion. M005 desktop credentials/SSH can start from that checkpoint without waiting for PostgreSQL/SQLite (M004), Axum or a server vault. Transport setup cancellation/cleanup is distinct from M006 execution cancellation, job/transaction leases and full schema metadata caching. PostgreSQL-over-SSH parity follows the adapter; SQLite does not gain a network transport by implication.
+
 ## Transports
 
 Direct and SSH are first-stage proposals. Validate TLS certificates and SSH host keys; do not introduce trust-all fallbacks. SSH agent, key and password flows need OS-specific tests, passphrase secrecy, cancellation and tunnel lifetime ownership. Preserve the original database hostname for certificate verification through a local forwarded endpoint. SQLite path authorization is host-specific and has no SSH option by default.

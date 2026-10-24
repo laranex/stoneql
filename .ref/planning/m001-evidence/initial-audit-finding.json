@@ -1,0 +1,9 @@
+{
+  "tool": "cargo-audit 0.22.2",
+  "advisory": "RUSTSEC-2026-0386",
+  "package": "tokio",
+  "initialVersion": "1.48.0",
+  "finalVersion": "1.54.1",
+  "source": "https://rustsec.org/advisories/RUSTSEC-2026-0386.html",
+  "resolution": "Pinned patched non-yanked version; final --deny warnings audit passed; no advisory ignored."
+}

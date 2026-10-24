@@ -4,24 +4,29 @@
 Proposed / awaiting approval. No backend implementation authorized by this document.
 
 ## Objective and scope
-Streaming transfers and compression. Preserve existing Vue behavior and use existing abstractions; no unrelated redesign.
+Stream SQL/CSV/JSON/XLSX and ZIP/GZIP with accurate progress, file authorization and failure outcomes. Reuse format configuration and mock UX.
 
 ## Dependencies and prerequisites
-M005/M006; D008 format/library/snapshot approval.
+M006 execution/schema contracts; approved D008 library, format, snapshot and quota decisions. M005 only for credential-backed/SSH integration; Direct transfer core need not wait for SSH. Host-specific file grants approved before host integration.
 
 ## Technical approach
-Bounded SQL/CSV/JSON/XLSX import/export; ZIP/GZIP; authorized files, quotas, progress and cleanup.
+Bound parsers, queues, compressors and sinks; centralize schema validation and exact-value encoding. Desktop file grants and later server upload tokens remain separate host adapters. Choose dump tools versus logical export from recorded evidence.
 
 ## Deliverables
-Streaming services and native UI transfer adapter.
+Transfer services, native file binding and independently verified engine/format round trips with quota/cleanup reports.
 
 ## Acceptance criteria
-Measured memory limits; exact values; cancellation and partial commits explicit; no unsafe archive expansion.
+- G1: reject unauthorized paths/symlinks, malformed archives, expansion bombs and executable spreadsheet formulas; libraries/licenses reviewed; no secrets in summaries/temp names/logs.
+- G2: exact values, NULL/empty/default semantics and ordering preserved; committed/rejected/partial/unknown counts truthful; no whole-script rollback promise for nontransactional DDL.
+- G3: approved engine/format/compression/OS matrix passes independent round trips; unsupported structure/data combinations rejected; generated DTO compatibility retained.
+- G4/G5: meet approved million-row/slow-consumer memory and cleanup profile, enforce queue/disk/byte quotas, and survive disk-full/cancel/restart without orphan resources or hidden partial writes.
+- G6: restore/read-back evidence exists for every format advertised as a backup; simulated successes are not accepted as proof.
 
 ## Required tests and verification
-Round trips per engine; malformed inputs; disk full; slow consumer; archive bombs; restart cleanup.
+Engine round trips and independent restore/read-back; precision/encoding fixtures, malformed inputs, quota/archive adversarial cases, slow consumers, cancellation, disk full and restart cleanup; measured RSS/queue/temp usage.
 
 ## Risks and limitations
-Native dump availability, workbook memory and nontransactional DDL.
+XLSX and ZIP may require bounded temporary storage; SQL export snapshot consistency varies. A library or native dump tool is not approved by this plan.
 
-Public context: `docs/architecture/roadmap.md`. Approval records: `.ref/planning/architecture-decisions.md`. Mark complete only after executing and recording all acceptance checks.
+
+Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.

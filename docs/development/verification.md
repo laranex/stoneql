@@ -1,5 +1,9 @@
 # Migration verification
 
+## M001 foundation verification — 2026-10-25
+
+The approved Rust foundation/evaluation adds no production connectivity or frontend integration. Local checks passed: Rust workspace build/fmt/all-target Clippy, 12 Rust tests, generated TypeScript drift/strict compilation, host/driver/runtime boundary checks, 28 live driver assertions, cargo-audit with zero vulnerabilities/warnings after Tokio remediation, 128 frontend tests plus seven root tests, frontend build, 17 browser scenarios (12.9s), documentation build and workflow lint. The 73-file frontend preservation audit still passes. See [driver evaluation](../architecture/driver-evaluation.md) and [Rust development](./rust-foundation.md) for reproducible evidence, tested fixtures and limitations. Native Windows/Linux hosted CI and production TLS/pooling/transaction guarantees remain unverified; M001 completion review and M002 approval are pending. No commit or push was made for M001.
+
 ## Latest recheck — 2026-10-25
 
 Approved elevated execution of `npm run test:browser` passed **all 17 scenarios in 13.2 seconds**, covering both themes, column dialogs, grids, database objects, remediation, export, CRUD and connection workspaces. Chromium sandboxing remained enabled. The sandboxed run reached Vite but failed at Chromium macOS Mach-port registration; approved execution resolved that restriction.

@@ -19,6 +19,14 @@
     "docs:dev": "npm run dev --workspace @dbadmin/docs",
     "docs:build": "npm run check --workspace @dbadmin/docs && npm run build --workspace @dbadmin/docs && node .website/scripts/check-output.mjs",
     "docs:preview": "npm run preview --workspace @dbadmin/docs",
-    "docs:check": "npm run check --workspace @dbadmin/docs"
+    "docs:check": "npm run check --workspace @dbadmin/docs",
+    "rust:build": "cargo build --workspace --locked",
+    "rust:test": "cargo test --workspace --locked",
+    "rust:fmt": "cargo fmt --all -- --check",
+    "rust:lint": "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "rust:boundaries": "node tools/check-rust-boundaries.mjs",
+    "contracts:generate": "cargo run --locked -p dbadmin-contracts --example generate",
+    "contracts:check": "cargo run --locked -p dbadmin-contracts --example generate -- --check && tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler contracts/tests/v1.ts",
+    "spike:drivers": "node tools/run-driver-spikes.mjs"
   }
 }

@@ -1,27 +1,32 @@
-# M009 — Production packaging and deployment
+# M009 — Desktop Release
 
 ## Status
 Proposed / awaiting approval. No backend implementation authorized by this document.
 
 ## Objective and scope
-Production packaging and deployment. Preserve existing Vue behavior and use existing abstractions; no unrelated redesign.
+Signed desktop distribution for macOS, Windows and Linux. This retains the M009 specification path while separating all server packaging into M011.
 
 ## Dependencies and prerequisites
-M002/M005/M007/M008; D009 operational approval.
+M002–M007 acceptance for the approved desktop engine/feature scope and **M010-D desktop evidence only**; D009-D signing/update/artifact ownership approved. **No M008, M011, server SLO/vault approval or M010-S completion dependency.**
 
 ## Technical approach
-Signed desktop artifacts; one Linux binary with reviewed systemd hardening; optional non-root restricted container.
+Package the shared frontend and Tauri adapter on supported native runners; verify signatures/notarization and restricted updater trust. Keep SQLite/credential/file migrations reversible and browser/mock mode intact.
 
 ## Deliverables
-Release packaging, upgrade/rollback and operating runbooks.
+Versioned platform artifacts, checksums/SBOM, installation/update/rollback instructions and independent desktop go/no-go record.
 
 ## Acceptance criteria
-Native three-OS smoke tests; systemd and optional Docker operate without privileged host access; secrets outside artifacts.
+- G1: no bundled secrets; signed/notarized artifacts verified where applicable; unauthorized IPC, tampered/unsigned update and dependency findings handled under approved risk policy.
+- G2: upgrade/rollback and uninstall preserve user databases/non-secret profiles/secret references according to explicit policy; no migration data loss or precision change.
+- G3: every declared OS/architecture/engine combination passes native packaging and existing UI regression tests; release notes identify unsupported capabilities and DTO compatibility.
+- G4/G5: approved cold-start/lifecycle/performance budgets and failure/restore drills pass using actual release artifacts; M010-D accepted independently of server readiness.
+- G6: install/launch/upgrade/rollback/uninstall, signing, checksums and offline required workflows verified for every distributed package; artifact-size/retention policy recorded before sign-off.
 
 ## Required tests and verification
-Signing/update verification; restart/shutdown; state migration/rollback; Linux file/network limits.
+Native platform signature/install/update-tamper tests; migration/restore/rollback and offline smoke tests; full supported UI/core/engine suites on release candidates; desktop measurement profile.
 
 ## Risks and limitations
-Signing credentials, platform distribution, backup ownership and incident response.
+Signing custody, artifact formats, OS minima and updater operations need approval. Missing server work cannot block desktop sign-off. Graphical docs CDN is not a desktop runtime dependency.
 
-Public context: `docs/architecture/roadmap.md`. Approval records: `.ref/planning/architecture-decisions.md`. Mark complete only after executing and recording all acceptance checks.
+
+Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.

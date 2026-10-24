@@ -1,6 +1,6 @@
 # Database adapters
 
-**Status: Proposed / awaiting approval.** Existing engine-specific behavior is mocked.
+**Status: production adapters proposed / unapproved.** M001 isolated SQLx experiments are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
 
 ## Adapter contract
 
@@ -19,7 +19,9 @@ Indexes retain ordered columns, uniqueness, method, expression/predicate and eng
 
 ## Driver evaluation
 
-SQLx is a candidate shared async interface; native PostgreSQL/MySQL drivers and rusqlite are alternatives when protocol-specific features are needed. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove dbAdmin requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before choosing.
+SQLx remains the **proposed shared driver**, not a production-approved dependency. Native PostgreSQL/MySQL drivers and rusqlite are fallback alternatives only after an evidenced capability gap and explicit exception decision. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove dbAdmin requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before approving the affected production capability. M001 records the evidence matrix; M003 adopts only the basic read-only subset, while M006 gates multiple result sets, routines, advanced transactions and cancellation. A documented API is not proof that our versions, raw-value fidelity and cleanup requirements work.
+
+[SQLx raw SQL documentation](https://docs.rs/sqlx/latest/sqlx/fn.raw_sql.html) distinguishes raw statements from prepared parameterized queries; generated CRUD must retain bound values, and arbitrary script/routine behavior needs separate probes. Never infer safe concatenation or cross-engine atomicity from a generic execution API.
 
 SQLite work must not block the async executor. Evaluate a bounded dedicated worker and transaction-affine connection against driver-provided workers. Avoid pretending concurrent writers or cross-engine DDL transactions have identical semantics.
 

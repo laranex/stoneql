@@ -1,0 +1,51 @@
+{
+  "scope": "M001 local verification; awaiting completion review; no M002 or production driver approval",
+  "rust": {
+    "toolchain": "1.99.1",
+    "build": "passed",
+    "format": "passed",
+    "clippyAllTargetsDenyWarnings": "passed with approved elevated execution",
+    "unitTestsPassed": 12,
+    "coreResolvedPackages": 1,
+    "contractsResolvedPackages": 22
+  },
+  "contracts": {
+    "deterministicRegeneration": "passed",
+    "typescriptStrictConsumerCheck": "passed",
+    "frontendIntegration": "none"
+  },
+  "drivers": {
+    "passedAssertions": 28,
+    "unsupportedOrUnverifiedObservations": 4,
+    "engines": [
+      "mysql",
+      "mariadb",
+      "postgresql",
+      "sqlite"
+    ],
+    "productionApproval": false
+  },
+  "frontend": {
+    "testsPassed": 128,
+    "rootTestsPassed": 7,
+    "browserScenariosPassed": 17,
+    "browserSeconds": 12.9,
+    "build": "passed with existing bundle advisory",
+    "preservedBaselineFiles": 73
+  },
+  "ci": {
+    "workflowActionlint": "passed with actionlint 1.7.7",
+    "remoteExecution": "not run"
+  },
+  "remaining": [
+    "trusted positive TLS",
+    "exhaustive raw/temporal codecs",
+    "pool/transaction/ownership/commit-loss semantics",
+    "native Windows/Linux CI execution",
+    "production workload/memory/release gates"
+  ],
+  "security": {
+    "driverEnvironmentGuard": "passed; inherited database credentials/targets/TLS paths removed",
+    "audit": "0 vulnerabilities, 0 warnings; no ignores"
+  }
+}
