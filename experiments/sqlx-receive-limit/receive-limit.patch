@@ -1,17 +1,8 @@
 --- a/src/options/mod.rs
 +++ b/src/options/mod.rs
-@@ -80,6 +80,7 @@
-     pub(crate) no_engine_substitution: bool,
-     pub(crate) timezone: Option<String>,
-     pub(crate) set_names: bool,
+@@ -82,0 +83 @@
 +    pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
- }
- 
- impl Default for MySqlConnectOptions {
-@@ -89,6 +90,14 @@
- }
- 
- impl MySqlConnectOptions {
+@@ -91,0 +93,8 @@
 +    /// Maximum logical receive-packet bytes, checked before reading each part's payload.
 +    /// An oversized packet invalidates the connection; callers must discard it.
 +    /// None (the upstream default) retains the original behavior.
@@ -20,86 +11,31 @@
 +        self
 +    }
 +
-     /// Creates a new, default set of options ready for configuration
-     pub fn new() -> Self {
-         Self {
-@@ -111,6 +120,7 @@
-             no_engine_substitution: true,
-             timezone: Some(String::from("+00:00")),
-             set_names: true,
+@@ -113,0 +123 @@
 +            max_receive_packet_size: None,
-         }
-     }
- 
 --- a/src/connection/stream.rs
 +++ b/src/connection/stream.rs
-@@ -19,6 +19,7 @@
-     pub(crate) sequence_id: u8,
-     pub(crate) waiting: VecDeque<Waiting>,
-     pub(crate) is_tls: bool,
+@@ -21,0 +22 @@
 +    pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
- }
- 
- #[derive(Debug, PartialEq, Eq)]
-@@ -56,6 +57,7 @@
-             sequence_id: 0,
-             socket: BufferedSocket::new(socket),
-             is_tls: false,
+@@ -58,0 +60 @@
 +            max_receive_packet_size: options.max_receive_packet_size,
-         }
-     }
- 
-@@ -116,7 +118,7 @@
-             .write_with(Packet(payload), (self.capabilities, &mut self.sequence_id))
-     }
- 
+@@ -119 +121 @@
 -    async fn recv_packet_part(&mut self) -> Result<Bytes, Error> {
 +    async fn recv_packet_part(&mut self, received: usize) -> Result<Bytes, Error> {
-         // https://dev.mysql.com/doc/dev/mysql-server/8.0.12/page_protocol_basic_packets.html
-         // https://mariadb.com/kb/en/library/0-packet/#standard-packet
- 
-@@ -125,6 +127,7 @@
-         // cannot overflow
-         #[allow(clippy::cast_possible_truncation)]
-         let packet_size = header.get_uint_le(3) as usize;
+@@ -127,0 +130 @@
 +        check_packet_size(received, packet_size, self.max_receive_packet_size)?;
-         let sequence_id = header.get_u8();
- 
-         self.sequence_id = sequence_id.wrapping_add(1);
-@@ -139,18 +142,18 @@
-     // receive the next packet from the database server
-     // may block (async) on more data from the server
-     pub(crate) async fn recv_packet(&mut self) -> Result<Packet<Bytes>, Error> {
+@@ -142 +145 @@
 -        let payload = self.recv_packet_part().await?;
 +        let payload = self.recv_packet_part(0).await?;
-         let payload = if payload.len() < 0xFF_FF_FF {
-             payload
-         } else {
+@@ -146 +149 @@
 -            let mut final_payload = BytesMut::with_capacity(0xFF_FF_FF * 2);
 +            let mut final_payload = BytesMut::with_capacity(payload.len());
-             final_payload.extend_from_slice(&payload);
- 
-             drop(payload); // we don't need the allocation anymore
- 
-             let mut last_read = 0xFF_FF_FF;
-             while last_read == 0xFF_FF_FF {
+@@ -153 +156 @@
 -                let part = self.recv_packet_part().await?;
 +                let part = self.recv_packet_part(final_payload.len()).await?;
-                 last_read = part.len();
-                 final_payload.extend_from_slice(&part);
-             }
-@@ -213,6 +216,7 @@
-             sequence_id: self.sequence_id,
-             waiting: self.waiting,
-             is_tls: self.is_tls,
+@@ -215,0 +219 @@
 +            max_receive_packet_size: self.max_receive_packet_size,
-         }
-     }
- }
-@@ -230,3 +234,24 @@
-         &mut self.socket
-     }
- }
+@@ -232,0 +237,21 @@
 +
 +fn check_packet_size(received: usize, next: usize, limit: Option<std::num::NonZeroUsize>) -> Result<(), Error> {
 +    let total = received.checked_add(next).ok_or_else(|| Error::Protocol("receive packet exceeds configured byte limit".into()))?;
@@ -123,27 +59,9 @@
 +}
 --- a/src/connection/tls.rs
 +++ b/src/connection/tls.rs
-@@ -12,6 +12,7 @@
-     capabilities: Capabilities,
-     sequence_id: u8,
-     waiting: VecDeque<Waiting>,
+@@ -14,0 +15 @@
 +    max_receive_packet_size: Option<std::num::NonZeroUsize>,
- }
- 
- pub(super) async fn maybe_upgrade<S: Socket>(
-@@ -81,6 +82,7 @@
-             capabilities: stream.capabilities,
-             sequence_id: stream.sequence_id,
-             waiting: stream.waiting,
+@@ -83,0 +85 @@
 +            max_receive_packet_size: stream.max_receive_packet_size,
-         },
-     )
-     .await
-@@ -97,6 +99,7 @@
-             sequence_id: self.sequence_id,
-             waiting: self.waiting,
-             is_tls: true,
+@@ -99,0 +102 @@
 +            max_receive_packet_size: self.max_receive_packet_size,
-         }
-     }
- }

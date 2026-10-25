@@ -1,7 +1,7 @@
 {
   "experiments/sqlx-receive-limit/Cargo.lock": "27727f1c1cf2840d9aedc845286603ddad776fefd0a9d36c4a36f66a57c6168f",
   "experiments/sqlx-receive-limit/Cargo.toml": "563f6c9ec8c01505d10cc87aa3dd1db4d684dd548cae07bc69c3fc1b5a066f62",
-  "experiments/sqlx-receive-limit/receive-limit.patch": "d5831ffe66a718d41941a8812a573419d66b0b750959cab86601142694bc84fc",
+  "experiments/sqlx-receive-limit/receive-limit.patch": "3d8cf458d5385989c35644020938af936cb654b5935c8d187b8dce3a9bdc989b",
   "experiments/sqlx-receive-limit/tests/limits.rs": "3f608b0e0691b63c5a02d44a22d44276f8e40738ff0247c285bedea80f91199b",
   "experiments/sqlx-receive-limit/examples/live_packet_limits.rs": "d23e5e42815eab6b646bf1fc2729a692348528feb465680968eb8299370c66c8",
   "tools/prepare-receive-limit.mjs": "9b40876745382b0a101abd974096a02104b921f282fed9b5ec8711c81a479830",
