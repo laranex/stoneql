@@ -1,0 +1,15 @@
+{
+  "mutation": "omit START TRANSACTION READ ONLY from runtime query execution",
+  "expectedFailureObserved": true,
+  "failure": "native indirect-view query unexpectedly succeeded instead of QUERY_REJECTED",
+  "productionSourceRestored": true,
+  "restoredFixturesPassed": [
+    "mysql8.4.6",
+    "mariadb11.4.8"
+  ],
+  "mutationFixtureCleanup": {
+    "remainingContainers": 0,
+    "remainingNetworks": 0,
+    "temporaryRemoved": true
+  }
+}

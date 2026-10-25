@@ -128,6 +128,20 @@ CREATE TABLE raw_large(payload LONGBLOB);
 INSERT INTO raw_large VALUES(REPEAT('x',3145728));
 CREATE TABLE raw_values(id INT PRIMARY KEY, s BIGINT, u BIGINT UNSIGNED, d DECIMAL(38,4), b VARBINARY(4), dt DATETIME(6), zd DATE, zt DATETIME, tm TIME(6), e ENUM('active','suspended'), txt VARCHAR(20), n VARCHAR(20));
 INSERT INTO raw_values VALUES (1,-9223372036854775808,18446744073709551615,123456789012345678901234567890.4500,0x00ff0180,'2024-02-29 12:34:56.123456','0000-00-00','0000-00-00 00:00:00','-26:03:04.123456','active','',NULL),(2,0,0,0,x'','2024-01-01','2024-01-01','2024-01-01','00:00:00','suspended','active',NULL);
+CREATE TABLE trust_innodb(id INT PRIMARY KEY, touches INT NOT NULL) ENGINE=InnoDB;
+CREATE TABLE trust_myisam(id INT PRIMARY KEY, touches INT NOT NULL) ENGINE=MyISAM;
+INSERT INTO trust_innodb VALUES(1,0); INSERT INTO trust_myisam VALUES(1,0);
+DELIMITER //
+CREATE FUNCTION trust_effect_innodb() RETURNS INT DETERMINISTIC MODIFIES SQL DATA SQL SECURITY DEFINER
+BEGIN UPDATE trust_innodb SET touches=touches+1 WHERE id=1; RETURN 1; END//
+CREATE FUNCTION trust_effect_myisam() RETURNS INT DETERMINISTIC MODIFIES SQL DATA SQL SECURITY DEFINER
+BEGIN UPDATE trust_myisam SET touches=touches+1 WHERE id=1; RETURN 1; END//
+DELIMITER ;
+CREATE SQL SECURITY DEFINER VIEW trust_view_innodb AS SELECT trust_effect_innodb() AS effect;
+CREATE SQL SECURITY DEFINER VIEW trust_view_myisam AS SELECT trust_effect_myisam() AS effect;
+CREATE SQL SECURITY DEFINER VIEW trust_nested_view AS SELECT effect FROM trust_view_innodb;
+CREATE SQL SECURITY INVOKER VIEW trust_safe_view AS SELECT id,txt FROM raw_values;
+CREATE SQL SECURITY DEFINER VIEW trust_lock_view AS SELECT GET_LOCK('stoneql_${marker}',0) AS acquired;
 CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
     started = true;

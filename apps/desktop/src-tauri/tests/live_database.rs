@@ -10,6 +10,11 @@ use tauri::{
     test::{INVOKE_KEY, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+const TRUST_VIEW_QUERIES: [&str; 3] = [
+    "SELECT effect FROM trust_view_innodb",
+    "SELECT effect FROM trust_view_myisam",
+    "SELECT effect FROM trust_nested_view",
+];
 #[test]
 #[ignore = "run through npm run test:native-database with disposable TLS fixtures"]
 fn actual_database_commands_use_owned_tls_fixtures() {
@@ -23,16 +28,16 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         .unwrap();
     let password = std::env::var("STONEQL_FIXTURE_PASSWORD").unwrap();
     let ca = std::fs::read_to_string(std::env::var("STONEQL_LIFECYCLE_CA").unwrap()).unwrap();
+    let options = MySqlConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("stoneql_reader")
+        .password(&password)
+        .database("stoneql_m001_fixture")
+        .ssl_mode(MySqlSslMode::VerifyIdentity)
+        .ssl_ca_from_pem(ca.as_bytes().to_vec())
+        .disable_statement_logging();
     tauri::async_runtime::block_on(async {
-        let options = MySqlConnectOptions::new()
-            .host("127.0.0.1")
-            .port(port)
-            .username("stoneql_reader")
-            .password(&password)
-            .database("stoneql_m001_fixture")
-            .ssl_mode(MySqlSslMode::VerifyIdentity)
-            .ssl_ca_from_pem(ca.as_bytes().to_vec())
-            .disable_statement_logging();
         let mut connection = MySqlConnection::connect_with(&options)
             .await
             .map_err(|_| "fixture TLS failed")
@@ -43,6 +48,57 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .map_err(|_| "marker query failed")
             .unwrap();
         assert_eq!(actual, marker);
+        // Positive controls prove the views really can write under their definer,
+        // even though the reader itself has SELECT-only grants.
+        for sql in TRUST_VIEW_QUERIES {
+            let value: i32 = sqlx::query_scalar(sql)
+                .fetch_one(&mut connection)
+                .await
+                .expect("definer positive control");
+            assert_eq!(value, 1);
+        }
+        let counts: (i32, i32) = sqlx::query_as(
+            "SELECT (SELECT touches FROM trust_innodb),(SELECT touches FROM trust_myisam)",
+        )
+        .fetch_one(&mut connection)
+        .await
+        .expect("positive effect inspection");
+        assert_eq!(counts, (2, 1));
+        let mut writer = MySqlConnection::connect_with(&options.clone().username("stoneql_writer"))
+            .await
+            .map_err(|_| "fixture reset connection failed")
+            .unwrap();
+        for sql in [
+            "UPDATE trust_innodb SET touches=0",
+            "UPDATE trust_myisam SET touches=0",
+        ] {
+            sqlx::raw_sql(sql)
+                .execute(&mut writer)
+                .await
+                .expect("positive control reset");
+        }
+        writer
+            .close()
+            .await
+            .map_err(|_| "reset connection close failed")
+            .unwrap();
+        sqlx::raw_sql("START TRANSACTION READ ONLY")
+            .execute(&mut connection)
+            .await
+            .expect("read only control");
+        for sql in TRUST_VIEW_QUERIES {
+            let error = sqlx::query(sql)
+                .fetch_all(&mut connection)
+                .await
+                .expect_err("engine must reject indirect writes");
+            assert_eq!(
+                error
+                    .as_database_error()
+                    .and_then(|error| error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+                    .map(|error| error.number()),
+                Some(1792)
+            );
+        }
         connection
             .close()
             .await
@@ -106,6 +162,40 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         "PACKET_TOO_LARGE"
     );
     assert!(read(&first["handle"], "SELECT id FROM raw_values").is_ok());
+    for sql in TRUST_VIEW_QUERIES {
+        let error = read(&first["handle"], sql).unwrap_err();
+        assert_eq!(error["code"], "QUERY_REJECTED");
+        assert_eq!(error["outcome"], "unknown");
+        assert!(read(&first["handle"], "SELECT id FROM trust_safe_view").is_ok());
+    }
+    // An allowlisted SELECT can acquire a lock indirectly through a view. Closing
+    // the physical query connection must release that session-scoped side effect.
+    let lock = read(&first["handle"], "SELECT acquired FROM trust_lock_view").unwrap();
+    assert_eq!(lock["payload"]["rows"][0][0]["text"], "1");
+    tauri::async_runtime::block_on(async {
+        let mut observer = MySqlConnection::connect_with(&options)
+            .await
+            .map_err(|_| "trust observer TLS failed")
+            .unwrap();
+        let counts: (i32, i32) = sqlx::query_as(
+            "SELECT (SELECT touches FROM trust_innodb),(SELECT touches FROM trust_myisam)",
+        )
+        .fetch_one(&mut observer)
+        .await
+        .expect("counter inspection");
+        assert_eq!(counts, (0, 0));
+        let free: i32 = sqlx::query_scalar("SELECT IS_FREE_LOCK(?)")
+            .bind(format!("stoneql_{marker}"))
+            .fetch_one(&mut observer)
+            .await
+            .expect("lock cleanup inspection");
+        assert_eq!(free, 1);
+        observer
+            .close()
+            .await
+            .map_err(|_| "trust observer close failed")
+            .unwrap();
+    });
     invoke(
         "disconnect_database",
         json!({"sessionId":session,"handle":first["handle"]}),
@@ -122,6 +212,6 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     )
     .unwrap();
     println!(
-        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"disconnect\":true}}"
+        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"disconnect\":true}}"
     );
 }

@@ -1,0 +1,5 @@
+{
+  "apps/desktop/src-tauri/tests/live_database.rs": "22ae9bc0cbdcd0dd486bb984b6f8aeec4bebd4886987547fc6d365c2585ff58f",
+  "tools/test-connection-lifecycle.mjs": "43f91437721c131194df97df6212eeb6e26d593648b595f3c3e71bb9b5a1159d",
+  "crates/stoneql-runtime/src/read_only.rs": "c735068b050f48aa969dddec544e684cf014cf119514ba28bfb402f25830ce7f"
+}

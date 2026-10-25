@@ -2,7 +2,7 @@
 
 ## Current scope
 
-M003 is in progress. `stoneql-runtime` implements a host-independent MySQL/MariaDB lifecycle and restricted read-only query adapter. It is not exposed to the frontend or Tauri commands yet. Saved connections and UI operations remain mocks. No credential storage or SSH is implemented.
+M003 is in progress. `stoneql-runtime` implements a host-independent MySQL/MariaDB lifecycle and restricted read-only query adapter. Explicit desktop Direct MySQL/MariaDB profiles use it through native commands and the existing SQL workspace. Browser/default profiles and other operations remain mocks. No credential storage or SSH is implemented.
 
 ```sh
 cargo test --locked -p stoneql-runtime
@@ -37,7 +37,7 @@ Nine runtime tests plus the fixture certificate-error classification test passed
 
 **Receive-limit adoption:** the user approved the evaluated SQLx MySQL patch on 2026-10-25. Root Cargo now uses the reviewed source in `vendor/sqlx-mysql`; the runtime explicitly limits logical incoming packets to **2 MiB** before payload reads, including aggregate continuation length. This is separate from the 1 MiB serialized result cap. A 3 MiB fixture response is refused with `PacketTooLarge`; the physical connection is discarded and a subsequent query opens a fresh connection. SQL is never retried automatically.
 
-Run `npm run rust:vendor` to verify source/patch/license provenance. CI performs this check before Rust verification. `npm run test:receive-limit` and `npm run test:receive-limit:live` now use the same approved source, not a generated duplicate or a modified registry cache. The complete upstream MIT grant and authors are retained; upgrade/withdrawal instructions live in `vendor/sqlx-mysql/STONEQL.md`.
+Run `npm run rust:vendor` to verify source/patch/license provenance. CI performs this check before Rust verification. `npm run test:receive-limit` and `npm run test:receive-limit:live` now use the same approved source, not a generated duplicate or a modified registry cache. The complete upstream MIT grant and authors are retained; upgrade/withdrawal instructions live in `vendor/sqlx-mysql/DBADMIN.md`.
 
 The patch bounds a logical receive packet, not process RSS or aggregate prepared-statement metadata. TLS/socket buffers, decoded/serialized copies and concurrent connections still need representative memory/profile coverage. Historical isolated results remain evidence of the original evaluation; no blanket production or release approval is inferred.
 
@@ -45,4 +45,4 @@ Additional live checks now verify hostname mismatch, a valid but untrusted v3 CA
 
 Earlier CA tests using LibreSSL defaults could reject a version-1 root certificate before issuer validation. Explicit v3 CAs now establish the intended untrusted-issuer test. Historical reports are retained; current hardening evidence is separate under `.ref/planning/m003-lifecycle-hardening/`.
 
-Native UI binding, full OS/version compatibility, hostile view/function review and representative aggregate performance/memory profiles remain pending. M003 and its lifecycle checkpoint are not marked complete.
+Native binding is implemented and separate [read-only trust tests](./read-only-safety.md) cover indirect fixture writes and advisory-lock cleanup. Full native GUI/OS/version compatibility, general hostile view/UDF safety and representative aggregate performance/memory profiles remain pending. M003 and its lifecycle checkpoint are not marked complete.

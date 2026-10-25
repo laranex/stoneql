@@ -70,3 +70,10 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - M003 remains in progress. Full OS/native GUI coverage, aggregate metadata/memory bounds, indirect view/function trust and renderer-reload lease reconciliation are not accepted by this increment. M002's two Linux GTK audit findings remain unresolved.
 
 Verification: 151 JavaScript tests, 30 default Rust tests, 21 browser scenarios, both-engine actual-handler fixtures, Rust formatting/Clippy/contracts/boundaries/provenance, frontend/native/docs builds and real macOS Wry startup smoke (1,597 ms) passed. Safe evidence: `.ref/planning/m003-native-binding/`. The owning-fixture test is ignored in the default Rust suite and executed separately by `test:native-database`.
+
+## Indirect read-only trust verification
+
+- Both pinned TLS fixtures passed actual native-handler checks for definer functions invoked through views, a nested view and InnoDB/MyISAM writes. Positive controls prove the SELECT-only reader can trigger the definitions outside read-only mode; independent engine1792 checks prove refusal is not simply a missing privilege or rollback.
+- Actual native queries refuse all three with safe QUERY_REJECTED/unknown, leave counters unchanged and permit subsequent safe reads on fresh connections. Indirect advisory locking is demonstrably possible and the tested lock is released on physical close. Built-in allowlists do not apply transitively to database definitions.
+- Mutation test omitting the private read-only transaction failed on the new native refusal assertion; original runtime restored and both engine fixtures rerun successfully. No product code/contract/UI change.
+- Reproducible safe evidence: `.ref/planning/m003-read-only-trust/`; public boundary: `docs/development/read-only-safety.md`. This narrows the persistent-write trust gap; hostile UDF/external effects, native GUI/OS/resource profiles and reload reconciliation remain open. No blanket trust acceptance or milestone completion.
