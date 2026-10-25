@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { fixtureEnvironment } from './fixture-environment.mjs';
+import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir, arch, platform, release, cpus, totalmem } from 'node:os';
@@ -16,8 +16,7 @@ function run(command, args, options = {}) {
 run('cargo', ['build', '--locked', '-p', 'dbadmin-sqlx-spike']);
 const binary = resolve(root, 'target/debug/dbadmin-sqlx-spike');
 const compose = resolve(root, 'experiments/sqlx-spike/fixtures/compose.yml');
-const daemon = process.env.DOCKER_HOST || run('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']);
-if (!daemon.startsWith('unix://') && !daemon.startsWith('npipe://')) throw new Error('Driver fixtures require a local Docker daemon; remote contexts are refused');
+assertLocalFixtureDocker(baseEnv, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
 const metadata = { timestamp: new Date().toISOString(), cargoLockSha256: createHash('sha256').update(readFileSync(join(root, 'Cargo.lock'))).digest('hex'), arch: arch(), platform: platform(), kernel: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem(), rust: run('rustc', ['--version']), docker: run('docker', ['version', '--format', '{{.Server.Version}}']), images: {}, cleanup: {} };
 const failures = [];
 for (const engine of ['mysql', 'mariadb', 'postgresql', 'sqlite']) {
@@ -61,16 +60,19 @@ INSERT INTO dbadmin_fixture_marker VALUES ('${marker}');
     console.log(`${engine}: ${report.probes.filter(p => p.status === 'passed').length} passed, ${report.probes.filter(p => p.status === 'failed').length} failed; other observations are explicit limits`);
     if (result.status !== 0) failures.push(engine);
   } finally {
-    if (engine !== 'sqlite') {
-      run('docker', [...args, 'down', '--volumes', '--remove-orphans'], { env });
-      const remaining = run('docker', ['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '-q']);
-      const networks = run('docker', ['network', 'ls', '--filter', `label=com.docker.compose.project=${project}`, '-q']);
-      metadata.cleanup[engine] = { remainingContainers: remaining ? remaining.split('\n').length : 0, remainingNetworks: networks ? networks.split('\n').length : 0 };
-      if (remaining || networks) throw new Error(`${engine}: disposable resources remain after cleanup`);
-    }
-    rmSync(temp, { recursive: true, force: true });
-    writeFileSync(join(output, 'environment.json'), `${JSON.stringify(metadata, null, 2)}
+    try {
+      if (engine !== 'sqlite') {
+        run('docker', [...args, 'down', '--volumes', '--remove-orphans'], { env });
+        const remaining = run('docker', ['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '-q']);
+        const networks = run('docker', ['network', 'ls', '--filter', `label=com.docker.compose.project=${project}`, '-q']);
+        metadata.cleanup[engine] = { remainingContainers: remaining ? remaining.split('\n').length : 0, remainingNetworks: networks ? networks.split('\n').length : 0 };
+        if (remaining || networks) throw new Error(`${engine}: disposable resources remain after cleanup`);
+      }
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+      writeFileSync(join(output, 'environment.json'), `${JSON.stringify(metadata, null, 2)}
 `);
+    }
   }
 }
 

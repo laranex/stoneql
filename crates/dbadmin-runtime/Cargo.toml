@@ -21,3 +21,7 @@ tokio = { version = "=1.54.1", features = ["test-util"] }
 
 [lints]
 workspace = true
+
+[[example]]
+name = "lifecycle"
+test = true

@@ -21,6 +21,32 @@ fn config(engine: Engine, port: u16, password: String, ca: Vec<u8>) -> DirectMyS
         root_certificate_pem: Some(ca),
     }
 }
+fn certificate_failure(error: &sqlx::Error) -> Option<String> {
+    let reason = match error {
+        sqlx::Error::Tls(cause) => cause.to_string(),
+        sqlx::Error::Io(cause) if cause.kind() == std::io::ErrorKind::InvalidData => {
+            cause.get_ref().map(ToString::to_string).unwrap_or_default()
+        }
+        _ => return None,
+    }
+    .to_ascii_lowercase();
+    reason
+        .starts_with("invalid peer certificate:")
+        .then_some(reason)
+}
+fn expired_certificate(error: &sqlx::Error) -> bool {
+    certificate_failure(error).is_some_and(|reason| {
+        reason.starts_with("invalid peer certificate: certificate expired")
+            || reason.starts_with("invalid peer certificate: expired")
+    })
+}
+async fn reader_count(connection: &mut MySqlConnection) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'dbadmin_reader'",
+    )
+    .fetch_one(connection)
+    .await
+}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = match env::var("DBADMIN_LIFECYCLE_ENGINE")?.as_str() {
@@ -46,9 +72,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ssl_mode(MySqlSslMode::VerifyIdentity)
         .ssl_ca_from_pem(ca.clone())
         .disable_statement_logging();
+    let arguments: Vec<_> = env::args().skip(1).collect();
+    if arguments == ["--expired-certificate"] {
+        let error = MySqlConnection::connect_with(&options)
+            .await
+            .expect_err("expired fixture must reject TLS");
+        if !expired_certificate(&error) {
+            return Err(
+                "expected an expired-certificate error, not a generic connection failure".into(),
+            );
+        }
+        let registry = Connections::new(1, Duration::from_secs(3), Duration::from_secs(60))?;
+        assert!(
+            registry
+                .connect(OwnerId::new(), config(engine, port, password, ca))
+                .await
+                .is_err()
+        );
+        registry.shutdown().await;
+        println!("{{\"expiredCertificateRejected\":true,\"runtimeRejected\":true}}");
+        return Ok(());
+    }
+    if !arguments.is_empty() {
+        return Err("unknown fixture mode".into());
+    }
     let mut probe = MySqlConnection::connect_with(&options)
         .await
-        .map_err(|_| "fixture TLS connection failed")?;
+        .map_err(|error| match error {
+            sqlx::Error::Io(cause) => {
+                format!("fixture TLS connection failed: IO {:?}", cause.kind())
+            }
+            sqlx::Error::Tls(_) => "fixture TLS connection failed: TLS".into(),
+            _ => "fixture TLS connection failed: driver".into(),
+        })?;
     let actual: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
         .fetch_one(&mut probe)
         .await
@@ -56,6 +112,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if actual != marker {
         return Err("fixture ownership mismatch".into());
     }
+    let error = MySqlConnection::connect_with(&options.clone().host("localhost"))
+        .await
+        .expect_err("hostname mismatch must fail");
+    let reason =
+        certificate_failure(&error).ok_or("hostname failure was not a certificate rejection")?;
+    if !reason.contains("not valid for name") && !reason.contains("notvalidforname") {
+        return Err("expected a hostname certificate failure".into());
+    }
+    let error = MySqlConnection::connect_with(&options.clone().ssl_ca_from_pem(bad_ca.clone()))
+        .await
+        .expect_err("untrusted CA must fail");
+    let reason = certificate_failure(&error).ok_or("CA failure was not a certificate rejection")?;
+    if !reason.contains("unknownissuer") && !reason.contains("unknown issuer") {
+        return Err("expected an untrusted issuer failure".into());
+    }
+    let error = MySqlConnection::connect_with(&options.clone().password("wrong_fixture_password"))
+        .await
+        .expect_err("wrong password must fail");
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+            .map(|error| error.number()),
+        Some(1045)
+    );
     let cipher: String =
         sqlx::query_as::<_, (String, String)>("SHOW SESSION STATUS LIKE 'Ssl_cipher'")
             .fetch_one(&mut probe)
@@ -106,6 +187,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(1792)
     );
     writer.close().await.map_err(|_| "writer close failed")?;
+    let mut observer = MySqlConnection::connect_with(&options)
+        .await
+        .map_err(|_| "cleanup observer failed")?;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while reader_count(&mut observer).await? != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, sqlx::Error>(())
+    })
+    .await
+    .map_err(|_| "initial server connections were not cleaned up")?
+    .map_err(|_| "cleanup baseline failed")?;
+    let baseline = 1;
+    let expiring = Connections::new(1, Duration::from_secs(3), Duration::from_secs(1))?;
+    let expiry_owner = OwnerId::new();
+    let expiry_id = expiring
+        .connect(
+            expiry_owner,
+            config(engine, port, password.clone(), ca.clone()),
+        )
+        .await?;
+    assert_eq!(
+        reader_count(&mut observer)
+            .await
+            .map_err(|_| "active connection inspection failed")?,
+        baseline + 1
+    );
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while expiring.is_connected(expiry_owner, expiry_id)
+            || reader_count(&mut observer).await? != baseline
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        Ok::<_, sqlx::Error>(())
+    })
+    .await
+    .map_err(|_| "expired server connection was not cleaned up")?
+    .map_err(|_| "expiry inspection failed")?;
+    let reopened = expiring
+        .connect(
+            expiry_owner,
+            config(engine, port, password.clone(), ca.clone()),
+        )
+        .await?;
+    expiring.disconnect(expiry_owner, reopened).await?;
+    expiring.shutdown().await;
+    observer
+        .close()
+        .await
+        .map_err(|_| "observer shutdown failed")?;
     let registry = Connections::new(2, Duration::from_secs(3), Duration::from_secs(60))?;
     let owner = OwnerId::new();
     let other = OwnerId::new();
@@ -290,8 +421,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!registry.is_connected(other, two));
     samples.sort_unstable();
     println!(
-        "{{\"verifiedTls\":true,\"readOnlyGuards\":true,\"losslessRawValues\":true,\"boundedResults\":true,\"ownerIsolation\":true,\"wrongPasswordRejected\":true,\"untrustedCaRejected\":true,\"engineMismatchRejected\":true,\"capacityAndShutdown\":true,\"lifecycleSamples\":100,\"p50Us\":{},\"p95Us\":{},\"maxUs\":{}}}",
+        "{{\"verifiedTls\":true,\"serverExpiryCleanup\":true,\"hostnameMismatchRejected\":true,\"certificateReasonsVerified\":true,\"readOnlyGuards\":true,\"losslessRawValues\":true,\"boundedResults\":true,\"ownerIsolation\":true,\"wrongPasswordRejected\":true,\"untrustedCaRejected\":true,\"engineMismatchRejected\":true,\"capacityAndShutdown\":true,\"lifecycleSamples\":100,\"p50Us\":{},\"p95Us\":{},\"maxUs\":{}}}",
         samples[50], samples[95], samples[99]
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn expiration_probe_rejects_generic_connection_and_unrelated_tls_failures() {
+        use std::io::{Error, ErrorKind};
+        for cause in [
+            "socket expired",
+            "invalid peer certificate: UnknownIssuer",
+            "invalid peer certificate: certificate not valid for name expired.example",
+        ] {
+            assert!(!expired_certificate(&sqlx::Error::Io(Error::new(
+                ErrorKind::InvalidData,
+                cause
+            ))));
+        }
+        assert!(!expired_certificate(&sqlx::Error::Io(Error::from(
+            ErrorKind::ConnectionRefused
+        ))));
+        assert!(expired_certificate(&sqlx::Error::Io(Error::new(
+            ErrorKind::InvalidData,
+            "invalid peer certificate: certificate expired: verification time is later"
+        ))));
+    }
 }

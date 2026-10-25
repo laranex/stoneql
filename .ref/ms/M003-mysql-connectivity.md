@@ -38,7 +38,7 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Live fixtures: 100 verified-TLS lifecycle samples for each pinned M001 engine. SELECT-only grants deny DELETE (1142); a separately privileged fixture account in a read-only transaction denies DELETE (1792). Exact integer/decimal/binary/ENUM/NULL/empty and zero/fractional/extended temporal cases passed. Empty metadata and row/byte truncation passed.
 - MySQL read-only transaction setup requires the static text-protocol command; the initially attempted prepared form failed. Live regression now exercises the corrected path.
 - Driver limit found: SQLx 0.9 reads/concatenates complete packets before application byte checks and has no public receive limit. Evaluate a narrow receive-limit patch before live UI exposure. Output caps alone are not an allocation bound.
-- M003-L not fully accepted: hostname mismatch/expired certificates, OS matrix and complete lifetime/cleanup measurements remain. M003 UI binding, packet bounds and residual view/function trust review remain open.
+- Original M003-L checkpoint left hostname/expired-certificate and real cleanup checks open; those local gaps are addressed in the hardening evidence below. OS compatibility and complete performance profiles remain. M003 UI binding, packet bounds and residual view/function trust review remain open.
 - Safe raw summaries: `.ref/planning/m003-evidence/`. See `docs/development/connection-lifecycle.md`; debug microbenchmarks are not release gates.
 
 ## Receive-limit evaluation
@@ -46,3 +46,11 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Two adversarial socket tests plus one upstream-copy boundary unit test passed. Both real TLS fixtures rejected oversized rows and hostname/untrusted-CA failures; fresh connections worked afterward. Prepared source/checksum provenance and MIT attribution retained.
 - Evidence in `.ref/planning/m003-packet-evidence/`; reproducible scripts `test:receive-limit` / `test:receive-limit:live`; source/diff in `experiments/sqlx-receive-limit/`.
 - Production patch adoption/maintenance, broader protocol/OS/memory profiles and native UI binding remain pending. No dependency exception or milestone completion inferred.
+
+## Lifecycle hardening — local verification
+- Added explicit v3 CA generation, exact hostname/issuer failure checks, expired server certificates with fixed past dates and a negative certificate-classification unit test. Application TLS policy is unchanged; no system clock or trust-store changes.
+- Physical expiry cleanup is observed through the fixture account's process list; the one-second lease removes the server session and releases capacity. No unrelated sessions are inspected.
+- Fixed early setup/teardown temporary-directory leaks in both runners, with failure-first command-boundary regressions. Added a readiness regression for the socket-only initialization server and a TCP-listener requirement.
+- Fixed the effective-Docker-context guard to honor DOCKER_CONTEXT over DOCKER_HOST; both runner regressions refuse a remote context before container operations.
+- The expired MariaDB readiness observer uses only its authenticated container-local Unix socket, independently of dbAdmin's verified TCP rejection.
+- Safe summaries/checksums are retained separately under `.ref/planning/m003-lifecycle-hardening/`. Final checks are recorded in local progress. M003 remains in progress: production receive-limit adoption, native binding, OS/profile coverage and indirect function/view trust are not accepted by this increment.

@@ -1,0 +1,18 @@
+{
+  "verifiedTls": true,
+  "serverExpiryCleanup": true,
+  "hostnameMismatchRejected": true,
+  "certificateReasonsVerified": true,
+  "readOnlyGuards": true,
+  "losslessRawValues": true,
+  "boundedResults": true,
+  "ownerIsolation": true,
+  "wrongPasswordRejected": true,
+  "untrustedCaRejected": true,
+  "engineMismatchRejected": true,
+  "capacityAndShutdown": true,
+  "lifecycleSamples": 100,
+  "p50Us": 5266,
+  "p95Us": 6439,
+  "maxUs": 6866
+}

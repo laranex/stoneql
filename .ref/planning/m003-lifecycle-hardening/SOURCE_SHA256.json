@@ -1,0 +1,13 @@
+{
+  "Cargo.lock": "4cfb883e0bd60c02bb1adb1deba654ca82a198379b55f5ce7cc77755c0ad98e2",
+  "crates/dbadmin-runtime/Cargo.toml": "5ddc31dd28d84b5af06b9e8bb04b990ab21d8f89483dc356d837d63dab6d0d9b",
+  "crates/dbadmin-runtime/src/lib.rs": "d289ef085aa608d2a715ddae576ea7b193bcfc75c24e6f80fd2dcad12f71537e",
+  "crates/dbadmin-runtime/src/read_only.rs": "3551cf021c3231714d7e1b2be6db8dd018b4c2fe2dceb60998acd97ccbf0a5fa",
+  "crates/dbadmin-runtime/examples/lifecycle.rs": "f6e78b70e5bb448ea90b09dda02ef3edbd52531b7329216156cd4a4722aa6d26",
+  "tools/fixture-environment.mjs": "2a728b6d5aaa8e721e4ab11531cb0e5ac6ba9cb7a9522f4322bcb08cef65f6af",
+  "tools/test-connection-lifecycle.mjs": "7410eea5a49f8da94bb78cfee3de248a1059939595409dbc8343deab6c6afae4",
+  "tools/run-driver-spikes.mjs": "ea52d3952b8e813126c3d72b72dfc348138b75ad5172012670a2443ac37d903d",
+  "tests/driver-fixtures.test.mjs": "bbdf1de172980533b3419be3645b1688bd868d933e0ef8235e4ff0f40d18bfcd",
+  "tests/fixture-cleanup.test.mjs": "d6332fa52844be9a1bcf92d154333a6f5dfee52880fec1bbcdd743d15c0d676c",
+  "tests/fixture-readiness.test.mjs": "ca6c31e40a51f7eea709ee62f7e79ffd28f7a44f3ff9b53e6d080604db82f599"
+}

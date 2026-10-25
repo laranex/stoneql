@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fixtureEnvironment } from '../tools/fixture-environment.mjs';
+import { fixtureEnvironment, assertLocalFixtureDocker } from '../tools/fixture-environment.mjs';
 
 test('driver fixtures do not inherit database credentials, targets or TLS key paths', () => {
   const filtered = fixtureEnvironment({
@@ -10,4 +10,14 @@ test('driver fixtures do not inherit database credentials, targets or TLS key pa
     RUSTUP_HOME: '/temporary', DOCKER_CONTEXT: 'desktop-linux',
   });
   assert.deepEqual(filtered, {PATH: '/bin', CARGO_HOME: '/temporary', RUSTUP_HOME: '/temporary', DOCKER_CONTEXT: 'desktop-linux'});
+});
+
+test('Docker endpoint validation follows context precedence and rejects remote hosts without inspecting defaults', () => {
+  assert.doesNotThrow(() => assertLocalFixtureDocker({DOCKER_CONTEXT:'desktop-linux',DOCKER_HOST:'tcp://unapproved.invalid'}, context => {
+    assert.equal(context,'desktop-linux');
+    return 'unix:///synthetic-local';
+  }));
+  assert.throws(() => assertLocalFixtureDocker({DOCKER_HOST:'tcp://unapproved.invalid'}, () => {
+    assert.fail('an explicit host must not resolve a default context');
+  }), /local Docker/);
 });
