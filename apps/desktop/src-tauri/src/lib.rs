@@ -1,7 +1,10 @@
 mod database;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
 use std::{
-    sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+    },
     time::Instant,
 };
 use stoneql_contracts::v1::{
@@ -17,7 +20,8 @@ pub struct NativeSession {
     active_requests: AtomicUsize,
     owner: stoneql_runtime::OwnerId,
     connections: stoneql_runtime::Connections,
-    id: String,
+    renderer: Mutex<Option<(String, String)>>,
+    bootstrap: tauri::async_runtime::Mutex<()>,
     echoed: AtomicBool,
     allow_exit: AtomicBool,
     close_pending: AtomicBool,
@@ -28,6 +32,16 @@ pub struct NativeSession {
     started: Instant,
 }
 impl NativeSession {
+    fn is_current(&self, id: &str) -> bool {
+        !self.closing.load(Ordering::SeqCst)
+            && !self.allow_exit.load(Ordering::SeqCst)
+            && self
+                .renderer
+                .lock()
+                .expect("renderer session lock")
+                .as_ref()
+                .is_some_and(|(_, current)| current == id)
+    }
     fn new(smoke: bool) -> Self {
         Self {
             closing: AtomicBool::new(false),
@@ -39,7 +53,8 @@ impl NativeSession {
                 std::time::Duration::from_secs(3600),
             )
             .expect("static native limits"),
-            id: uuid::Uuid::new_v4().to_string(),
+            renderer: Mutex::new(None),
+            bootstrap: tauri::async_runtime::Mutex::new(()),
             echoed: AtomicBool::new(false),
             allow_exit: AtomicBool::new(false),
             close_pending: AtomicBool::new(false),
@@ -78,7 +93,7 @@ fn decode<T: serde::de::DeserializeOwned + serde::Serialize>(
     v1::decode_envelope(message).map_err(Into::into)
 }
 #[tauri::command]
-fn host_info<R: Runtime>(
+async fn host_info<R: Runtime>(
     window: WebviewWindow<R>,
     session: State<'_, NativeSession>,
     message: String,
@@ -88,13 +103,43 @@ fn host_info<R: Runtime>(
     if !v1::is_opaque_id(&request.payload.nonce) {
         return Err(invalid());
     }
+    // One bootstrap at a time, without admitting an unbounded queue of resets.
+    let _bootstrap = session
+        .bootstrap
+        .try_lock()
+        .map_err(|_| CoreError::rejected(ErrorCode::Capacity))?;
+    if session.closing.load(Ordering::SeqCst) || session.allow_exit.load(Ordering::SeqCst) {
+        return Err(forbidden());
+    }
+    let previous = session
+        .renderer
+        .lock()
+        .expect("renderer session lock")
+        .clone();
+    let id = if let Some((_, id)) = previous.filter(|(nonce, _)| nonce == &request.payload.nonce) {
+        id
+    } else {
+        *session.renderer.lock().expect("renderer session lock") = None;
+        session.echoed.store(false, Ordering::SeqCst);
+        session.close_pending.store(false, Ordering::SeqCst);
+        session.close_prompted.store(false, Ordering::SeqCst);
+        session.close_generation.fetch_add(1, Ordering::SeqCst);
+        session.connections.reset().await;
+        if session.closing.load(Ordering::SeqCst) {
+            return Err(forbidden());
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        *session.renderer.lock().expect("renderer session lock") =
+            Some((request.payload.nonce.clone(), id.clone()));
+        id
+    };
     Ok(Envelope {
         version: ProtocolVersion,
         request_id: request.request_id,
         payload: HostInfo {
             runtime: "desktop".into(),
             app_version: env!("CARGO_PKG_VERSION").into(),
-            session_id: session.id.clone(),
+            session_id: id,
             nonce: request.payload.nonce,
             simulated: true,
         },
@@ -108,7 +153,7 @@ fn contract_probe<R: Runtime>(
 ) -> Result<Envelope<ProbeResult>, ErrorDto> {
     guard(&window)?;
     let request: Envelope<ContractProbe> = decode(&message)?;
-    if request.payload.session_id != session.id || request.payload.values.len() > 256 {
+    if !session.is_current(&request.payload.session_id) || request.payload.values.len() > 256 {
         return Err(forbidden());
     }
     match request.payload.action {
@@ -214,7 +259,9 @@ async fn resolve_close<R: Runtime>(
 ) -> Result<Envelope<CloseResult>, ErrorDto> {
     guard(&window)?;
     let request: Envelope<CloseDecision> = decode(&message)?;
-    if request.payload.session_id != session.id || !session.close_pending.load(Ordering::SeqCst) {
+    if !session.is_current(&request.payload.session_id)
+        || !session.close_pending.load(Ordering::SeqCst)
+    {
         return Err(forbidden());
     }
     let closed = match request.payload.action {

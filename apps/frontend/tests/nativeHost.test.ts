@@ -35,3 +35,18 @@ test('lossy or foreign native replies fail closed and never acknowledge readines
   }
   await bootstrapNativeHost({});
 });
+test('each renderer bootstrap uses a fresh nonce independent of clock resolution',async()=>{
+  const nonces:string[]=[];
+  const fixture=native();
+  const original=fixture.global.__TAURI__.core.invoke;
+  fixture.global.__TAURI__.core.invoke=async function<T>(command,args):Promise<T>{
+    if(command==='host_info')nonces.push(JSON.parse(args.message).payload.nonce);
+    return original<T>(command,args);
+  };
+  const now=Date.now;Date.now=()=>100;
+  try{
+    assert.equal((await bootstrapNativeHost(fixture.global)).kind,'desktop');
+    assert.equal((await bootstrapNativeHost(fixture.global)).kind,'desktop');
+    assert.equal(nonces.length,2);assert.notEqual(nonces[0],nonces[1]);
+  }finally{Date.now=now;await bootstrapNativeHost({});}
+});

@@ -119,7 +119,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .clone();
     let config = json!({"sessionId":session,"engine":engine,"host":"127.0.0.1","port":port,"username":"stoneql_reader","password":password,"database":"stoneql_m001_fixture","rootCertificatePem":ca});
     let first = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
-    let second = invoke("connect_direct", config).unwrap()["payload"].clone();
+    let second = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
     assert_ne!(first["handle"], second["handle"]);
     assert!(!first["engineVersion"].as_str().unwrap().is_empty());
     let read = |handle: &Value, sql: &str| {
@@ -211,7 +211,71 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         json!({"sessionId":session,"handle":second["handle"]}),
     )
     .unwrap();
+    // Reload bootstrap must close idle physical sessions and invalidate old tokens/handles.
+    let idle = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
+    let mut observer = tauri::async_runtime::block_on(async {
+        MySqlConnection::connect_with(&options)
+            .await
+            .map_err(|_| "reload observer TLS failed")
+            .unwrap()
+    });
+    let count_readers = |connection: &mut MySqlConnection, expected: i64| {
+        tauri::async_runtime::block_on(async {
+            let start = std::time::Instant::now();
+            loop {
+                let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='stoneql_reader'")
+                    .fetch_one(&mut *connection).await.expect("owned session inspection");
+                if count == expected {
+                    break;
+                }
+                assert!(
+                    start.elapsed() < std::time::Duration::from_secs(3),
+                    "owned session count did not settle"
+                );
+            }
+        });
+    };
+    count_readers(&mut observer, 2);
+    let retry = invoke("host_info", json!({"nonce":"fixture_nonce"})).unwrap();
+    assert_eq!(retry["payload"]["sessionId"], session);
+    assert!(read(&idle["handle"], "SELECT id FROM raw_values").is_ok());
+    // Restore an idle physical connection after the successful query discarded its socket.
+    let idle_again = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
+    count_readers(&mut observer, 2);
+    let reloaded = invoke("host_info", json!({"nonce":"fixture_reload_nonce"})).unwrap();
+    let next_session = reloaded["payload"]["sessionId"].clone();
+    assert_ne!(next_session, session);
+    count_readers(&mut observer, 1);
+    assert_eq!(
+        read(&idle_again["handle"], "SELECT 1").unwrap_err()["code"],
+        "FORBIDDEN"
+    );
+    let status = invoke(
+        "database_status",
+        json!({"sessionId":next_session,"handle":idle_again["handle"]}),
+    )
+    .unwrap();
+    assert_eq!(status["payload"]["connected"], false);
+    let mut next_config = config.clone();
+    next_config["sessionId"] = next_session.clone();
+    let mut restored = Vec::new();
+    for _ in 0..8 {
+        restored.push(
+            invoke("connect_direct", next_config.clone()).unwrap()["payload"]["handle"].clone(),
+        );
+    }
+    for handle in restored {
+        invoke(
+            "disconnect_database",
+            json!({"sessionId":next_session,"handle":handle}),
+        )
+        .unwrap();
+    }
+    count_readers(&mut observer, 1);
+    tauri::async_runtime::block_on(observer.close())
+        .map_err(|_| "reload observer close failed")
+        .unwrap();
     println!(
-        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"disconnect\":true}}"
+        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true}}"
     );
 }

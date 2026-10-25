@@ -1,0 +1,9 @@
+{
+  "apps/desktop/src-tauri/src/lib.rs": "933dc834cc03dd779fc42b985f75ad3360c83e6120787985d452c30e6d2bbb78",
+  "apps/desktop/src-tauri/src/database.rs": "b42e3e43ab25470f3d978d45cbca550d51915d40922b443c2fc60729586775ca",
+  "apps/desktop/src-tauri/tests/ipc.rs": "24ae3cda087c669262a33a2a5c74c0e05c5022d354f808088b8d3b83715051bd",
+  "apps/desktop/src-tauri/tests/live_database.rs": "e4b9dd7acc7781f03b607b16453840a823bbaa0c4dd227d34d52ab171fc35a0e",
+  "apps/frontend/src/services/nativeHost.ts": "323130b428e351e26c56cc734823452eca7228606bb5fe1ffb47bac6ee588226",
+  "apps/frontend/tests/nativeHost.test.ts": "46c6366d268a273afb07e1007c1113503b0e676e0e3a241a23cf4c031832775d",
+  "crates/stoneql-runtime/src/lib.rs": "a7409c88e142d917ac2c6e22cdee7e8fbcca5fc8882d3d06daf4c8a734cda44c"
+}

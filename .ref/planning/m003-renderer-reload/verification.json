@@ -1,0 +1,28 @@
+{
+  "executedDate": "2026-10-25",
+  "reviewedAfterPause": "2026-10-26",
+  "platform": "macOS ARM",
+  "node": "26.11.1",
+  "rust": "1.99.1",
+  "javascriptTests": 155,
+  "rustTests": 33,
+  "browserScenarios": 22,
+  "nativeFixtureEngines": [
+    "MySQL8.4.6",
+    "MariaDB11.4.8"
+  ],
+  "initialNativeSmoke": {
+    "passed": true,
+    "startupMs": 948,
+    "graphicalReloadTested": false
+  },
+  "regressionBeforeFix": "different bootstrap nonces incorrectly returned the same session token",
+  "rustFmt": true,
+  "clippyAllTargets": true,
+  "contractsCheck": true,
+  "dependencyBoundaries": true,
+  "vendorProvenance": true,
+  "frontendNativeDocsBuilds": true,
+  "graphicalLiveDatabaseReloadVerified": false,
+  "crossPlatformVerified": false
+}

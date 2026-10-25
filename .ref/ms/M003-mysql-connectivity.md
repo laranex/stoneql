@@ -77,3 +77,12 @@ Verification: 151 JavaScript tests, 30 default Rust tests, 21 browser scenarios,
 - Actual native queries refuse all three with safe QUERY_REJECTED/unknown, leave counters unchanged and permit subsequent safe reads on fresh connections. Indirect advisory locking is demonstrably possible and the tested lock is released on physical close. Built-in allowlists do not apply transitively to database definitions.
 - Mutation test omitting the private read-only transaction failed on the new native refusal assertion; original runtime restored and both engine fixtures rerun successfully. No product code/contract/UI change.
 - Reproducible safe evidence: `.ref/planning/m003-read-only-trust/`; public boundary: `docs/development/read-only-safety.md`. This narrows the persistent-write trust gap; hostile UDF/external effects, native GUI/OS/resource profiles and reload reconciliation remain open. No blanket trust acceptance or milestone completion.
+
+## Renderer bootstrap lifecycle repair
+
+- Verified root cause: host_info returned one host-lifetime session token; renderer reload lost its handles while pools remained until lease expiry. A new native regression failed before the fix because successive bootstrap nonces returned the same token.
+- Fresh bootstrap nonce now invalidates the old token and resets/awaits existing pools before returning a new token. Same-nonce retries are idempotent. Registry generations reject late pending registrations; native post-connect revalidation closes late handles, and stale successful query replies retain unknown outcome.
+- Existing global pool/admission caps and deadlines remain; pending attempts may retain permits until bounded cleanup. No DTO/wire version, capability, UI layout or mock behavior change. UUID-based frontend nonces avoid clock-resolution collisions.
+- Tests cover registry reset/re-registration, native stale probes and real both-engine idle-session closure, old token/handle rejection and eight-slot reuse. Actual graphical reload/cross-OS, aggregate resource profiles and hostile UDF/external effects remain open; no milestone completion inferred.
+
+Verified local record: `.ref/planning/m003-renderer-reload/` (checks executed2026-10-25, reviewed after pause2026-10-26):155 JS tests,33 default Rust tests,22 browser scenarios, both real TLS handler fixtures, formatting/Clippy/contracts/boundaries/provenance and frontend/native/docs builds passed. Initial real macOS smoke948ms; no graphical live-database reload or cross-OS acceptance claimed.

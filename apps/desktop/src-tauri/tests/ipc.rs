@@ -226,3 +226,25 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
         "FORBIDDEN"
     );
 }
+
+#[test]
+fn renderer_bootstrap_rotates_session_and_rejects_stale_probes() {
+    let app = app();
+    let webview = window(&app, "main");
+    let first = bootstrap(&webview);
+    let retry = bootstrap(&webview);
+    assert_eq!(first.payload.session_id, retry.payload.session_id);
+    let next = invoke(
+        &webview,
+        "host_info",
+        json!({"version":1,"requestId":"reload","payload":{"nonce":"second_renderer"}}),
+        "tauri://localhost",
+    )
+    .unwrap();
+    assert_ne!(next["payload"]["sessionId"], first.payload.session_id);
+    let stale = json!({"version":1,"requestId":"old_probe","payload":{"sessionId":first.payload.session_id,"action":"echo","values":[]}});
+    assert_eq!(
+        invoke(&webview, "contract_probe", stale, "tauri://localhost").unwrap_err()["code"],
+        "FORBIDDEN"
+    );
+}

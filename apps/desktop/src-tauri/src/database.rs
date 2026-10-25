@@ -13,10 +13,7 @@ fn authorize<R: Runtime>(
     id: &str,
 ) -> Result<(), ErrorDto> {
     guard(window)?;
-    if session.id != id
-        || session.closing.load(Ordering::SeqCst)
-        || session.allow_exit.load(Ordering::SeqCst)
-    {
+    if !session.is_current(id) {
         return Err(forbidden());
     }
     Ok(())
@@ -108,6 +105,10 @@ pub async fn connect_direct<R: Runtime>(
         )
         .await
         .map_err(lifecycle)?;
+    if !session.is_current(&input.session_id) {
+        let _ = session.connections.disconnect(session.owner, handle).await;
+        return Err(forbidden());
+    }
     let engine_version = session
         .connections
         .engine_version(session.owner, handle)
@@ -148,6 +149,11 @@ pub async fn read_only_query<R: Runtime>(
         )
         .await
         .map_err(query_error)?;
+    if !session.is_current(&input.session_id) {
+        let mut error = forbidden();
+        error.outcome = stoneql_contracts::v1::OutcomeDto::Unknown;
+        return Err(error);
+    }
     Ok(Envelope {
         version: ProtocolVersion,
         request_id: request.request_id,

@@ -8,7 +8,10 @@ use sqlx::{
 use std::{
     collections::HashMap,
     fmt,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 use stoneql_core::Engine;
@@ -130,6 +133,7 @@ struct Entry {
     _expiry_cancel: oneshot::Sender<()>,
 }
 struct Inner {
+    generation: AtomicU64,
     entries: Mutex<HashMap<ConnectionId, Entry>>,
     slots: Arc<Semaphore>,
     deadline: Duration,
@@ -153,6 +157,7 @@ impl Connections {
             return Err(LifecycleError::InvalidConfiguration);
         }
         Ok(Self(Arc::new(Inner {
+            generation: AtomicU64::new(0),
             entries: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(capacity)),
             deadline,
@@ -164,6 +169,7 @@ impl Connections {
         owner: OwnerId,
         config: DirectMySql,
     ) -> Result<ConnectionId, LifecycleError> {
+        let generation = self.0.generation.load(Ordering::SeqCst);
         let options = config.options()?;
         let permit = self
             .0
@@ -209,7 +215,7 @@ impl Connections {
                 });
             }
         };
-        match self.register(owner, pool.clone(), permit, version) {
+        match self.register(owner, pool.clone(), permit, version, generation) {
             Ok(id) => Ok(id),
             Err(error) => {
                 pool.close().await;
@@ -223,6 +229,7 @@ impl Connections {
         pool: MySqlPool,
         permit: OwnedSemaphorePermit,
         engine_version: String,
+        generation: u64,
     ) -> Result<ConnectionId, LifecycleError> {
         let id = ConnectionId(Uuid::new_v4());
         let (cancel, cancelled) = oneshot::channel();
@@ -231,6 +238,9 @@ impl Connections {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
             if self.0.slots.is_closed() {
                 return Err(LifecycleError::Capacity);
+            }
+            if self.0.generation.load(Ordering::SeqCst) != generation {
+                return Err(LifecycleError::Forbidden);
             }
             entries.insert(
                 id,
@@ -300,6 +310,19 @@ impl Connections {
         entry.pool.close().await;
         Ok(())
     }
+    /// Trusted host reset revokes all handles and pending registrations, retaining capacity.
+    /// Closing pools waits for bounded active queries; it does not confirm server cancellation.
+    pub async fn reset(&self) {
+        let entries: Vec<_> = {
+            let mut entries = self.0.entries.lock().expect("connection registry lock");
+            self.0.generation.fetch_add(1, Ordering::SeqCst);
+            entries.drain().map(|(_, entry)| entry).collect()
+        };
+        for entry in entries {
+            entry.pool.close().await;
+        }
+    }
+
     /// Host shutdown closes every pool. Never retries user SQL or claims server cancellation.
     pub async fn shutdown(&self) {
         self.0.slots.close();
@@ -338,7 +361,13 @@ mod tests {
             .min_connections(0)
             .connect_lazy_with(config().options().unwrap());
         connections
-            .register(owner, pool, permit, "fixture".into())
+            .register(
+                owner,
+                pool,
+                permit,
+                "fixture".into(),
+                connections.0.generation.load(Ordering::SeqCst),
+            )
             .unwrap()
     }
     #[tokio::test]
@@ -394,10 +423,55 @@ mod tests {
         let pool = MySqlPoolOptions::new().connect_lazy_with(config().options().unwrap());
         connections.shutdown().await;
         assert_eq!(
-            connections.register(OwnerId::new(), pool.clone(), permit, "fixture".into()),
+            connections.register(OwnerId::new(), pool.clone(), permit, "fixture".into(), 0),
             Err(LifecycleError::Capacity)
         );
         pool.close().await;
+        assert!(connections.0.entries.lock().unwrap().is_empty());
+    }
+    #[tokio::test]
+    async fn reset_revokes_handles_closes_pools_and_preserves_new_capacity() {
+        let connections =
+            Connections::new(2, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let owner = OwnerId::new();
+        let first = register(&connections, owner);
+        let second = register(&connections, OwnerId::new());
+        let pools: Vec<_> = connections
+            .0
+            .entries
+            .lock()
+            .unwrap()
+            .values()
+            .map(|entry| entry.pool.clone())
+            .collect();
+        connections.reset().await;
+        assert!(!connections.is_connected(owner, first));
+        assert!(pools.iter().all(MySqlPool::is_closed));
+        assert!(connections.0.entries.lock().unwrap().get(&second).is_none());
+        let next = register(&connections, owner);
+        assert!(connections.is_connected(owner, next));
+        connections.shutdown().await;
+    }
+    #[tokio::test]
+    async fn reset_rejects_late_registration_from_the_previous_generation() {
+        let connections =
+            Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let generation = connections.0.generation.load(Ordering::SeqCst);
+        let permit = connections.0.slots.clone().try_acquire_owned().unwrap();
+        let pool = MySqlPoolOptions::new().connect_lazy_with(config().options().unwrap());
+        connections.reset().await;
+        assert_eq!(
+            connections.register(
+                OwnerId::new(),
+                pool.clone(),
+                permit,
+                "fixture".into(),
+                generation
+            ),
+            Err(LifecycleError::Forbidden)
+        );
+        pool.close().await;
+        assert!(connections.0.slots.clone().try_acquire_owned().is_ok());
         assert!(connections.0.entries.lock().unwrap().is_empty());
     }
     #[tokio::test]

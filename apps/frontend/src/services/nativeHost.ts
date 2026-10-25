@@ -25,8 +25,8 @@ export async function bootstrapNativeHost(global: unknown = globalThis): Promise
   const invoker = invokerFrom(global);
   if (!invoker) { activeInvoker = undefined; return (current = {kind: 'browser'}); }
   try {
-    const payload: HostInfoRequest = {nonce: `bootstrap_${Date.now()}`};
-    const info = await call<HostInfo, HostInfoRequest>(invoker, 'host_info', payload);
+    const payload: HostInfoRequest = {nonce: `bootstrap_${crypto.randomUUID()}`};
+    const info = await call<HostInfo, HostInfoRequest>(invoker, 'host_info', payload, 8000);
     if (info.runtime !== 'desktop' || info.nonce !== payload.nonce || !info.sessionId || info.simulated !== true) throw new Error('Native host metadata mismatch');
     const values: CellValue[] = [{kind: 'integer', text: '18446744073709551615'}, {kind: 'decimal', text: '12345678901234567890.4500'}, {kind: 'null'}, {kind: 'binary', hex: '00ff0180'}];
     const probe = await call<ProbeResult, ContractProbe>(invoker, 'contract_probe', {sessionId: info.sessionId, action: 'echo', values});
