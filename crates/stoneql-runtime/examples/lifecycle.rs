@@ -1,7 +1,4 @@
 //! Disposable fixture harness only; never opens arbitrary URLs. All data belongs to this run.
-use dbadmin_contracts::v1::CellValue;
-use dbadmin_core::Engine;
-use dbadmin_runtime::{Connections, DirectMySql, LifecycleError, OwnerId, QueryLimits, ReadError};
 use sqlx::{
     ConnectOptions, Connection, MySqlConnection,
     mysql::{MySqlConnectOptions, MySqlSslMode},
@@ -10,14 +7,17 @@ use std::{
     env,
     time::{Duration, Instant},
 };
+use stoneql_contracts::v1::CellValue;
+use stoneql_core::Engine;
+use stoneql_runtime::{Connections, DirectMySql, LifecycleError, OwnerId, QueryLimits, ReadError};
 fn config(engine: Engine, port: u16, password: String, ca: Vec<u8>) -> DirectMySql {
     DirectMySql {
         engine,
         host: "127.0.0.1".into(),
         port,
-        username: "dbadmin_reader".into(),
+        username: "stoneql_reader".into(),
         password,
-        database: "dbadmin_m001_fixture".into(),
+        database: "stoneql_m001_fixture".into(),
         root_certificate_pem: Some(ca),
     }
 }
@@ -42,33 +42,33 @@ fn expired_certificate(error: &sqlx::Error) -> bool {
 }
 async fn reader_count(connection: &mut MySqlConnection) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'dbadmin_reader'",
+        "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'stoneql_reader'",
     )
     .fetch_one(connection)
     .await
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let engine = match env::var("DBADMIN_LIFECYCLE_ENGINE")?.as_str() {
+    let engine = match env::var("STONEQL_LIFECYCLE_ENGINE")?.as_str() {
         "mysql" => Engine::MySql,
         "mariadb" => Engine::MariaDb,
         _ => return Err("fixture engine required".into()),
     };
-    let port: u16 = env::var("DBADMIN_LIFECYCLE_PORT")?.parse()?;
-    let password = env::var("DBADMIN_FIXTURE_PASSWORD")?;
-    let marker = env::var("DBADMIN_SPIKE_FIXTURE_ID")?;
+    let port: u16 = env::var("STONEQL_LIFECYCLE_PORT")?.parse()?;
+    let password = env::var("STONEQL_FIXTURE_PASSWORD")?;
+    let marker = env::var("STONEQL_SPIKE_FIXTURE_ID")?;
     if marker.len() != 36 {
         return Err("fixture marker required".into());
     }
-    let ca = std::fs::read(env::var("DBADMIN_LIFECYCLE_CA")?)?;
-    let bad_ca = std::fs::read(env::var("DBADMIN_LIFECYCLE_BAD_CA")?)?;
+    let ca = std::fs::read(env::var("STONEQL_LIFECYCLE_CA")?)?;
+    let bad_ca = std::fs::read(env::var("STONEQL_LIFECYCLE_BAD_CA")?)?;
     // Confirm ownership with verified TLS and the restricted fixture account before evaluation.
     let options = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(port)
-        .username("dbadmin_reader")
+        .username("stoneql_reader")
         .password(&password)
-        .database("dbadmin_m001_fixture")
+        .database("stoneql_m001_fixture")
         .ssl_mode(MySqlSslMode::VerifyIdentity)
         .ssl_ca_from_pem(ca.clone())
         .disable_statement_logging();
@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             sqlx::Error::Tls(_) => "fixture TLS connection failed: TLS".into(),
             _ => "fixture TLS connection failed: driver".into(),
         })?;
-    let actual: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
+    let actual: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
         .fetch_one(&mut probe)
         .await
         .map_err(|_| "fixture marker query failed")?;
@@ -159,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(1142)
     );
     probe.close().await.map_err(|_| "fixture close failed")?;
-    let mut writer = MySqlConnection::connect_with(&options.clone().username("dbadmin_writer"))
+    let mut writer = MySqlConnection::connect_with(&options.clone().username("stoneql_writer"))
         .await
         .map_err(|_| "writer fixture failed")?;
     sqlx::raw_sql("START TRANSACTION READ ONLY")

@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Browser/default database operations are session mocks; explicit desktop Direct MySQL/MariaDB profiles can execute bounded live read-only SQL. The user has authorized implementation of the revised milestone roadmap and commits for completed work. M001 foundation/evaluation is locally verified; later capabilities must still meet their own acceptance tests. Preserve the UI and browser/mock mode while adding native/server adapters. Never infer signing, publishing, production access or deployment approval from implementation authorization.
+StoneQL (StoneAge SQL Admin), formerly dbAdmin, uses the tagline “Old habits. New engine.” StoneQL is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Browser/default database operations are session mocks; explicit desktop Direct MySQL/MariaDB profiles can execute bounded live read-only SQL. The user has authorized implementation of the revised milestone roadmap and commits for completed work. M001 foundation/evaluation is locally verified; later capabilities must still meet their own acceptance tests. Preserve the UI and browser/mock mode while adding native/server adapters. Never infer signing, publishing, production access or deployment approval from implementation authorization.
 
 ## Start every session
 

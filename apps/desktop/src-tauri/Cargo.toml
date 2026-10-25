@@ -1,5 +1,5 @@
 [package]
-name = "dbadmin-desktop"
+name = "stoneql-desktop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,15 +8,15 @@ publish.workspace = true
 build = "build.rs"
 
 [lib]
-name = "dbadmin_desktop"
+name = "stoneql_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [dependencies]
-dbadmin-runtime = { path = "../../../crates/dbadmin-runtime" }
+stoneql-runtime = { path = "../../../crates/stoneql-runtime" }
 tauri = "=2.12.5"
 tauri-plugin-dialog = "=2.8.3"
-dbadmin-core = { path = "../../../crates/dbadmin-core" }
-dbadmin-contracts = { path = "../../../crates/dbadmin-contracts" }
+stoneql-core = { path = "../../../crates/stoneql-core" }
+stoneql-contracts = { path = "../../../crates/stoneql-contracts" }
 serde_json.workspace = true
 serde.workspace = true
 uuid.workspace = true

@@ -3,7 +3,7 @@
 Preserved original frontend documentation. Relative source paths below were rooted at the old repository layout; prepend `apps/frontend/` for source/test paths. Current root commands delegate to that workspace. Architecture and verification pages supersede historical planning/results below.
 
 
-**Database management, made familiar.**
+**Old habits. New engine.**
 
 A compact Vue 3 database management UI inspired by classic phpMyAdmin. Browser runnable, with independent connection workspaces and session-only relational mock data. No backend, real database access, credential persistence, SSH tunneling, Rust, or Tauri integration is implemented.
 
@@ -78,7 +78,7 @@ CSV is data-only; incompatible selections are validated. PostgreSQL hides MySQL 
 - `src/services/exportService.ts`: effective configuration, validation, accurate mock summaries, cancellable simulated transport interface.
 - `src/data/sample.ts`: sample relational databases with 128 users and hundreds of related records.
 - `src/style.css`: compact shared layout, Tailwind import, CSS-variable themes.
-- `public/icon.svg`: original dbAdmin database/checkmark app icon, also used as the logo.
+- `public/icon.svg`: original StoneQL database/checkmark app icon, also used as the logo.
 - `tests/`: deterministic service regression tests and Playwright UI workflows.
 
 Connection transports are discriminated types: Direct and SSH have configuration UI; Teleport and AWS SSM are future types only. Replace service interfaces with native commands for future Tauri integration without moving transport behavior into components.

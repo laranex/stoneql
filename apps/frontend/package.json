@@ -1,5 +1,5 @@
 {
-  "name": "@dbadmin/frontend",
+  "name": "@stoneql/frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",

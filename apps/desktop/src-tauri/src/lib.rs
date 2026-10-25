@@ -1,22 +1,22 @@
 mod database;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
-use dbadmin_contracts::v1::{
-    self, CloseAction, CloseDecision, CloseResult, ContractProbe, Envelope, ErrorDto, HostInfo,
-    HostInfoRequest, ProbeAction, ProbeResult, ProtocolVersion,
-};
-use dbadmin_core::{CoreError, ErrorCode};
 use std::{
     sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     time::Instant,
 };
+use stoneql_contracts::v1::{
+    self, CloseAction, CloseDecision, CloseResult, ContractProbe, Envelope, ErrorDto, HostInfo,
+    HostInfoRequest, ProbeAction, ProbeResult, ProtocolVersion,
+};
+use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 pub struct NativeSession {
     closing: AtomicBool,
     active_requests: AtomicUsize,
-    owner: dbadmin_runtime::OwnerId,
-    connections: dbadmin_runtime::Connections,
+    owner: stoneql_runtime::OwnerId,
+    connections: stoneql_runtime::Connections,
     id: String,
     echoed: AtomicBool,
     allow_exit: AtomicBool,
@@ -32,8 +32,8 @@ impl NativeSession {
         Self {
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
-            owner: dbadmin_runtime::OwnerId::new(),
-            connections: dbadmin_runtime::Connections::new(
+            owner: stoneql_runtime::OwnerId::new(),
+            connections: stoneql_runtime::Connections::new(
                 8,
                 std::time::Duration::from_secs(3),
                 std::time::Duration::from_secs(3600),
@@ -169,7 +169,7 @@ pub fn request_close<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), ErrorD
     state.close_pending.store(true, Ordering::SeqCst);
     state.close_prompted.store(false, Ordering::SeqCst);
     // This script is fixed application code; no SQL, path, identifier or user data is evaluated.
-    let _ = window.eval("window.dispatchEvent(new Event('dbadmin-close-requested'))");
+    let _ = window.eval("window.dispatchEvent(new Event('stoneql-close-requested'))");
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -184,10 +184,10 @@ pub fn request_close<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), ErrorD
         let callback_handle = handle.clone();
         let dialog = handle
             .dialog()
-            .message("The workspace is not responding. Close dbAdmin? Unsaved changes may be lost.")
-            .title("Close dbAdmin")
+            .message("The workspace is not responding. Close StoneQL? Unsaved changes may be lost.")
+            .title("Close StoneQL")
             .buttons(MessageDialogButtons::OkCancelCustom(
-                "Close dbAdmin".into(),
+                "Close StoneQL".into(),
                 "Cancel".into(),
             ));
         dialog.show(move |approved| {
@@ -283,7 +283,7 @@ pub fn run() {
     let smoke = cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--smoke-test");
     app_builder(tauri::Builder::default(), smoke)
         .build(tauri::generate_context!())
-        .expect("build dbAdmin desktop host")
+        .expect("build StoneQL desktop host")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event
                 && !app

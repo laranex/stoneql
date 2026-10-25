@@ -89,7 +89,7 @@ fn failure() -> sqlx::Error {
 fn validate_fixture_target(engine: &str, value: &str, marker: Option<&str>) -> Result<()> {
     let url = url::Url::parse(value).map_err(|_| failure())?;
     if url.host_str() != Some("127.0.0.1")
-        || url.path() != "/dbadmin_m001_fixture"
+        || url.path() != "/stoneql_m001_fixture"
         || url.port().is_none()
         || url.query().is_some()
         || url.fragment().is_some()
@@ -108,8 +108,8 @@ fn validate_fixture_target(engine: &str, value: &str, marker: Option<&str>) -> R
     Ok(())
 }
 fn fixture_url(engine: &str) -> Result<String> {
-    let value = env::var("DBADMIN_SPIKE_URL").map_err(|_| failure())?;
-    let marker = env::var("DBADMIN_SPIKE_FIXTURE_ID").ok();
+    let value = env::var("STONEQL_SPIKE_URL").map_err(|_| failure())?;
+    let marker = env::var("STONEQL_SPIKE_FIXTURE_ID").ok();
     validate_fixture_target(engine, &value, marker.as_deref())?;
     Ok(value)
 }
@@ -138,10 +138,10 @@ fn pg_options(url: &str) -> Result<PgConnectOptions> {
 
 async fn mysql(report: &mut Report, url: &str) -> Result<()> {
     let mut conn = MySqlConnection::connect_with(&mysql_options(url)?).await?;
-    let marker: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
+    let marker: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
         .fetch_one(&mut conn)
         .await?;
-    if marker != env::var("DBADMIN_SPIKE_FIXTURE_ID").map_err(|_| failure())? {
+    if marker != env::var("STONEQL_SPIKE_FIXTURE_ID").map_err(|_| failure())? {
         return Err(failure());
     }
     report.engine_version = sqlx::query_scalar("SELECT VERSION()")
@@ -202,8 +202,8 @@ async fn mysql(report: &mut Report, url: &str) -> Result<()> {
         "stored_procedure_multiple_results",
         "CALL with two row sets plus protocol completion result",
         async {
-            sqlx::raw_sql("CREATE PROCEDURE dbadmin_m001_proc() BEGIN SELECT 7 AS first_result; SELECT NULL AS second_result; END").execute(&mut conn).await?;
-            let mut stream = sqlx::raw_sql("CALL dbadmin_m001_proc()").fetch_many(&mut conn);
+            sqlx::raw_sql("CREATE PROCEDURE stoneql_m001_proc() BEGIN SELECT 7 AS first_result; SELECT NULL AS second_result; END").execute(&mut conn).await?;
+            let mut stream = sqlx::raw_sql("CALL stoneql_m001_proc()").fetch_many(&mut conn);
             let mut rows = 0;
             let mut boundaries = 0;
             let mut valid = true;
@@ -305,10 +305,10 @@ async fn mysql_cancel(url: &str) -> Result<bool> {
 }
 async fn postgres(report: &mut Report, url: &str) -> Result<()> {
     let mut conn = PgConnection::connect_with(&pg_options(url)?).await?;
-    let marker: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
+    let marker: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
         .fetch_one(&mut conn)
         .await?;
-    if marker != env::var("DBADMIN_SPIKE_FIXTURE_ID").map_err(|_| failure())? {
+    if marker != env::var("STONEQL_SPIKE_FIXTURE_ID").map_err(|_| failure())? {
         return Err(failure());
     }
     report.engine_version = sqlx::query_scalar("SHOW server_version")
@@ -368,8 +368,8 @@ async fn postgres(report: &mut Report, url: &str) -> Result<()> {
         "stored_procedure",
         "PostgreSQL INOUT procedure CALL returns its result",
         async {
-            sqlx::raw_sql("CREATE PROCEDURE dbadmin_m001_proc(INOUT value bigint) LANGUAGE plpgsql AS $$ BEGIN value := value + 1; END $$").execute(&mut conn).await?;
-            let row = sqlx::query("CALL dbadmin_m001_proc(7::bigint)")
+            sqlx::raw_sql("CREATE PROCEDURE stoneql_m001_proc(INOUT value bigint) LANGUAGE plpgsql AS $$ BEGIN value := value + 1; END $$").execute(&mut conn).await?;
+            let row = sqlx::query("CALL stoneql_m001_proc(7::bigint)")
                 .fetch_one(&mut conn)
                 .await?;
             Ok(row.try_get::<i64, _>(0)? == 8)
@@ -521,7 +521,7 @@ async fn sqlite(report: &mut Report) -> Result<()> {
         "SQLite rejects CALL instead of emulating a stored procedure",
         async {
             Ok(matches!(
-                sqlx::query("CALL dbadmin_m001_proc()")
+                sqlx::query("CALL stoneql_m001_proc()")
                     .execute(&mut conn)
                     .await,
                 Err(sqlx::Error::Database(_))
@@ -638,15 +638,15 @@ mod tests {
     fn refuses_non_fixture_targets_before_connecting() {
         for target in [
             "mysql://127.0.0.1:3306/production",
-            "mysql://example.org:3306/dbadmin_m001_fixture",
-            "mysql://127.0.0.1/dbadmin_m001_fixture",
-            "mysql://127.0.0.1:3306/dbadmin_m001_fixture?socket=other",
-            "mysql://127.0.0.1:3306/dbadmin_m001_fixture#fragment",
-            "postgres://127.0.0.1:5432/dbadmin_m001_fixture",
+            "mysql://example.org:3306/stoneql_m001_fixture",
+            "mysql://127.0.0.1/stoneql_m001_fixture",
+            "mysql://127.0.0.1:3306/stoneql_m001_fixture?socket=other",
+            "mysql://127.0.0.1:3306/stoneql_m001_fixture#fragment",
+            "postgres://127.0.0.1:5432/stoneql_m001_fixture",
         ] {
             assert!(validate_fixture_target("mysql", target, MARKER).is_err());
         }
-        let fixture = "mysql://127.0.0.1:3306/dbadmin_m001_fixture";
+        let fixture = "mysql://127.0.0.1:3306/stoneql_m001_fixture";
         assert!(validate_fixture_target("mysql", fixture, None).is_err());
         assert!(validate_fixture_target("mysql", fixture, Some("not-owned")).is_err());
         assert!(validate_fixture_target("mysql", fixture, MARKER).is_ok());

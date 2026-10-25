@@ -20,7 +20,7 @@ Allowlisted database targets and approved SQLite roots reduce SSRF/local-file ri
 
 Default logs contain request IDs, operation codes, durations and bounded counts, not SQL text, passwords or row content. Redact allowlisted database error details and provide bounded opt-in diagnostics with visible retention. SQL itself may contain secrets. Audit privileged actions with principal/object identifiers while avoiding sensitive payloads. Keep health endpoints free of credential/database details.
 
-Use TLS and verified host keys, signed desktop updates, restrictive CSP and no arbitrary shell/filesystem renderer permissions. [Tauri capabilities](https://v2.tauri.app/security/capabilities/) provide the native boundary mechanism; dbAdmin still needs its own validation and authorization policies.
+Use TLS and verified host keys, signed desktop updates, restrictive CSP and no arbitrary shell/filesystem renderer permissions. [Tauri capabilities](https://v2.tauri.app/security/capabilities/) provide the native boundary mechanism; StoneQL still needs its own validation and authorization policies.
 
 ## Verification and open decisions
 

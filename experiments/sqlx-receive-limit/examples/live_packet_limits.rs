@@ -18,16 +18,16 @@ fn certificate_error(error: &sqlx::Error) -> bool {
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let port: u16 = env::var("DBADMIN_LIFECYCLE_PORT")?.parse()?;
-    let ca = std::fs::read(env::var("DBADMIN_LIFECYCLE_CA")?)?;
-    let password = env::var("DBADMIN_FIXTURE_PASSWORD")?;
-    let marker = env::var("DBADMIN_SPIKE_FIXTURE_ID")?;
+    let port: u16 = env::var("STONEQL_LIFECYCLE_PORT")?.parse()?;
+    let ca = std::fs::read(env::var("STONEQL_LIFECYCLE_CA")?)?;
+    let password = env::var("STONEQL_FIXTURE_PASSWORD")?;
+    let marker = env::var("STONEQL_SPIKE_FIXTURE_ID")?;
     let options = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(port)
-        .username("dbadmin_reader")
+        .username("stoneql_reader")
         .password(&password)
-        .database("dbadmin_m001_fixture")
+        .database("stoneql_m001_fixture")
         .ssl_mode(MySqlSslMode::VerifyIdentity)
         .ssl_ca_from_pem(ca)
         .max_receive_packet_size(NonZeroUsize::new(65536).unwrap())
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut connection = MySqlConnection::connect_with(&options)
         .await
         .map_err(|_| "verified fixture connection failed")?;
-    let actual: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
+    let actual: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
         .fetch_one(&mut connection)
         .await
         .map_err(|_| "fixture ownership probe failed")?;
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         certificate_error(&error),
         "hostname test must fail on a certificate, not generic connectivity"
     );
-    let bad_ca = std::fs::read(env::var("DBADMIN_LIFECYCLE_BAD_CA")?)?;
+    let bad_ca = std::fs::read(env::var("STONEQL_LIFECYCLE_BAD_CA")?)?;
     let error = MySqlConnection::connect_with(&options.clone().ssl_ca_from_pem(bad_ca))
         .await
         .err()

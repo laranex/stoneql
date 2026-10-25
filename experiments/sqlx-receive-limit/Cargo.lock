@@ -137,7 +137,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dbadmin-receive-limit-evaluation"
+name = "stoneql-receive-limit-evaluation"
 version = "0.1.0"
 dependencies = [
  "sqlx",

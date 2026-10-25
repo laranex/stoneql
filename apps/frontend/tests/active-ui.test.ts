@@ -144,10 +144,10 @@ test('first launch resolves OS theme, footer toggle persists manual preference, 
   let toggle = findAll(root, (n) => n.props['aria-label'] === 'Switch to light theme')[0]!;
   assert.ok(toggle);
   assert.ok(classes.has('dark'));
-  assert.equal(preferences.has('dbadmin-theme'), false);
+  assert.equal(preferences.has('stoneql-theme'), false);
   toggle.props.onClick();
   await nextTick();
-  assert.equal(preferences.get('dbadmin-theme'), 'light');
+  assert.equal(preferences.get('stoneql-theme'), 'light');
   assert.equal(classes.has('dark'), false);
   osDark = true;
   listeners.forEach((fn) => fn({ matches: true }));
@@ -222,11 +222,11 @@ test('active Connection Manager creates, renames, moves and deletes groups while
   store.connections[0].environment = 'Production';
   store.connections[0].password = 'not-persisted';
   await nextTick();
-  const saved = JSON.parse(preferences.get('dbadmin-connections')!);
+  const saved = JSON.parse(preferences.get('stoneql-connections')!);
   assert.equal(saved.connections[0].id, 'staging');
   assert.equal(saved.connections[0].color, '#8e7ba1');
   assert.equal(saved.connections[0].environment, 'Production');
-  assert.ok(!preferences.get('dbadmin-connections')!.includes('not-persisted'));
+  assert.ok(!preferences.get('stoneql-connections')!.includes('not-persisted'));
   await click(named('Delete group Project Renamed'));
   await click(button('Delete group'));
   assert.equal(store.connections.length, 2);
@@ -243,7 +243,7 @@ test('active Connection Manager creates, renames, moves and deletes groups while
 for (const theme of ['light', 'dark'])
   test(`${theme}: Explorer status has no redundant connection action and keys have no empty placeholders`, async () => {
     preferences.clear();
-    preferences.set('dbadmin-theme', theme);
+    preferences.set('stoneql-theme', theme);
     const root = hostNode('root'),
       app = hostRenderer.createApp(App);
     app.use(createPinia());
@@ -286,7 +286,7 @@ for (const theme of ['light', 'dark'])
   });
 test('actual Insert, Edit, and inline controls share schema validation and preserve ENUM/SET values', async () => {
   preferences.clear();
-  preferences.set('dbadmin-theme', 'light');
+  preferences.set('stoneql-theme', 'light');
   const pinia = createPinia(),
     root = hostNode('root'),
     app = hostRenderer.createApp(App);
@@ -437,7 +437,7 @@ test('H7 unsaved navigation uses the shared dialog and Cancel preserves the form
   app.unmount();
 });
 for (const theme of ['light','dark']) test(`${theme}: H6 connection switching preserves page, tree state, query results and independent page size`, async()=>{
- preferences.clear(); preferences.set('dbadmin-theme',theme);
+ preferences.clear(); preferences.set('stoneql-theme',theme);
  const pinia=createPinia(), root=hostNode('root'), app=hostRenderer.createApp(App); app.use(pinia); app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'), store=useWorkspace(pinia);
  const original=store.activeId, other=store.connections.find((c:any)=>c.id!==original)!;
@@ -450,11 +450,11 @@ for (const theme of ['light','dark']) test(`${theme}: H6 connection switching pr
  assert.equal(store.activeId,original); assert.equal(store.workspace.page,3); assert.equal(store.pageSize,25); assert.equal(store.workspace.treeFilter,'users');
  assert.deepEqual([...store.workspace.expandedDatabases],['acme_store','analytics']); assert.equal(store.workspace.queries[0].result.rows[0].test,'saved result');
  store.pageSize=100; await nextTick(); assert.equal(store.workspace.queries[0].result.rows[0].test,'saved result');
- store.defaultPageSize=250; await nextTick(); assert.equal(preferences.get('dbadmin-default-page-size'),'250'); assert.equal(store.pageSize,100);
+ store.defaultPageSize=250; await nextTick(); assert.equal(preferences.get('stoneql-default-page-size'),'250'); assert.equal(store.pageSize,100);
  app.unmount();
 });
 for(const theme of ['light','dark']) test(`${theme}: H8 database/server breadcrumbs open actual compact overview and table actions`,async()=>{
- preferences.clear(); preferences.set('dbadmin-theme',theme);
+ preferences.clear(); preferences.set('stoneql-theme',theme);
  const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
  const breadcrumb=findAll(root,n=>n.props['aria-label']==='Database breadcrumb')[0]!;
@@ -502,7 +502,7 @@ test('M12 actual connection setup saves an offline configuration without opening
  await set('Connection name','Offline draft');await set('Host','invalid.offline.test');
  await button('Save').props.onClick();await nextTick();
  assert.equal(store.connections.at(-1).name,'Offline draft');assert.equal(store.activeId,active);assert.equal(store.opened.length,2);
- assert.ok(preferences.get('dbadmin-connections')!.includes('invalid.offline.test'));app.unmount();
+ assert.ok(preferences.get('stoneql-connections')!.includes('invalid.offline.test'));app.unmount();
 });
 test('H10 actual Import uses persistent errors and never partially inserts invalid CSV',async()=>{
  preferences.clear();const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
@@ -524,7 +524,7 @@ test('C3 actual With selected Copy rejects UNIQUE collisions atomically',async()
  assert.equal(JSON.stringify(store.table.rows),before);assert.ok(textContent(root).includes('Copy failed: email: This key value already exists.'), textContent(root).slice(-1000));app.unmount();
 });
 for (const theme of ['light','dark']) test(`${theme}: active Table Structure creates, reorders, edits and drops a composite index`,async()=>{
- preferences.clear();preferences.set('dbadmin-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
+ preferences.clear();preferences.set('stoneql-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
  const button=(label:string,scope=root)=>findAll(scope,n=>n.type==='button'&&textContent(n).trim()===label)[0]!;
  const named=(label:string)=>findAll(root,n=>n.props['aria-label']===label)[0]!;
@@ -539,7 +539,7 @@ for (const theme of ['light','dark']) test(`${theme}: active Table Structure cre
  app.unmount();
 });
 for (const theme of ['light','dark']) test(`${theme}: database Routines creates/edits a function, validates a simulated call and confirms deletion`,async()=>{
- preferences.clear();preferences.set('dbadmin-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
+ preferences.clear();preferences.set('stoneql-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
  const button=(label:string,scope=root)=>findAll(scope,n=>n.type==='button'&&textContent(n).trim()===label)[0]!;
  const named=(label:string)=>findAll(root,n=>n.props['aria-label']===label)[0]!;
@@ -570,7 +570,7 @@ test('actual database Structure creates and browses a read-only view through the
  app.unmount();
 });
 for(const theme of ['light','dark'])test(`${theme}: database trigger and event Create/Edit/Drop handlers update active mock state`,async()=>{
- preferences.clear();preferences.set('dbadmin-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
+ preferences.clear();preferences.set('stoneql-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
  const button=(label:string,scope=root)=>findAll(scope,n=>n.type==='button'&&textContent(n).trim()===label)[0]!;
  const named=(label:string)=>findAll(root,n=>n.props['aria-label']===label)[0]!;
@@ -606,7 +606,7 @@ test('actual database Create table opens the existing column editor workflow',as
  assert.equal(store.table.name,'new_records');assert.equal(store.workspace.view,'Structure');assert.equal(store.table.rows.length,0);assert.equal(store.table.columns[0].autoIncrement,true);button('Add column').props.onClick();await nextTick();assert.ok(findAll(root,n=>n.props.role==='dialog'&&n.props['aria-label']==='Add column').length);app.unmount();
 });
 for(const theme of ['light','dark']) test(`${theme}: actual index type controls save MySQL Fulltext and Spatial definitions`,async()=>{
- preferences.clear();preferences.set('dbadmin-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
+ preferences.clear();preferences.set('stoneql-theme',theme);const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
  const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);store.selectTable('acme_store','products');await nextTick();
  const button=(label:string,scope=root)=>findAll(scope,n=>n.type==='button'&&textContent(n).trim()===label)[0]!;
  const named=(label:string)=>findAll(root,n=>n.props['aria-label']===label)[0]!;
@@ -626,7 +626,7 @@ test('empty database Structure can create the first table through the active ove
  button('Create table').props.onClick();await nextTick();findAll(root,n=>n.props['aria-label']==='Object name')[0]!.props['onUpdate:modelValue']('first_table');await nextTick();const modal=findAll(root,n=>n.props.role==='dialog')[0]!;findAll(modal,n=>n.type==='form')[0]!.props.onSubmit({preventDefault(){}});await nextTick();assert.equal(store.table.name,'first_table');assert.equal(store.workspace.view,'Structure');app.unmount();
 });
 for (const theme of ['light', 'dark']) test(`${theme}: a failed routine retry removes the previous successful call notice`, async () => {
-  preferences.clear(); preferences.set('dbadmin-theme', theme);
+  preferences.clear(); preferences.set('stoneql-theme', theme);
   const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
   try {
     const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
@@ -642,7 +642,7 @@ for (const theme of ['light', 'dark']) test(`${theme}: a failed routine retry re
   } finally { app.unmount(); }
 });
 for (const theme of ['light', 'dark']) test(`${theme}: switching a descending B-tree draft to Fulltext or Hash clears the inapplicable direction`, async () => {
-  preferences.clear(); preferences.set('dbadmin-theme', theme);
+  preferences.clear(); preferences.set('stoneql-theme', theme);
   const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
   try {
     const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
@@ -663,7 +663,7 @@ for (const theme of ['light', 'dark']) test(`${theme}: switching a descending B-
   } finally { app.unmount(); }
 });
 for (const theme of ['light', 'dark']) test(`${theme}: dropping the last table returns to usable database Structure`, async () => {
-  preferences.clear(); preferences.set('dbadmin-theme', theme);
+  preferences.clear(); preferences.set('stoneql-theme', theme);
   const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
   try {
     const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);
@@ -677,7 +677,7 @@ for (const theme of ['light', 'dark']) test(`${theme}: dropping the last table r
 });
 for (const engine of ['MySQL','MariaDB','PostgreSQL','SQLite']) test(`${engine}: table and database object lifecycle handlers remain consistent in both themes`, async () => {
   for (const theme of ['light','dark']) {
-    preferences.clear();preferences.set('dbadmin-theme',theme);
+    preferences.clear();preferences.set('stoneql-theme',theme);
     const pinia=createPinia(),root=hostNode('root'),app=hostRenderer.createApp(App);app.use(pinia);app.mount(root);
     try {
       const {useWorkspace}=await loadModule('../../src/stores/workspace.ts'),store=useWorkspace(pinia);

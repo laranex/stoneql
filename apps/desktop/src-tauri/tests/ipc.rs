@@ -1,5 +1,5 @@
-use dbadmin_contracts::v1::{CellValue, Envelope, HostInfo, ProbeResult};
 use serde_json::{Value, json};
+use stoneql_contracts::v1::{CellValue, Envelope, HostInfo, ProbeResult};
 use tauri::{
     WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     ipc::{CallbackFn, InvokeBody},
@@ -7,7 +7,7 @@ use tauri::{
     webview::InvokeRequest,
 };
 fn app() -> tauri::App<MockRuntime> {
-    dbadmin_desktop::app_builder(mock_builder(), false)
+    stoneql_desktop::app_builder(mock_builder(), false)
         .build(tauri::generate_context!())
         .unwrap()
 }
@@ -155,7 +155,7 @@ fn native_close_requires_a_pending_os_request_and_preserves_cancelled_sessions()
         invoke(&main, "resolve_close", message.clone(), "tauri://localhost").unwrap_err()["code"],
         "FORBIDDEN"
     );
-    dbadmin_desktop::request_close(app.handle()).unwrap();
+    stoneql_desktop::request_close(app.handle()).unwrap();
     message["payload"]["action"] = json!("prompted");
     assert_eq!(
         invoke(&main, "resolve_close", message.clone(), "tauri://localhost").unwrap()["payload"]["closed"],

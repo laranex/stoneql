@@ -33,7 +33,7 @@ Read-only SQL can invoke side effects through functions or privileges; unsupport
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
 
 ## Incremental evidence — 2026-10-25
-- Host-independent dbadmin-runtime contains owner-scoped bounded MySQL/MariaDB pools, verified-identity TLS, deadlines, expiry, disconnect and shutdown. No frontend/native commands expose it yet; no credential persistence.
+- Host-independent stoneql-runtime contains owner-scoped bounded MySQL/MariaDB pools, verified-identity TLS, deadlines, expiry, disconnect and shutdown. No frontend/native commands expose it yet; no credential persistence.
 - Nine Rust regression tests cover ownership/capacity, expiry, connect/shutdown race, stalled handshake, configuration, SELECT refusal policy and raw temporal decoding.
 - Live fixtures: 100 verified-TLS lifecycle samples for each pinned M001 engine. SELECT-only grants deny DELETE (1142); a separately privileged fixture account in a read-only transaction denies DELETE (1792). Exact integer/decimal/binary/ENUM/NULL/empty and zero/fractional/extended temporal cases passed. Empty metadata and row/byte truncation passed.
 - MySQL read-only transaction setup requires the static text-protocol command; the initially attempted prepared form failed. Live regression now exercises the corrected path.
@@ -52,7 +52,7 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Physical expiry cleanup is observed through the fixture account's process list; the one-second lease removes the server session and releases capacity. No unrelated sessions are inspected.
 - Fixed early setup/teardown temporary-directory leaks in both runners, with failure-first command-boundary regressions. Added a readiness regression for the socket-only initialization server and a TCP-listener requirement.
 - Fixed the effective-Docker-context guard to honor DOCKER_CONTEXT over DOCKER_HOST; both runner regressions refuse a remote context before container operations.
-- The expired MariaDB readiness observer uses only its authenticated container-local Unix socket, independently of dbAdmin's verified TCP rejection.
+- The expired MariaDB readiness observer uses only its authenticated container-local Unix socket, independently of StoneQL's verified TCP rejection.
 - Safe summaries/checksums are retained separately under `.ref/planning/m003-lifecycle-hardening/`. Final checks are recorded in local progress. M003 remains in progress: production receive-limit adoption, native binding, OS/profile coverage and indirect function/view trust are not accepted by this increment.
 
 ## Approved receive-limit adoption

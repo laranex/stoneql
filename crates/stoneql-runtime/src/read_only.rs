@@ -1,12 +1,12 @@
 //! Intentionally restricted M003 SELECT subset. Engine read-only transactions and database
 //! privileges remain authoritative; this conservative lexer is an additional refusal policy.
 use super::{ConnectionId, Connections, LifecycleError, OwnerId};
-use dbadmin_contracts::v1::{CellValue, Column, ResultSet};
 use futures_util::TryStreamExt;
 use sqlx::{
     Column as _, Executor, Row, SqlSafeStr, Statement, TypeInfo, ValueRef, mysql::MySqlRow,
 };
 use std::time::Duration;
+use stoneql_contracts::v1::{CellValue, Column, ResultSet};
 use tokio::time::Instant;
 
 #[derive(Clone, Copy)]

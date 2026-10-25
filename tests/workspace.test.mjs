@@ -15,14 +15,14 @@ test('root commands delegate to the owning npm workspace and lockfile agrees', a
     for (const field of ['dependencies', 'devDependencies']) assert.deepEqual(lock.packages[path][field], pkg[field]);
     assert.equal(lock.packages[`node_modules/${pkg.name}`].resolved, path);
   }
-  for (const script of ['dev', 'build', 'preview', 'test:browser']) assert.match(root.scripts[script], /--workspace @dbadmin\/frontend/);
-  for (const script of ['docs:dev', 'docs:build', 'docs:preview']) assert.match(root.scripts[script], /--workspace @dbadmin\/docs/);
+  for (const script of ['dev', 'build', 'preview', 'test:browser']) assert.match(root.scripts[script], /--workspace @stoneql\/frontend/);
+  for (const script of ['docs:dev', 'docs:build', 'docs:preview']) assert.match(root.scripts[script], /--workspace @stoneql\/docs/);
 });
 
 test('documentation supports repository bases and rejects unsafe or ambiguous paths', () => {
-  assert.equal(siteBase('/dbadmin/'), '/dbadmin/');
+  assert.equal(siteBase('/stoneql/'), '/stoneql/');
   assert.equal(siteBase('/'), '/');
-  for (const value of ['dbadmin', '//host/', '/a/../', '/a?b/', '/a']) assert.throws(() => siteBase(value));
+  for (const value of ['stoneql', '//host/', '/a/../', '/a?b/', '/a']) assert.throws(() => siteBase(value));
 });
 
 test('navigation resolves canonical docs and website does not mirror Markdown', async () => {
@@ -47,7 +47,7 @@ test('frontend remains native-framework independent with only approved Rust foun
   for (const path of ['apps/server']) {
     await assert.rejects(stat(new URL(`../${path}`, import.meta.url)), { code: 'ENOENT' });
   }
-  for (const path of ['Cargo.toml', 'crates/dbadmin-core/src/lib.rs', 'crates/dbadmin-contracts/src/lib.rs', 'apps/desktop/src-tauri/src/lib.rs']) {
+  for (const path of ['Cargo.toml', 'crates/stoneql-core/src/lib.rs', 'crates/stoneql-contracts/src/lib.rs', 'apps/desktop/src-tauri/src/lib.rs']) {
     assert.ok((await stat(new URL(`../${path}`, import.meta.url))).isFile());
   }
 });
@@ -58,9 +58,9 @@ test('repository links are explicit and do not invent an owner', () => {
     delete process.env.DOCS_REPOSITORY_URL;
     delete process.env.GITHUB_REPOSITORY;
     assert.equal(repositoryUrl(), '');
-    process.env.GITHUB_REPOSITORY = 'owner/dbadmin';
-    assert.equal(repositoryUrl(), 'https://github.com/owner/dbadmin');
-    process.env.DOCS_REPOSITORY_URL = 'https://user:secret@github.com/owner/dbadmin';
+    process.env.GITHUB_REPOSITORY = 'owner/stoneql';
+    assert.equal(repositoryUrl(), 'https://github.com/owner/stoneql');
+    process.env.DOCS_REPOSITORY_URL = 'https://user:secret@github.com/owner/stoneql';
     assert.throws(repositoryUrl);
   } finally {
     for (const [key, value] of [['DOCS_REPOSITORY_URL', previous.url], ['GITHUB_REPOSITORY', previous.repository]]) {

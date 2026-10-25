@@ -25,8 +25,8 @@ The native validation environment installed Rust into temporary CARGO_HOME/RUSTU
 
 ## Boundaries
 
-- `crates/dbadmin-core`: no dependencies; engine/transport vocabulary, unverified-by-default capabilities and structured domain errors.
-- `crates/dbadmin-contracts`: Rust v1 wire DTOs, serde validation/golden fixtures, TypeScript generation and a synthetic microbenchmark. Its only local dependency is the core; it has no host/driver/runtime dependency.
+- `crates/stoneql-core`: no dependencies; engine/transport vocabulary, unverified-by-default capabilities and structured domain errors.
+- `crates/stoneql-contracts`: Rust v1 wire DTOs, serde validation/golden fixtures, TypeScript generation and a synthetic microbenchmark. Its only local dependency is the core; it has no host/driver/runtime dependency.
 - `experiments/sqlx-spike`: unpublished, separately scoped driver executable. It is a workspace member but excluded from default members. It is never a production connection service.
 - `contracts/`: generated types and compile-time consumer checks outside Vue. `tools/`: boundary checker and fixture orchestration.
 
@@ -42,10 +42,10 @@ npm run spike:drivers
 
 The runner builds the locked executable, creates dedicated random Compose projects, generates transient credentials/marker SQL, publishes only loopback ports and verifies the marker before any spike DDL. It rejects remote Docker contexts and external/non-fixture database URLs, and removes inherited PostgreSQL/MySQL connection settings and TLS key paths before starting the lab. It never accepts existing database URLs from the user. SQLite is in memory. Container state is tmpfs; normal/failing runs remove their own containers/networks and verify teardown. Never reuse a production/development database for this lab.
 
-Reports in `artifacts/m001/` contain synthetic observations, not backups. A nonzero assertion/fixture/cleanup exit fails evaluation; unsupported and unverified capabilities are explicitly reported. If startup fails, inspect Docker availability; do not disable host/Chromium security, use host networking or change ownership. A forcibly killed runner may need cleanup limited to its `dbadmin-m001-*` project; do not remove unrelated resources.
+Reports in `artifacts/m001/` contain synthetic observations, not backups. A nonzero assertion/fixture/cleanup exit fails evaluation; unsupported and unverified capabilities are explicitly reported. If startup fails, inspect Docker availability; do not disable host/Chromium security, use host networking or change ownership. A forcibly killed runner may need cleanup limited to its `stoneql-m001-*` project; do not remove unrelated resources.
 
 ```sh
-cargo run --locked -p dbadmin-contracts --example benchmark
+cargo run --locked -p stoneql-contracts --example benchmark
 cargo install cargo-audit --version 0.22.2 --locked
 cargo audit --deny warnings
 ```

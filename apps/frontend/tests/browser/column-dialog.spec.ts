@@ -3,7 +3,7 @@ for (const theme of ['light', 'dark'])
   test(`${theme}: active Add/Edit Column dialog saves formatted types and physical position`, async ({
     page,
   }) => {
-    await page.addInitScript((value) => localStorage.setItem('dbadmin-theme', value), theme);
+    await page.addInitScript((value) => localStorage.setItem('stoneql-theme', value), theme);
     await page.goto('/');
     await page.getByRole('tab', { name: 'Structure', exact: true }).click();
     await page.getByRole('button', { name: 'Add column', exact: true }).click();

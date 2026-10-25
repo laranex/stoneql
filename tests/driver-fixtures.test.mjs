@@ -6,7 +6,7 @@ test('driver fixtures do not inherit database credentials, targets or TLS key pa
   const filtered = fixtureEnvironment({
     PGHOST: 'production.invalid', PGPASSWORD: 'synthetic', PGSSLCERT: '/never/read',
     MYSQL_PWD: 'synthetic', MARIADB_HOST: 'production.invalid', DATABASE_URL: 'synthetic',
-    DBADMIN_SPIKE_URL: 'synthetic', DBADMIN_LIFECYCLE_CA: '/never/read', DBADMIN_FIXTURE_PASSWORD: 'synthetic', PATH: '/bin', CARGO_HOME: '/temporary',
+    DBADMIN_SPIKE_URL: 'legacy-synthetic', DBADMIN_FIXTURE_PASSWORD: 'legacy-secret', STONEQL_SPIKE_URL: 'synthetic', STONEQL_LIFECYCLE_CA: '/never/read', STONEQL_FIXTURE_PASSWORD: 'synthetic', PATH: '/bin', CARGO_HOME: '/temporary',
     RUSTUP_HOME: '/temporary', DOCKER_CONTEXT: 'desktop-linux',
   });
   assert.deepEqual(filtered, {PATH: '/bin', CARGO_HOME: '/temporary', RUSTUP_HOME: '/temporary', DOCKER_CONTEXT: 'desktop-linux'});

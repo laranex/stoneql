@@ -89,13 +89,13 @@ Environment: macOS 27.0.1 / Darwin 27 arm64, Node 26.11.1, installed Playwright 
 | --- | --- |
 | `npm run test:browser` | Exits 1 during web-server setup: `listen EPERM: operation not permitted 0.0.0.0:5173`. No page or test worker reaches an application workflow. |
 | Bare Node TCP server, repository and OS temporary directory | `listen` returns `EPERM` on `127.0.0.1:5173`, `127.0.0.1:0`, `::1:0` and `0.0.0.0:0` in both directories. Port 0 requests a free ephemeral port. |
-| Chromium headless shell, sandbox explicitly enabled | Aborts before a page can be created: `EXC_BREAKPOINT / SIGTRAP`. No dbAdmin content was loaded. |
+| Chromium headless shell, sandbox explicitly enabled | Aborts before a page can be created: `EXC_BREAKPOINT / SIGTRAP`. No StoneQL content was loaded. |
 | Full Chromium, `channel: 'chromium'`, sandbox enabled | Aborts with `SIGABRT`. Its matching macOS crash report has `_RegisterApplication` / `___RegisterApplication_block_invoke` / `TransformProcessType` on the faulting startup stack. |
 | Installed WebKit | Aborts with exit 134 / `SIGABRT`; the matching crash report likewise terminates during macOS application registration, before a page exists. |
 | Docker fallback, read-only `docker version` probe | Permission denied connecting to the existing Docker Unix socket. No permission or daemon configuration was changed. |
 | `playwright test --list` | Successfully discovers the same 17 scenarios across seven files. Collection is not execution. |
 
-The **root of the EPERM server failure is the execution context's socket-listening restriction**, not a Vite-specific error, unavailable fixed port, missing browser download, public-interface binding alone, or repository path. The bare Node reproductions establish this independently of dbAdmin and Playwright. Switching to loopback or another port does not fix it here.
+The **root of the EPERM server failure is the execution context's socket-listening restriction**, not a Vite-specific error, unavailable fixed port, missing browser download, public-interface binding alone, or repository path. The bare Node reproductions establish this independently of StoneQL and Playwright. Switching to loopback or another port does not fix it here.
 
 There is a separate browser-startup blocker: installed browser processes cannot establish a usable session. Full Chromium and WebKit crash during native macOS application registration; the headless shell also aborts. These observations establish the failure phase, but do not prove the precise private macOS service/policy responsible. No application defect is inferred from these startup crashes. No accessible alternate approved browser runner is available in this session.
 

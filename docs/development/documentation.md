@@ -8,7 +8,7 @@
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
-DOCS_BASE=/dbadmin/ npm run docs:build
+DOCS_BASE=/stoneql/ npm run docs:build
 ```
 
 The build validates source navigation and generated local page/asset URLs. VitePress provides local search, syntax highlighting, Light/Dark themes and previous/next links. Repository links appear when `DOCS_REPOSITORY_URL=https://github.com/OWNER/REPO` is supplied; Actions derives the URL automatically. No owner is invented when no remote exists.

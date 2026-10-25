@@ -22,6 +22,7 @@ export const sidebar = [
     { text: 'Verification', link: '/development/verification' },
     { text: 'Rust Foundation', link: '/development/rust-foundation' },
     { text: 'Documentation', link: '/development/documentation' },
+    { text: 'Branding', link: '/development/branding' },
     { text: 'UX Review', link: '/ux-review-remediation' }
   ] }
 ];

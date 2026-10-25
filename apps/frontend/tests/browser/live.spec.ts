@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test';
 for(const theme of ['light','dark'])test(`${theme}: explicit native live connection, exact results, errors, disconnect and persistence`,async({page})=>{
  await page.addInitScript(theme=>{
-  localStorage.setItem('dbadmin-theme',theme);
+  localStorage.setItem('stoneql-theme',theme);
   let sequence=0;const handles=new Set<string>();
   (window as any).liveCommands=[];
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
@@ -72,7 +72,7 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await expect(page.locator('.footer-session')).toContainText('connected');
  await expect(page.getByText('9223372036854775807',{exact:true})).toBeVisible();
  await page.getByRole('tab',{name:/Live fixture/}).click();
- const serialized=await page.evaluate(()=>localStorage.getItem('dbadmin-connections')!);
+ const serialized=await page.evaluate(()=>localStorage.getItem('stoneql-connections')!);
  expect(serialized).not.toContain('synthetic-password');expect(serialized).not.toContain('synthetic-public-root');expect(serialized).toContain('"mode":"live"');
  await page.reload();
  expect(await page.evaluate(()=>(window as any).liveCommands)).not.toContain('connect_direct');

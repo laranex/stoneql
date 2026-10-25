@@ -21,7 +21,7 @@ Verification uses Node 26.11.1 and npm 11.20.0. Results below distinguish execut
 - Root regression suite: 128 frontend tests plus 6 workspace/documentation tests passed (134 total).
 - Separate migration baseline: all 73 original source/test/asset/application-config files match SHA-256 hashes.
 - Original frontend dependency lock records are unchanged. Clean `npm ci --offline --ignore-scripts --no-audit --no-fund` succeeded using a temporary cache of genuine npm artifacts; `npm ls --all` passed.
-- Documentation production builds and local link/asset checks passed at `/`, `/dbadmin/`, and custom-domain `/` with CNAME generation.
+- Documentation production builds and local link/asset checks passed at `/`, `/stoneql/`, and custom-domain `/` with CNAME generation.
 - All 17 browser scenarios were collected across seven files. Execution was retried and blocked before any scenario ran.
 - Root frontend dev/preview and docs dev/preview commands resolve the correct workspace, then fail at local listener creation with EPERM. Live preview/navigation and screenshots remain unverified.
 - Git confirms `.ref/workprogress.md` is ignored and not tracked. No native framework dependency or Rust placeholder was introduced.

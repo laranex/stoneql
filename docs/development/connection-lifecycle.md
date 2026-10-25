@@ -2,10 +2,10 @@
 
 ## Current scope
 
-M003 is in progress. `dbadmin-runtime` implements a host-independent MySQL/MariaDB lifecycle and restricted read-only query adapter. It is not exposed to the frontend or Tauri commands yet. Saved connections and UI operations remain mocks. No credential storage or SSH is implemented.
+M003 is in progress. `stoneql-runtime` implements a host-independent MySQL/MariaDB lifecycle and restricted read-only query adapter. It is not exposed to the frontend or Tauri commands yet. Saved connections and UI operations remain mocks. No credential storage or SSH is implemented.
 
 ```sh
-cargo test --locked -p dbadmin-runtime
+cargo test --locked -p stoneql-runtime
 npm run test:lifecycle
 ```
 
@@ -37,7 +37,7 @@ Nine runtime tests plus the fixture certificate-error classification test passed
 
 **Receive-limit adoption:** the user approved the evaluated SQLx MySQL patch on 2026-10-25. Root Cargo now uses the reviewed source in `vendor/sqlx-mysql`; the runtime explicitly limits logical incoming packets to **2 MiB** before payload reads, including aggregate continuation length. This is separate from the 1 MiB serialized result cap. A 3 MiB fixture response is refused with `PacketTooLarge`; the physical connection is discarded and a subsequent query opens a fresh connection. SQL is never retried automatically.
 
-Run `npm run rust:vendor` to verify source/patch/license provenance. CI performs this check before Rust verification. `npm run test:receive-limit` and `npm run test:receive-limit:live` now use the same approved source, not a generated duplicate or a modified registry cache. The complete upstream MIT grant and authors are retained; upgrade/withdrawal instructions live in `vendor/sqlx-mysql/DBADMIN.md`.
+Run `npm run rust:vendor` to verify source/patch/license provenance. CI performs this check before Rust verification. `npm run test:receive-limit` and `npm run test:receive-limit:live` now use the same approved source, not a generated duplicate or a modified registry cache. The complete upstream MIT grant and authors are retained; upgrade/withdrawal instructions live in `vendor/sqlx-mysql/STONEQL.md`.
 
 The patch bounds a logical receive packet, not process RSS or aggregate prepared-statement metadata. TLS/socket buffers, decoded/serialized copies and concurrent connections still need representative memory/profile coverage. Historical isolated results remain evidence of the original evaluation; no blanket production or release approval is inferred.
 

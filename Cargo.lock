@@ -600,62 +600,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dbadmin-contracts"
-version = "0.1.0"
-dependencies = [
- "dbadmin-core",
- "serde",
- "serde_json",
- "ts-rs",
-]
-
-[[package]]
-name = "dbadmin-core"
-version = "0.1.0"
-
-[[package]]
-name = "dbadmin-desktop"
-version = "0.1.0"
-dependencies = [
- "dbadmin-contracts",
- "dbadmin-core",
- "dbadmin-runtime",
- "serde",
- "serde_json",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "uuid",
-]
-
-[[package]]
-name = "dbadmin-runtime"
-version = "0.1.0"
-dependencies = [
- "dbadmin-contracts",
- "dbadmin-core",
- "futures-util",
- "serde_json",
- "sqlx",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "dbadmin-sqlx-spike"
-version = "0.1.0"
-dependencies = [
- "bigdecimal",
- "futures-util",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
- "url",
-]
-
-[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3501,6 +3445,62 @@ name = "static_vcruntime"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff7589a1859b09232522bb9edf076ca7fcf14ded96685d3fa629db73023ffbb7"
+
+[[package]]
+name = "stoneql-contracts"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "stoneql-core",
+ "ts-rs",
+]
+
+[[package]]
+name = "stoneql-core"
+version = "0.1.0"
+
+[[package]]
+name = "stoneql-desktop"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sqlx",
+ "stoneql-contracts",
+ "stoneql-core",
+ "stoneql-runtime",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "uuid",
+]
+
+[[package]]
+name = "stoneql-runtime"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "sqlx",
+ "stoneql-contracts",
+ "stoneql-core",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "stoneql-sqlx-spike"
+version = "0.1.0"
+dependencies = [
+ "bigdecimal",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "url",
+]
 
 [[package]]
 name = "string_cache"

@@ -1,6 +1,6 @@
-use dbadmin_contracts::v1::*;
-use dbadmin_core::{CoreError, ErrorCode, Outcome};
 use serde_json::{Value, json};
+use stoneql_contracts::v1::*;
+use stoneql_core::{CoreError, ErrorCode, Outcome};
 
 fn request() -> Value {
     json!({"version":1,"requestId":"request_1","payload":{"connectionId":"connection_1","database":null,"sql":"SELECT 'raw'; -- unchanged","maxRows":200,"maxBytes":262144}})

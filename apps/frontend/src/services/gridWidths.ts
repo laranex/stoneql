@@ -1,6 +1,6 @@
 export const MIN_COLUMN_WIDTH = 64,
   MAX_COLUMN_WIDTH = 600;
-export const GRID_WIDTHS_KEY = 'dbadmin-grid-widths:v1';
+export const GRID_WIDTHS_KEY = 'stoneql-grid-widths:v1';
 export interface GridColumn {
   name: string;
   type?: string;

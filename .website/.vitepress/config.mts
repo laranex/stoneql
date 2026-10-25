@@ -4,7 +4,7 @@ import { sidebar, siteBase, repositoryUrl } from '../site.mjs';
 const base = siteBase();
 const repository = repositoryUrl();
 export default defineConfig({
-  title: 'dbAdmin', description: 'Database management, made familiar.',
+  title: 'StoneQL', description: 'StoneAge SQL Admin. Old habits. New engine.',
   base, srcDir: fileURLToPath(new URL('../../docs/', import.meta.url)),
   outDir: fileURLToPath(new URL('../dist/', import.meta.url)),
   cacheDir: fileURLToPath(new URL('../cache/', import.meta.url)), appearance: true,
@@ -14,7 +14,7 @@ export default defineConfig({
     logo: '/icon.svg', nav: [{ text: 'Guide', link: '/getting-started/' }, { text: 'Architecture', link: '/architecture/overview' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
     sidebar, search: { provider: 'local' }, outline: [2, 3],
     socialLinks: repository ? [{ icon: 'github', link: repository }] : [],
-    footer: { message: 'UI prototype · Database operations are simulated.' }
+    footer: { message: 'Mock-first prototype · Desktop live read-only development slice.' }
   },
   markdown: {
     config(md) {

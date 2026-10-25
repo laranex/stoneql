@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('dbadmin-theme', 'light'));
+  await page.addInitScript(() => localStorage.setItem('stoneql-theme', 'light'));
   await page.goto('/');
 });
 async function openExport(page: import('@playwright/test').Page) {

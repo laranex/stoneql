@@ -3,7 +3,7 @@ for (const theme of ['light', 'dark'])
   test(`${theme}: aligned borders, hover grip, resize, auto-fit, reset and persisted widths`, async ({
     page,
   }) => {
-    await page.addInitScript((value) => localStorage.setItem('dbadmin-theme', value), theme);
+    await page.addInitScript((value) => localStorage.setItem('stoneql-theme', value), theme);
     await page.goto('/');
     const handle = page.getByRole('separator', { name: 'Resize role column', exact: true });
     const header = page

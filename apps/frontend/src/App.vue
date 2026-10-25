@@ -187,7 +187,7 @@ watch(dark, (value) => document.documentElement.classList.toggle('dark', value),
 });
 watch(
   () => store.theme,
-  (value) => localStorage.setItem('dbadmin-theme', value),
+  (value) => localStorage.setItem('stoneql-theme', value),
 );
 const sidebarWidth = ref(250),
   sidebarHidden = ref(false),
@@ -1174,7 +1174,7 @@ async function nativeCloseRequested() {
   if (nativeHostState.kind === 'browser') return;
   nativeCloseHandling = true;
   try {
-    const decision = hasUnsavedChanges() ? askDiscard('Close dbAdmin and discard unsaved changes?', 'Close dbAdmin') : Promise.resolve(true);
+    const decision = hasUnsavedChanges() ? askDiscard('Close StoneQL and discard unsaved changes?', 'Close StoneQL') : Promise.resolve(true);
     await nextTick();
     await resolveNativeClose('prompted');
     await resolveNativeClose((await decision) ? 'confirm' : 'cancel');
@@ -1191,7 +1191,7 @@ onMounted(() => {
   media.addEventListener('change', onThemeChange);
   window.addEventListener('keydown', keyboard);
   window.addEventListener('beforeunload', beforeUnload);
-  window.addEventListener('dbadmin-close-requested', nativeCloseRequested);
+  window.addEventListener('stoneql-close-requested', nativeCloseRequested);
 });
 onBeforeUnmount(() => {
   if(liveStatusTimer)clearInterval(liveStatusTimer);
@@ -1201,7 +1201,7 @@ onBeforeUnmount(() => {
   media.removeEventListener('change', onThemeChange);
   window.removeEventListener('keydown', keyboard);
   window.removeEventListener('beforeunload', beforeUnload);
-  window.removeEventListener('dbadmin-close-requested', nativeCloseRequested);
+  window.removeEventListener('stoneql-close-requested', nativeCloseRequested);
 });
 </script>
 
@@ -2215,13 +2215,13 @@ onBeforeUnmount(() => {
     </div>
     <div v-else class="empty-state">
       <Database :size="40" />
-      <h1>Welcome to dbAdmin</h1>
+      <h1>Welcome to StoneQL</h1>
       <p>Open a connection to explore your databases.</p>
       <button class="button primary" @click="manager = true">Manage connections</button>
     </div>
     <footer class="bottom-status" aria-label="Application status and preferences">
       <span class="footer-session"
-        ><Terminal :size="12" /><strong>dbAdmin</strong><span class="footer-divider">|</span
+        ><Terminal :size="12" /><strong>StoneQL</strong><span class="footer-divider">|</span
         ><span class="session-detail"
           >{{ isLive ? `Live read-only · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
         ></span
@@ -2700,7 +2700,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <footer>
-          <span class="muted">dbAdmin 0.1.0</span
+          <span class="muted">StoneQL 0.1.0</span
           ><button class="button primary" @click="settings = false">Done</button>
         </footer>
       </section>
@@ -2945,19 +2945,19 @@ onBeforeUnmount(() => {
         v-dialog="{ close: () => (help = false) }"
         role="dialog"
         aria-modal="true"
-        aria-label="About dbAdmin"
+        aria-label="About StoneQL"
       >
         <header>
-          <h2><img src="/icon.svg" width="26" alt="" /> dbAdmin</h2>
+          <h2><img src="/icon.svg" width="26" alt="" /> StoneQL</h2>
           <button class="icon-button" aria-label="Close help" @click="help = false">
             <X :size="16" />
           </button>
         </header>
         <div class="modal-body help-body">
-          <h3>Database management, made familiar.</h3>
+          <h3>StoneAge SQL Admin</h3>
+          <p>Old habits. New engine.</p>
           <p>
-            A desktop-inspired, browser-runnable database client prototype. Everything here uses
-            in-memory sample data.
+            Formerly dbAdmin. A compact database client with session-only mock data by default.
           </p>
           <p>
             Select a table to browse records. Double-click a cell to edit, or use Edit, Copy, and
@@ -2968,11 +2968,11 @@ onBeforeUnmount(() => {
           <code>SELECT * FROM users WHERE status = 'active' ORDER BY id DESC LIMIT 25;</code>
           <p>
             Connections have independent datasets. Refreshing the browser resets session data. No
-            credentials or database connections leave your browser.
+            mock credentials or database connections leave your browser. Explicit desktop Live profiles make real verified-TLS, read-only connections.
           </p>
         </div>
         <footer>
-          <span class="muted">Version 0.1.0 · Original dbAdmin assets</span
+          <span class="muted">Version 0.1.0 · Original StoneQL assets</span
           ><button class="button primary" @click="help = false">Got it</button>
         </footer>
       </section>

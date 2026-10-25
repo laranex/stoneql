@@ -4,7 +4,7 @@ for (const theme of ['light', 'dark']) {
   test(`${theme}: compact workspace, independent notifications, preview preference, and footer`, async ({
     page,
   }) => {
-    await page.addInitScript((value) => localStorage.setItem('dbadmin-theme', value), theme);
+    await page.addInitScript((value) => localStorage.setItem('stoneql-theme', value), theme);
     await page.goto('/');
     const footer = page.locator('.bottom-status');
     const footerHeight = (await footer.boundingBox())!.height;

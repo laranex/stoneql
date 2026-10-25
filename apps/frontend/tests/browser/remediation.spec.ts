@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 for (const theme of ['light', 'dark']) test(`${theme}: review regression workflows and bounded scrolling`,async({page})=>{
- await page.addInitScript(value=>localStorage.setItem('dbadmin-theme',value),theme);
+ await page.addInitScript(value=>localStorage.setItem('stoneql-theme',value),theme);
  await page.goto('/');
  await page.getByRole('button',{name:'Delete record 1',exact:true}).click();
  const confirm=page.getByRole('alertdialog');

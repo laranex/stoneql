@@ -13,7 +13,7 @@ npm run test:receive-limit:live
 
 The live command additionally requires OpenSSL and a local Docker daemon. It reuses the owning M003 fixture runner, random loopback ports/identities and automatic cleanup. No saved profiles, arbitrary database URLs or nonlocal Docker contexts are used. The old generated `driver/` copy is ignored and unused; binaries are ignored under root `target/receive-limit/`. The independent Cargo.lock is tracked.
 
-`tools/prepare-receive-limit.mjs` retains the original command entry point and verifies the approved vendored source through `tools/check-sqlx-vendor.mjs`. Fresh checkouts no longer require generated driver copies, tar or patch utilities. The source is tracked with package/patch/license fingerprints; Cargo's registry cache is never modified. See `docs/development/connection-lifecycle.md` and `vendor/sqlx-mysql/DBADMIN.md` for current adoption and maintenance rules.
+`tools/prepare-receive-limit.mjs` retains the original command entry point and verifies the approved vendored source through `tools/check-sqlx-vendor.mjs`. Fresh checkouts no longer require generated driver copies, tar or patch utilities. The source is tracked with package/patch/license fingerprints; Cargo's registry cache is never modified. See `docs/development/connection-lifecycle.md` and `vendor/sqlx-mysql/STONEQL.md` for current adoption and maintenance rules.
 
 ## Change under evaluation
 
@@ -33,4 +33,4 @@ The runtime now enables a 2 MiB logical packet cap and tests oversized responses
 
 ## Provenance and licensing
 
-Base: [SQLx v0.9.0](https://github.com/launchbadge/sqlx/tree/v0.9.0/sqlx-mysql), exact registry archive checksum in `upstream.json`. The patch and dbAdmin harness are original modifications. SQLx is dual licensed MIT OR Apache-2.0; this evaluation selects MIT and includes the complete upstream grant in [SQLX-LICENSE-MIT](./SQLX-LICENSE-MIT), Copyright SQLx Contributors / portions LaunchBadge, LLC. The registry subcrate contains relative license placeholders; the preparer supplies the complete MIT license in the generated copy. No GPL translation/theme assets are incorporated.
+Base: [SQLx v0.9.0](https://github.com/launchbadge/sqlx/tree/v0.9.0/sqlx-mysql), exact registry archive checksum in `upstream.json`. The patch and StoneQL harness are original modifications. SQLx is dual licensed MIT OR Apache-2.0; this evaluation selects MIT and includes the complete upstream grant in [SQLX-LICENSE-MIT](./SQLX-LICENSE-MIT), Copyright SQLx Contributors / portions LaunchBadge, LLC. The registry subcrate contains relative license placeholders; the preparer supplies the complete MIT license in the generated copy. No GPL translation/theme assets are incorporated.

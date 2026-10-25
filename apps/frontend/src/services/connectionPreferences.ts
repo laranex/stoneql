@@ -15,7 +15,7 @@ export const environments: EnvironmentTag[] = [
   'Production',
   'Custom',
 ];
-export const CONNECTION_STORAGE_KEY = 'dbadmin-connections';
+export const CONNECTION_STORAGE_KEY = 'stoneql-connections';
 export interface ConnectionPreferences {
   version: 1;
   connections: Connection[];

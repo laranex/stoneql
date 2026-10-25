@@ -142,12 +142,12 @@ export const useWorkspace = defineStore('workspace', () => {
       throw error;
     }
   }
-  const savedPageSize = Number(localStorage.getItem('dbadmin-default-page-size'));
+  const savedPageSize = Number(localStorage.getItem('stoneql-default-page-size'));
   const defaultPageSize = ref(
     [15, 25, 50, 100, 250, 500].includes(savedPageSize) ? savedPageSize : 25,
   );
   watch(defaultPageSize, (value) =>
-    localStorage.setItem('dbadmin-default-page-size', String(value)),
+    localStorage.setItem('stoneql-default-page-size', String(value)),
   );
   const activeId = ref(connections.value[0]?.id || '');
   const opened = ref(connections.value.slice(0, 2).map((c) => c.id));
@@ -192,7 +192,7 @@ export const useWorkspace = defineStore('workspace', () => {
   const table = computed(() =>
     relations(database.value).find((t) => t.name === workspace.value.table),
   );
-  const savedTheme = localStorage.getItem('dbadmin-theme');
+  const savedTheme = localStorage.getItem('stoneql-theme');
   const theme = ref(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'system');
   const pageSize = computed({
     get: () => workspace.value.pageSize,

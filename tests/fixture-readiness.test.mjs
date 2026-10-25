@@ -6,7 +6,7 @@ import {join,resolve,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
 test('lifecycle fixture waits for final TCP startup after the init-server marker becomes visible',()=>{
-  const temp=mkdtempSync(join(tmpdir(),'dbadmin-readiness-test-'));
+  const temp=mkdtempSync(join(tmpdir(),'stoneql-readiness-test-'));
   const workspace=join(temp,'workspace');const scratch=join(temp,'scratch');
   mkdirSync(join(workspace,'tools'),{recursive:true});mkdirSync(scratch);
   try {
@@ -29,7 +29,7 @@ else if(args.includes('exec')){
   if(args.at(-1).includes('/dev/tcp/')){
     const count=Number(fs.readFileSync('tcp-attempts','utf8'))+1;fs.writeFileSync('tcp-attempts',String(count));
     if(count===1)process.exit(1);fs.writeFileSync('tcp-ready','yes');
-  }else console.log(process.env.DBADMIN_SPIKE_FIXTURE_ID);
+  }else console.log(process.env.STONEQL_SPIKE_FIXTURE_ID);
 }
 else if(args.includes('port'))console.log('127.0.0.1:12345');
 else if(args.includes('--format')&&args.includes('json'))console.log(JSON.stringify({State:'running'}));

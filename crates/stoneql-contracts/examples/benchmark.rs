@@ -1,6 +1,6 @@
-use dbadmin_contracts::v1::{CellValue, typescript};
 use serde_json::json;
 use std::{hint::black_box, time::Instant};
+use stoneql_contracts::v1::{CellValue, typescript};
 fn main() {
     let fixture = include_str!("../tests/fixtures/values.json");
     let mut decode = Vec::new();

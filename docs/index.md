@@ -1,12 +1,12 @@
 ---
 layout: home
 hero:
-  name: dbAdmin
-  text: Database management, made familiar.
-  tagline: A compact desktop-style database workspace. The current browser prototype uses session-only mock data.
+  name: StoneQL
+  text: Old habits. New engine.
+  tagline: StoneAge SQL Admin — formerly dbAdmin. A compact, familiar database workspace.
   image:
     src: /icon.svg
-    alt: Original dbAdmin database icon
+    alt: Original StoneQL database icon
   actions:
     - theme: brand
       text: Get started
@@ -20,5 +20,5 @@ features:
   - title: Shared frontend
     details: Vue 3 browser prototype, designed to remain independent of future Tauri and HTTP adapters.
   - title: Explicit boundaries
-    details: Database operations are simulated. Rust, native connectivity and server deployment remain planned.
+    details: Browser/default profiles are simulated. Explicit desktop MySQL/MariaDB read-only connectivity is a development slice; production and server releases remain planned.
 ---

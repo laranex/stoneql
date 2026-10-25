@@ -4,7 +4,7 @@ for (const theme of ['light', 'dark'] as const) {
   test(`${theme}: readable typography, compact workspace, and persistent footer`, async ({
     page,
   }) => {
-    await page.addInitScript((value) => localStorage.setItem('dbadmin-theme', value), theme);
+    await page.addInitScript((value) => localStorage.setItem('stoneql-theme', value), theme);
     await page.goto('/');
     await expect(page.locator('.titlebar')).toHaveCount(0);
     await expect(page.locator('.connection-tabs')).toHaveJSProperty('offsetTop', 0);

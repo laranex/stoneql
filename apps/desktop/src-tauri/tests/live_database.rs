@@ -13,23 +13,23 @@ use tauri::{
 #[test]
 #[ignore = "run through npm run test:native-database with disposable TLS fixtures"]
 fn actual_database_commands_use_owned_tls_fixtures() {
-    let marker = std::env::var("DBADMIN_SPIKE_FIXTURE_ID").expect("owning fixture required");
+    let marker = std::env::var("STONEQL_SPIKE_FIXTURE_ID").expect("owning fixture required");
     assert_eq!(marker.len(), 36);
-    let engine = std::env::var("DBADMIN_LIFECYCLE_ENGINE").unwrap();
+    let engine = std::env::var("STONEQL_LIFECYCLE_ENGINE").unwrap();
     assert!(["mysql", "mariadb"].contains(&engine.as_str()));
-    let port: u16 = std::env::var("DBADMIN_LIFECYCLE_PORT")
+    let port: u16 = std::env::var("STONEQL_LIFECYCLE_PORT")
         .unwrap()
         .parse()
         .unwrap();
-    let password = std::env::var("DBADMIN_FIXTURE_PASSWORD").unwrap();
-    let ca = std::fs::read_to_string(std::env::var("DBADMIN_LIFECYCLE_CA").unwrap()).unwrap();
+    let password = std::env::var("STONEQL_FIXTURE_PASSWORD").unwrap();
+    let ca = std::fs::read_to_string(std::env::var("STONEQL_LIFECYCLE_CA").unwrap()).unwrap();
     tauri::async_runtime::block_on(async {
         let options = MySqlConnectOptions::new()
             .host("127.0.0.1")
             .port(port)
-            .username("dbadmin_reader")
+            .username("stoneql_reader")
             .password(&password)
-            .database("dbadmin_m001_fixture")
+            .database("stoneql_m001_fixture")
             .ssl_mode(MySqlSslMode::VerifyIdentity)
             .ssl_ca_from_pem(ca.as_bytes().to_vec())
             .disable_statement_logging();
@@ -37,7 +37,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .await
             .map_err(|_| "fixture TLS failed")
             .unwrap();
-        let actual: String = sqlx::query_scalar("SELECT id FROM dbadmin_fixture_marker")
+        let actual: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
             .fetch_one(&mut connection)
             .await
             .map_err(|_| "marker query failed")
@@ -49,7 +49,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .map_err(|_| "observer close failed")
             .unwrap();
     });
-    let app = dbadmin_desktop::app_builder(mock_builder(), false)
+    let app = stoneql_desktop::app_builder(mock_builder(), false)
         .build(tauri::generate_context!())
         .unwrap();
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
@@ -61,7 +61,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     let session =
         invoke("host_info", json!({"nonce":"fixture_nonce"})).unwrap()["payload"]["sessionId"]
             .clone();
-    let config = json!({"sessionId":session,"engine":engine,"host":"127.0.0.1","port":port,"username":"dbadmin_reader","password":password,"database":"dbadmin_m001_fixture","rootCertificatePem":ca});
+    let config = json!({"sessionId":session,"engine":engine,"host":"127.0.0.1","port":port,"username":"stoneql_reader","password":password,"database":"stoneql_m001_fixture","rootCertificatePem":ca});
     let first = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
     let second = invoke("connect_direct", config).unwrap()["payload"].clone();
     assert_ne!(first["handle"], second["handle"]);
@@ -122,6 +122,6 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     )
     .unwrap();
     println!(
-        "DBADMIN_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"disconnect\":true}}"
+        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"disconnect\":true}}"
     );
 }

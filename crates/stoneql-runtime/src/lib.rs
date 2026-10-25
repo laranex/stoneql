@@ -1,6 +1,5 @@
 //! Host-independent connection lifecycle. No renderer/HTTP access or credential persistence.
 mod read_only;
-use dbadmin_core::Engine;
 pub use read_only::{QueryLimits, ReadError};
 use sqlx::{
     ConnectOptions, MySqlPool,
@@ -12,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use stoneql_core::Engine;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, oneshot},
     time::Instant,

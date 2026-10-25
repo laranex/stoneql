@@ -10,5 +10,5 @@ fn main() {
             "database_status",
         ]),
     ))
-    .expect("validate dbAdmin native configuration and command permissions");
+    .expect("validate StoneQL native configuration and command permissions");
 }

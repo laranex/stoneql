@@ -1,11 +1,11 @@
 use super::{NativeSession, decode, forbidden, guard, invalid};
-use dbadmin_contracts::v1::{
+use std::{sync::atomic::Ordering, time::Duration};
+use stoneql_contracts::v1::{
     ConnectionHandleRequest, DirectConnectionRequest, EngineDto, Envelope, ErrorDto,
     LiveConnection, LiveConnectionStatus, LiveQueryRequest, ProtocolVersion, ResultSet,
 };
-use dbadmin_core::{CoreError, Engine, ErrorCode, Outcome};
-use dbadmin_runtime::{ConnectionId, DirectMySql, LifecycleError, QueryLimits, ReadError};
-use std::{sync::atomic::Ordering, time::Duration};
+use stoneql_core::{CoreError, Engine, ErrorCode, Outcome};
+use stoneql_runtime::{ConnectionId, DirectMySql, LifecycleError, QueryLimits, ReadError};
 use tauri::{Runtime, State, WebviewWindow};
 fn authorize<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -203,7 +203,7 @@ mod tests {
             slots.push(admit(&session).unwrap());
         }
         assert!(
-            matches!(admit(&session),Err(error) if error.code==dbadmin_contracts::v1::ErrorCodeDto::Capacity)
+            matches!(admit(&session),Err(error) if error.code==stoneql_contracts::v1::ErrorCodeDto::Capacity)
         );
         drop(slots.pop());
         assert!(admit(&session).is_ok());

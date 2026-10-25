@@ -1,1 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#2e766b"/><path d="M16 21v23c0 10 32 10 32 0V21M16 32c0 10 32 10 32 0M16 43c0 10 32 10 32 0" fill="none" stroke="#fff" stroke-width="3"/><ellipse cx="32" cy="21" rx="16" ry="7" fill="#99c6b9" stroke="#fff" stroke-width="3"/><path d="m39 46 5 5 9-12" stroke="#efc47e" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="StoneQL cut-stone database mark">
+  <rect width="64" height="64" rx="12" fill="#303b48"/>
+  <path d="m15 16 17-6 17 6 3 9-20 7-20-7z" fill="#d6d4cc"/>
+  <path d="m12 28 20 7 20-7-2 12-18 7-18-7z" fill="#a9b1b7"/>
+  <path d="m14 43 18 7 18-7-3 10-15 6-15-6z" fill="#7993aa"/>
+  <path d="m32 10-5 8 5 5-3 8M32 35l4 6-4 6M32 50l-2 5 2 4" fill="none" stroke="#303b48" stroke-width="2" stroke-linejoin="round"/>
+</svg>

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 for(const kind of ['source','provenance','patch']) test(`vendored SQLx check accepts reviewed source and rejects ${kind} drift`,()=>{
-  const temp=mkdtempSync(join(tmpdir(),'dbadmin-vendor-check-'));
+  const temp=mkdtempSync(join(tmpdir(),'stoneql-vendor-check-'));
   try {
     mkdirSync(join(temp,'tools'));
     mkdirSync(join(temp,'experiments/sqlx-receive-limit'),{recursive:true});

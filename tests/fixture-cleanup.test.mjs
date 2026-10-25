@@ -13,7 +13,7 @@ const cases = [
   {script: 'run-driver-spikes.mjs', stage: 'remote'},
 ];
 for (const {script,stage} of cases) test(`${script}: ${stage} failure removes private material and scopes Docker cleanup`, () => {
-  const temp = mkdtempSync(join(tmpdir(), 'dbadmin-cleanup-regression-'));
+  const temp = mkdtempSync(join(tmpdir(), 'stoneql-cleanup-regression-'));
   const scratch = join(temp, 'scratch');
   const workspace = join(temp, 'workspace');
   mkdirSync(scratch);
@@ -26,13 +26,13 @@ for (const {script,stage} of cases) test(`${script}: ${stage} failure removes pr
     for (const command of ['docker', 'cargo', 'rustc', 'openssl']) {
       writeFileSync(join(temp, command), `#!${process.execPath}
 import {appendFileSync,writeFileSync} from 'node:fs';
-appendFileSync(process.env.DBADMIN_TEST_COMMAND_LOG, JSON.stringify({command:${JSON.stringify(command)},args:process.argv.slice(2)})+'\\n');
-${command === 'docker' ? "if(process.argv[2]==='context') console.log(process.env.DBADMIN_TEST_CONTEXT_ENDPOINT); else if(process.argv[2]==='version') console.log('synthetic'); else process.exit(42);" : command === 'openssl' ? (stage === 'certificate' ? 'process.exit(41);' : "for(const flag of ['-out','-keyout']){const index=process.argv.indexOf(flag);if(index>=0)writeFileSync(process.argv[index+1],'synthetic fixture material');}") : command==='rustc'?"console.log('synthetic rustc');":''}
+appendFileSync(process.env.STONEQL_TEST_COMMAND_LOG, JSON.stringify({command:${JSON.stringify(command)},args:process.argv.slice(2)})+'\\n');
+${command === 'docker' ? "if(process.argv[2]==='context') console.log(process.env.STONEQL_TEST_CONTEXT_ENDPOINT); else if(process.argv[2]==='version') console.log('synthetic'); else process.exit(42);" : command === 'openssl' ? (stage === 'certificate' ? 'process.exit(41);' : "for(const flag of ['-out','-keyout']){const index=process.argv.indexOf(flag);if(index>=0)writeFileSync(process.argv[index+1],'synthetic fixture material');}") : command==='rustc'?"console.log('synthetic rustc');":''}
 `, {mode: 0o755});
     }
     const result = spawnSync(process.execPath, [join(workspace,'tools',script)], {
       cwd: workspace, encoding: 'utf8', timeout: 15_000,
-      env: {...process.env, PATH: `${temp}:${dirname(process.execPath)}:/usr/bin:/bin`, TMPDIR: scratch, DOCKER_HOST: 'unix:///synthetic-local', DOCKER_CONTEXT: stage === 'remote' ? 'synthetic-remote-context' : '', DBADMIN_TEST_COMMAND_LOG: log, DBADMIN_TEST_CONTEXT_ENDPOINT: stage === 'remote' ? 'tcp://unapproved.invalid:2376' : 'unix:///synthetic-fixture-daemon'},
+      env: {...process.env, PATH: `${temp}:${dirname(process.execPath)}:/usr/bin:/bin`, TMPDIR: scratch, DOCKER_HOST: 'unix:///synthetic-local', DOCKER_CONTEXT: stage === 'remote' ? 'synthetic-remote-context' : '', STONEQL_TEST_COMMAND_LOG: log, STONEQL_TEST_CONTEXT_ENDPOINT: stage === 'remote' ? 'tcp://unapproved.invalid:2376' : 'unix:///synthetic-fixture-daemon'},
     });
     assert.equal(result.status, 1);
     assert.deepEqual(readdirSync(scratch), [], 'private fixture directory must be removed on failure');

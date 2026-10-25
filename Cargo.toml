@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
 exclude = ["vendor/sqlx-mysql"]
-members = ["crates/dbadmin-core", "crates/dbadmin-contracts", "experiments/sqlx-spike", "apps/desktop/src-tauri", "crates/dbadmin-runtime"]
-default-members = ["crates/dbadmin-core", "crates/dbadmin-contracts"]
+members = ["crates/stoneql-core", "crates/stoneql-contracts", "experiments/sqlx-spike", "apps/desktop/src-tauri", "crates/stoneql-runtime"]
+default-members = ["crates/stoneql-core", "crates/stoneql-contracts"]
 
 [workspace.package]
 version = "0.1.0"

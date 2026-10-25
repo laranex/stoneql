@@ -1,5 +1,5 @@
 [package]
-name = "dbadmin-sqlx-spike"
+name = "stoneql-sqlx-spike"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

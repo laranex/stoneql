@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test';
 for(const theme of ['light','dark']) test(`${theme}: database object navigation, definitions, mock calls and table indexes`,async({page})=>{
  test.setTimeout(90_000);
- await page.addInitScript(value=>localStorage.setItem('dbadmin-theme',value),theme);await page.goto('/');
+ await page.addInitScript(value=>localStorage.setItem('stoneql-theme',value),theme);await page.goto('/');
  await page.locator('.breadcrumb-path').getByRole('button',{name:'acme_store',exact:true}).click();
  await page.getByRole('tab',{name:'Routines',exact:true}).click();await page.getByRole('button',{name:'Execute find_customer',exact:true}).click();
  const call=page.getByRole('dialog',{name:'Execute procedure',exact:true});await call.getByLabel('Parameter customer_id',{exact:true}).fill('1');await call.getByRole('button',{name:'Simulate call',exact:true}).click();await expect(call.getByRole('status')).toContainText('Body not executed');
