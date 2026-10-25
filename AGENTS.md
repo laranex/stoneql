@@ -22,7 +22,7 @@ dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve fa
 - `.github/workflows/`: verification and manually gated documentation publication.
 - `tests/`: workspace/documentation regression checks.
 
-`crates/` contains the approved shared core/contracts foundation; `experiments/sqlx-spike/` is a disposable lab only. `contracts/` holds generated v1 TypeScript source and consumer checks; `tools/` owns orchestration/boundary checks. Create `apps/desktop` and `apps/server` only as their approved milestone implementation needs them; keep shared crates independent of both host frameworks.
+`crates/` contains shared core/contracts and the host-independent runtime evaluation; `experiments/sqlx-spike/` is a disposable lab only. `contracts/` holds generated v1 TypeScript source and consumer checks; `tools/` owns orchestration/boundary checks. `apps/desktop/src-tauri` contains the M002 mock-only development host; create `apps/server` only when its milestone needs it; keep shared crates independent of both host frameworks.
 
 ## Architecture and coding
 

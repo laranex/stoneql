@@ -1,0 +1,15 @@
+{
+  "verifiedTls": true,
+  "readOnlyGuards": true,
+  "losslessRawValues": true,
+  "boundedResults": true,
+  "ownerIsolation": true,
+  "wrongPasswordRejected": true,
+  "untrustedCaRejected": true,
+  "engineMismatchRejected": true,
+  "capacityAndShutdown": true,
+  "lifecycleSamples": 100,
+  "p50Us": 4408,
+  "p95Us": 5604,
+  "maxUs": 6468
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/dbadmin-core", "crates/dbadmin-contracts", "experiments/sqlx-spike", "apps/desktop/src-tauri"]
+members = ["crates/dbadmin-core", "crates/dbadmin-contracts", "experiments/sqlx-spike", "apps/desktop/src-tauri", "crates/dbadmin-runtime"]
 default-members = ["crates/dbadmin-core", "crates/dbadmin-contracts"]
 
 [workspace.package]

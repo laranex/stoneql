@@ -13,7 +13,7 @@ Read root `AGENTS.md`, relevant public documentation and local `.ref/workprogres
 | `.ref/workprogress.md` | Ignored local continuity notes; never commit |
 | `tests/` | Workspace preservation and documentation regression checks |
 
-M001 core/contracts crates and an isolated driver lab are implemented; see [Rust foundation](./rust-foundation.md). A [Tauri development host](./desktop-host.md) is implemented with mock-only IPC; server implementation remains future work. Shared Vue code must remain browser-runnable without Tauri APIs.
+M001 core/contracts crates and an isolated driver lab are implemented; see [Rust foundation](./rust-foundation.md). A [Tauri development host](./desktop-host.md) is implemented with mock-only IPC; server implementation remains future work. The [connection lifecycle evaluation](./connection-lifecycle.md) documents the unexposed M003 adapter and remaining gates. Shared Vue code must remain browser-runnable without Tauri APIs.
 
 ## Conventions and validation
 

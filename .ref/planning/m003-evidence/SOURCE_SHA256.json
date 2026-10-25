@@ -1,0 +1,8 @@
+{
+  "Cargo.lock": "4cfb883e0bd60c02bb1adb1deba654ca82a198379b55f5ce7cc77755c0ad98e2",
+  "crates/dbadmin-runtime/Cargo.toml": "b4ebfaf331fb6849972866f2801fd24e534ea072901c253a1abe9b25c34744cf",
+  "crates/dbadmin-runtime/src/lib.rs": "d289ef085aa608d2a715ddae576ea7b193bcfc75c24e6f80fd2dcad12f71537e",
+  "crates/dbadmin-runtime/src/read_only.rs": "3551cf021c3231714d7e1b2be6db8dd018b4c2fe2dceb60998acd97ccbf0a5fa",
+  "crates/dbadmin-runtime/examples/lifecycle.rs": "ee079d85ed25d2a7657738b5e48e36ffa4e75746afdd2fc9153cd65b8d2f07f7",
+  "tools/test-connection-lifecycle.mjs": "efa6cf4ce66f9457baeae26c17f5ba9652b383e4a27f1c3934c6e434164cbb0e"
+}

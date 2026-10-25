@@ -628,6 +628,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dbadmin-runtime"
+version = "0.1.0"
+dependencies = [
+ "dbadmin-contracts",
+ "dbadmin-core",
+ "futures-util",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "dbadmin-sqlx-spike"
 version = "0.1.0"
 dependencies = [

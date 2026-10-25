@@ -1,7 +1,7 @@
 # M003 — MySQL/MariaDB lifecycle and read-only SQL
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native UI binding and complete acceptance gates remain pending.
 
 ## Objective and scope
 A usable Direct vertical slice: connect, inspect minimal server identity, run one bounded read-only statement, display typed results/errors, and disconnect. Include basic read-only SQL now; preserve advanced execution for M006.
@@ -31,3 +31,12 @@ Read-only SQL can invoke side effects through functions or privileges; unsupport
 
 
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
+
+## Incremental evidence — 2026-10-25
+- Host-independent dbadmin-runtime contains owner-scoped bounded MySQL/MariaDB pools, verified-identity TLS, deadlines, expiry, disconnect and shutdown. No frontend/native commands expose it yet; no credential persistence.
+- Nine Rust regression tests cover ownership/capacity, expiry, connect/shutdown race, stalled handshake, configuration, SELECT refusal policy and raw temporal decoding.
+- Live fixtures: 100 verified-TLS lifecycle samples for each pinned M001 engine. SELECT-only grants deny DELETE (1142); a separately privileged fixture account in a read-only transaction denies DELETE (1792). Exact integer/decimal/binary/ENUM/NULL/empty and zero/fractional/extended temporal cases passed. Empty metadata and row/byte truncation passed.
+- MySQL read-only transaction setup requires the static text-protocol command; the initially attempted prepared form failed. Live regression now exercises the corrected path.
+- Driver limit found: SQLx 0.9 reads/concatenates complete packets before application byte checks and has no public receive limit. Evaluate a narrow receive-limit patch before live UI exposure. Output caps alone are not an allocation bound.
+- M003-L not fully accepted: hostname mismatch/expired certificates, OS matrix and complete lifetime/cleanup measurements remain. M003 UI binding, packet bounds and residual view/function trust review remain open.
+- Safe raw summaries: `.ref/planning/m003-evidence/`. See `docs/development/connection-lifecycle.md`; debug microbenchmarks are not release gates.

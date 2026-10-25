@@ -31,6 +31,7 @@
     "desktop:build": "npm run build && cargo build --locked -p dbadmin-desktop --features custom-protocol",
     "desktop:run": "npm run desktop:build && cargo run --locked -p dbadmin-desktop --features custom-protocol",
     "desktop:test": "cargo test --locked -p dbadmin-desktop --features custom-protocol",
-    "desktop:smoke": "npm run desktop:build && cargo run --locked -p dbadmin-desktop --features custom-protocol -- --smoke-test"
+    "desktop:smoke": "npm run desktop:build && cargo run --locked -p dbadmin-desktop --features custom-protocol -- --smoke-test",
+    "test:lifecycle": "node tools/test-connection-lifecycle.mjs"
   }
 }
