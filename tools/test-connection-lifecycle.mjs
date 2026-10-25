@@ -6,11 +6,13 @@ import { resolve, join } from 'node:path';
 import { fixtureEnvironment } from './fixture-environment.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
+const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
+if (process.argv.slice(2).some(argument => argument !== '--packet-limit')) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
   const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 240_000 });
   if (result.status !== 0 || result.error) {
     // The fixture binary emits only static errors/codes and synthetic assertion values.
-    const message = command.endsWith('/examples/lifecycle')
+    const message = (command.endsWith('/examples/lifecycle') || command.endsWith('/examples/live_packet_limits'))
       ? result.stderr.replaceAll(env.DBADMIN_FIXTURE_PASSWORD, '[redacted]')
       : `${command} fixture operation failed; credentials and raw errors withheld`;
     throw Error(message);
@@ -19,7 +21,11 @@ function run(command, args, env = base) {
 }
 const daemon = process.env.DOCKER_HOST || run('docker', ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']);
 if (!daemon.startsWith('unix://') && !daemon.startsWith('npipe://')) throw Error('Local disposable Docker daemon required');
-run('cargo', ['build', '--locked', '-p', 'dbadmin-runtime', '--example', 'lifecycle']);
+if (packetEvaluation) {
+  run('cargo', ['build', '--locked', '--manifest-path', 'experiments/sqlx-receive-limit/Cargo.toml', '--target-dir', 'target/receive-limit', '--example', 'live_packet_limits']);
+} else {
+  run('cargo', ['build', '--locked', '-p', 'dbadmin-runtime', '--example', 'lifecycle']);
+}
 const output = resolve(root, 'artifacts/m003');
 mkdirSync(output, { recursive: true });
 for (const engine of ['mysql', 'mariadb']) {
@@ -69,10 +75,11 @@ CREATE USER 'dbadmin_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT 
     if (!ready) throw Error(`${engine}: disposable TLS fixture not ready`);
     const port = run('docker', [...args, 'port', engine, '3306'], env); if (!/^127\.0\.0\.1:\d+$/.test(port)) throw Error('Loopback fixture required');
     Object.assign(env, { DBADMIN_LIFECYCLE_PORT: port.split(':')[1], DBADMIN_LIFECYCLE_CA: join(tls, 'ca.pem'), DBADMIN_LIFECYCLE_BAD_CA: join(tls, 'bad-ca.pem') });
-    const result = run(resolve(root, 'target/debug/examples/lifecycle'), [], env);
+    const binary = packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
+    const result = run(resolve(root, binary), [], env);
     const report = JSON.parse(result);
-    writeFileSync(join(output, `${engine}.json`), JSON.stringify(report, null, 2) + '\n');
-    console.log(`${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
+    writeFileSync(join(output, `${packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
+    console.log(packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
   } finally {
     run('docker', [...args, 'down', '--volumes', '--remove-orphans'], env);
     if (run('docker', ['ps', '-a', '--filter', `label=com.docker.compose.project=${project}`, '-q']) || run('docker', ['network', 'ls', '--filter', `label=com.docker.compose.project=${project}`, '-q'])) throw Error('Owned fixture resources remain');

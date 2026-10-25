@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status: revised roadmap and M001 startup explicitly approved on 2026-10-25.** M001 foundation/evaluation is implemented and awaits completion review. Production driver adoption, later milestone implementation and release/deployment decisions remain separate gates. M002 has not started.
+**Status: revised roadmap and continuation through milestones authorized on 2026-10-25.** M001 is committed. M002's macOS development host is implemented, with Linux dependency-audit and cross-OS gates open. M003 lifecycle/read-only evaluation passes local fixtures; live UI exposure and production driver adoption remain gated. Other milestones are pending, not completed by this authorization. Signing, publishing and deployment remain separate decisions.
 
 ## Milestones and dependencies
 

@@ -1,0 +1,9 @@
+{
+  "crate": "sqlx-mysql",
+  "version": "0.9.0",
+  "registryPackageSha256": "90b8020fe17c5f2c245bfa2505d7ef59c5604839527c740266ad2214acebea27",
+  "license": "MIT OR Apache-2.0",
+  "patchSha256": "d5831ffe66a718d41941a8812a573419d66b0b750959cab86601142694bc84fc",
+  "mitLicenseSha256": "5abbdd842310c8f1650fcde3a5a51a3e09412b9e5a6eea87519e0db9e32b339d",
+  "selectedLicense": "MIT"
+}

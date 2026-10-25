@@ -40,3 +40,9 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Driver limit found: SQLx 0.9 reads/concatenates complete packets before application byte checks and has no public receive limit. Evaluate a narrow receive-limit patch before live UI exposure. Output caps alone are not an allocation bound.
 - M003-L not fully accepted: hostname mismatch/expired certificates, OS matrix and complete lifetime/cleanup measurements remain. M003 UI binding, packet bounds and residual view/function trust review remain open.
 - Safe raw summaries: `.ref/planning/m003-evidence/`. See `docs/development/connection-lifecycle.md`; debug microbenchmarks are not release gates.
+
+## Receive-limit evaluation
+- Isolated patch (not root adoption) checks logical packet sizes before payload reads, including aggregate continuation size and arithmetic overflow. Root SQLx remains registry 0.9.0.
+- Two adversarial socket tests plus one upstream-copy boundary unit test passed. Both real TLS fixtures rejected oversized rows and hostname/untrusted-CA failures; fresh connections worked afterward. Prepared source/checksum provenance and MIT attribution retained.
+- Evidence in `.ref/planning/m003-packet-evidence/`; reproducible scripts `test:receive-limit` / `test:receive-limit:live`; source/diff in `experiments/sqlx-receive-limit/`.
+- Production patch adoption/maintenance, broader protocol/OS/memory profiles and native UI binding remain pending. No dependency exception or milestone completion inferred.
