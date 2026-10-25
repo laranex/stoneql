@@ -2808,3 +2808,23 @@ label svg {
 .object-dialog pre, .object-dialog code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .object-definition { font-family: var(--font-mono); font-size: var(--font-body); white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+
+/* Keep connection actions reachable when session-only TLS fields extend the form. */
+.setup-modal {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.setup-modal > header,
+.setup-modal footer {
+  flex-shrink: 0;
+}
+.setup-modal > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.setup-modal .modal-body {
+  overflow-y: auto;
+  min-height: 0;
+}

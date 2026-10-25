@@ -175,6 +175,12 @@ pub enum ErrorCodeDto {
     ConnectionLost,
     Cancelled,
     Internal,
+    DeadlineExceeded,
+    PacketTooLarge,
+    QueryRejected,
+    ConnectionUnavailable,
+    Capacity,
+    UnsupportedSql,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -202,6 +208,12 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::Conflict => ErrorCodeDto::Conflict,
             ErrorCode::ConnectionLost => ErrorCodeDto::ConnectionLost,
             ErrorCode::Cancelled => ErrorCodeDto::Cancelled,
+            ErrorCode::DeadlineExceeded => ErrorCodeDto::DeadlineExceeded,
+            ErrorCode::PacketTooLarge => ErrorCodeDto::PacketTooLarge,
+            ErrorCode::QueryRejected => ErrorCodeDto::QueryRejected,
+            ErrorCode::ConnectionUnavailable => ErrorCodeDto::ConnectionUnavailable,
+            ErrorCode::Capacity => ErrorCodeDto::Capacity,
+            ErrorCode::UnsupportedSql => ErrorCodeDto::UnsupportedSql,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -299,9 +311,56 @@ pub struct CloseResult {
     pub closed: bool,
 }
 
+/// Session-only credential transfer. Deliberately does not implement Debug.
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DirectConnectionRequest {
+    pub session_id: String,
+    pub engine: EngineDto,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    pub root_certificate_pem: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveConnection {
+    pub handle: String,
+    pub engine_version: String,
+    pub database: String,
+    pub expires_after_seconds: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionHandleRequest {
+    pub session_id: String,
+    pub handle: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveQueryRequest {
+    pub session_id: String,
+    pub handle: String,
+    pub sql: String,
+    pub max_rows: u32,
+    pub max_bytes: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveConnectionStatus {
+    pub connected: bool,
+}
+
 pub fn typescript() -> String {
     let config = ts_rs::Config::default();
     let declarations = [
+        DirectConnectionRequest::decl(&config),
+        LiveConnection::decl(&config),
+        ConnectionHandleRequest::decl(&config),
+        LiveQueryRequest::decl(&config),
+        LiveConnectionStatus::decl(&config),
         CloseAction::decl(&config),
         CloseDecision::decl(&config),
         CloseResult::decl(&config),

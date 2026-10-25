@@ -2,7 +2,7 @@
 
 ## Purpose and boundaries
 
-dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Current database operations are session mocks. The user has authorized implementation of the revised milestone roadmap and commits for completed work. M001 foundation/evaluation is locally verified; later capabilities must still meet their own acceptance tests. Preserve the UI and browser/mock mode while adding native/server adapters. Never infer signing, publishing, production access or deployment approval from implementation authorization.
+dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve familiarity, readable 14px controls, Light/Dark themes, accessibility, and independent connection workspaces. Browser/default database operations are session mocks; explicit desktop Direct MySQL/MariaDB profiles can execute bounded live read-only SQL. The user has authorized implementation of the revised milestone roadmap and commits for completed work. M001 foundation/evaluation is locally verified; later capabilities must still meet their own acceptance tests. Preserve the UI and browser/mock mode while adding native/server adapters. Never infer signing, publishing, production access or deployment approval from implementation authorization.
 
 ## Start every session
 
@@ -24,7 +24,7 @@ dbAdmin is a compact, phpMyAdmin-inspired database client prototype. Preserve fa
 
 `vendor/sqlx-mysql` is the user-approved, provenance-checked receive-limit patch; verify with `npm run rust:vendor`, preserve its MIT notice and review upgrades.
 
-`crates/` contains shared core/contracts and the host-independent runtime evaluation; `experiments/sqlx-spike/` is a disposable lab only. `contracts/` holds generated v1 TypeScript source and consumer checks; `tools/` owns orchestration/boundary checks. `apps/desktop/src-tauri` contains the M002 mock-only development host; create `apps/server` only when its milestone needs it; keep shared crates independent of both host frameworks.
+`crates/` contains shared core/contracts and the host-independent runtime evaluation; `experiments/sqlx-spike/` is a disposable lab only. `contracts/` holds generated v1 TypeScript source and consumer checks; `tools/` owns orchestration/boundary checks. `apps/desktop/src-tauri` contains the development host with scoped M003 live read-only binding; create `apps/server` only when its milestone needs it; keep shared crates independent of both host frameworks.
 
 ## Architecture and coding
 

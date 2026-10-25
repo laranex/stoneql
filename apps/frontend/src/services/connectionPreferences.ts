@@ -34,6 +34,7 @@ export function sanitizeConnection(value: Connection, groups: ConnectionGroup[])
           ? 'Local'
           : 'Development';
   return {
+    ...(source.mode === 'live' ? { mode: 'live' as const } : {}),
     id: text(source.id) || crypto.randomUUID(),
     name: text(source.name, 'Untitled connection'),
     engine: ['MySQL', 'MariaDB', 'PostgreSQL', 'SQLite'].includes(source.engine)

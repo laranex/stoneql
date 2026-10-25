@@ -7,12 +7,15 @@ import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environm
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
-if (process.argv.slice(2).some(argument => argument !== '--packet-limit')) throw Error('Unknown fixture option');
+const nativeEvaluation = process.argv.slice(2).includes('--native-ipc');
+if(packetEvaluation && nativeEvaluation)throw Error('Choose a single fixture mode');
+let nativeBinary;
+if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc'].includes(argument))) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
   const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 240_000 });
   if (result.status !== 0 || result.error) {
     // The fixture binary emits only static errors/codes and synthetic assertion values.
-    const message = (command.endsWith('/examples/lifecycle') || command.endsWith('/examples/live_packet_limits'))
+    const message = (nativeEvaluation && command===nativeBinary || command.endsWith('/examples/lifecycle') || command.endsWith('/examples/live_packet_limits'))
       ? result.stderr.replaceAll(env.DBADMIN_FIXTURE_PASSWORD, '[redacted]')
       : `${command} fixture operation failed; credentials and raw errors withheld`;
     throw Error(message);
@@ -20,7 +23,11 @@ function run(command, args, env = base) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
-if (packetEvaluation) {
+if(nativeEvaluation){
+  const artifacts=run('cargo',['test','--locked','-p','dbadmin-desktop','--features','custom-protocol','--test','live_database','--no-run','--message-format=json']);
+  nativeBinary=artifacts.split('\n').map(line=>JSON.parse(line)).find(message=>message.reason==='compiler-artifact'&&message.target.name==='live_database'&&message.executable)?.executable;
+  if(!nativeBinary)throw Error('Native fixture test binary missing');
+} else if (packetEvaluation) {
   run('cargo', ['build', '--locked', '--manifest-path', 'experiments/sqlx-receive-limit/Cargo.toml', '--target-dir', 'target/receive-limit', '--example', 'live_packet_limits']);
 } else {
   run('cargo', ['build', '--locked', '-p', 'dbadmin-runtime', '--example', 'lifecycle']);
@@ -89,7 +96,7 @@ authorityKeyIdentifier = keyid:always
     run('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(tls, 'server-key.pem'), '-out', join(tls, 'server.csr'), '-subj', '/CN=localhost']);
     writeFileSync(join(tls, 'extensions.cnf'), 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n');
     run('openssl', ['x509', '-req', '-in', join(tls, 'server.csr'), '-CA', join(tls, 'ca.pem'), '-CAkey', join(tls, 'ca-key.pem'), '-CAcreateserial', '-out', join(tls, 'server.pem'), '-days', '1', '-extfile', join(tls, 'extensions.cnf')]);
-    if (!packetEvaluation) {
+    if (!packetEvaluation && !nativeEvaluation) {
       mkdirSync(join(tls, 'issued'));
       writeFileSync(join(tls, 'index.txt'), '');
       writeFileSync(join(tls, 'serial'), '1000\n');
@@ -126,12 +133,13 @@ CREATE USER 'dbadmin_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT 
     started = true;
     run('docker', [...args, 'up', '-d', engine], env);
     await waitForFixture();
-    const binary = packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
-    const result = run(resolve(root, binary), [], env);
-    const report = JSON.parse(result);
-    writeFileSync(join(output, `${packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
-    console.log(packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
-    if (!packetEvaluation) {
+    const binary = nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
+    const result = run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
+    const report = JSON.parse(nativeEvaluation ? result.split('\n').find(line=>line.startsWith('DBADMIN_NATIVE_RESULT '))?.slice('DBADMIN_NATIVE_RESULT '.length) || 'null' : result);
+    if(!report)throw Error('Native fixture report missing');
+    writeFileSync(join(output, `${nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
+    console.log(nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
+    if (!packetEvaluation && !nativeEvaluation) {
       run('docker', [...args, 'stop', engine], env);
       writeFileSync(join(exposed, 'server.pem'), readFileSync(join(tls, 'expired-server.pem')));
       run('docker', [...args, 'up', '-d', '--force-recreate', engine], env);
@@ -157,7 +165,7 @@ CREATE USER 'dbadmin_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT 
         rmSync(temp, { recursive: true, force: true });
       } finally {
         cleanup.temporaryRemoved = !existsSync(temp);
-        writeFileSync(join(output, `${packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
+        writeFileSync(join(output, `${nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
       }
     }
   }

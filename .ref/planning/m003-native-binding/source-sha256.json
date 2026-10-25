@@ -1,0 +1,17 @@
+{
+  "apps/desktop/src-tauri/src/database.rs": "497f700b6f704078fc190b740492ef9c377129bcce25715c8b37b5b32958051d",
+  "apps/desktop/src-tauri/src/lib.rs": "5d865d98b9686ddcb2185735963d2d473302ff3026df7ecad5b655d0e02b3c0f",
+  "apps/desktop/src-tauri/tests/live_database.rs": "f3d48af9c1c8b467b336d6df2c3664023f12e38676e1a5c08eeb996ed57fe16c",
+  "apps/desktop/src-tauri/tests/ipc.rs": "0d5c1447137652220d42578a78d34c43b4411c4b57b327e175e9d357fa53835d",
+  "apps/frontend/src/services/liveConnections.ts": "f65f8e957c315010c950ec1f72b36242968c9d7ab14d924c37dcff5d1f033b18",
+  "apps/frontend/src/services/nativeHost.ts": "995fb2a26bc9cd7b36639814fd618982c309d48a807ad6a247e40e767ab16eff",
+  "apps/frontend/src/stores/workspace.ts": "7c8228995dbe8afea555718358128c6720a2b7e6a3524c2fcb4c9a2501a61737",
+  "apps/frontend/src/App.vue": "686766d083c2034cf0cc3d9b36cfe221858df8b7f0ed8e960579df079d2a4fd1",
+  "apps/frontend/src/style.css": "7666c1386062b793f21e2c8e6e03f26a354cd3b4d055a2d69429e7b168c57be7",
+  "apps/frontend/tests/browser/live.spec.ts": "5d61657d68d568147e06e1e1bdcfcd8d1f507c97ef073383e1ca7ffaee324aa9",
+  "apps/frontend/tests/liveConnections.test.ts": "b0933908e01236e94b1431d86da6f5112d64a9ef24263fa91d9177a832af8641",
+  "crates/dbadmin-runtime/src/lib.rs": "3d26d05956bcb4eaf805bef32d328412a06d7f09f190c2662e1801cd831f1947",
+  "crates/dbadmin-contracts/src/v1.rs": "7e5ec5118038e6f4cd5b08a7d8cf91a4a4b2b3452e5197c4401c8c2100dce7e1",
+  "contracts/generated/v1.ts": "8d635f9e9a4e95676db77caa27d99e7cbc4410cc0c2098cc02861dc85466ab24",
+  "tools/test-connection-lifecycle.mjs": "92d8e11d0a366eb1e2f3cc7ae78f37d8bf2f1808ab95cae9cd22cf6708360f11"
+}

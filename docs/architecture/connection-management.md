@@ -1,6 +1,6 @@
 # Connection management
 
-**Status: partially implemented evaluation.** Profile/group UI uses mocks. The unexposed [M003 runtime](../development/connection-lifecycle.md) has owner-scoped MySQL/MariaDB pools, TLS, expiry and shutdown tests. Native live-connection binding, credentials and tunnels remain unimplemented.
+**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped MySQL/MariaDB pools, TLS, expiry and shutdown tests. Native live binding is implemented; credential storage, renderer-reload reconciliation and tunnels remain unimplemented.
 
 ## Identity and ownership
 

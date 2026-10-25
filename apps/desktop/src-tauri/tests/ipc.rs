@@ -172,3 +172,57 @@ fn native_close_requires_a_pending_os_request_and_preserves_cancelled_sessions()
         "FORBIDDEN"
     );
 }
+
+#[test]
+fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_network() {
+    let app = app();
+    let main = window(&app, "main");
+    let other = window(&app, "auxiliary");
+    let session = bootstrap(&main).payload.session_id;
+    let config = json!({"sessionId":session,"engine":"mysql","host":"127.0.0.1","port":3306,"username":"fixture","password":"synthetic-secret","database":"fixture","rootCertificatePem":null});
+    for command in [
+        "connect_direct",
+        "read_only_query",
+        "disconnect_database",
+        "database_status",
+    ] {
+        let payload = json!({"version":1,"requestId":"denied","payload":config});
+        assert!(invoke(&other, command, payload.clone(), "tauri://localhost").is_err());
+        assert!(invoke(&main, command, payload, "https://untrusted.invalid").is_err());
+    }
+    let mut payload = json!({"version":1,"requestId":"connect","payload":config});
+    payload["payload"]["sessionId"] = json!("forged");
+    let error = invoke(
+        &main,
+        "connect_direct",
+        payload.clone(),
+        "tauri://localhost",
+    )
+    .unwrap_err();
+    assert_eq!(error["code"], "FORBIDDEN");
+    assert!(!error.to_string().contains("synthetic-secret"));
+    payload["payload"]["sessionId"] = json!(session);
+    payload["payload"]["engine"] = json!("sqlite");
+    assert_eq!(
+        invoke(
+            &main,
+            "connect_direct",
+            payload.clone(),
+            "tauri://localhost"
+        )
+        .unwrap_err()["code"],
+        "UNSUPPORTED_CAPABILITY"
+    );
+    payload["payload"]["engine"] = json!("mysql");
+    payload["payload"]["rootCertificatePem"] = json!("-----BEGIN PRIVATE KEY-----synthetic");
+    assert_eq!(
+        invoke(&main, "connect_direct", payload, "tauri://localhost").unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    let handle = "00000000-0000-0000-0000-000000000001";
+    let payload = json!({"version":1,"requestId":"read","payload":{"sessionId":session,"handle":handle,"sql":"SELECT 1","maxRows":10,"maxBytes":1024}});
+    assert_eq!(
+        invoke(&main, "read_only_query", payload, "tauri://localhost").unwrap_err()["code"],
+        "FORBIDDEN"
+    );
+}

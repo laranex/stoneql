@@ -1,6 +1,6 @@
 # Connections
 
-Use the top connection-tab **+** or Manage Connections to create a profile. MySQL, MariaDB, PostgreSQL and SQLite profiles select engine-specific mock capabilities. An `invalid` hostname simulates a connection failure.
+Use the top connection-tab **+** or Manage Connections to create a profile. MySQL, MariaDB, PostgreSQL and SQLite profiles select engine-specific mock capabilities. An `invalid` hostname simulates a connection failure in Mock mode.
 
 ## Profiles and groups
 
@@ -10,6 +10,16 @@ Names, groups, ordering, colors, tags and allowlisted non-secret connection sett
 
 ## Transport configuration
 
-Direct and SSH Tunnel forms are configuration simulations. SSH exposes agent, private-key or password authentication and an optional passphrase. No network connection or tunnel is established. Teleport and AWS SSM are future proposals, not active transports.
+In Mock mode, Direct and SSH Tunnel forms are configuration simulations. SSH exposes agent, private-key or password authentication and an optional passphrase. No network connection or tunnel is established. Teleport and AWS SSM are future proposals, not active transports.
 
 [Connection management architecture](../architecture/connection-management.md) describes the proposed native lifecycle and credential boundary.
+
+## Desktop live read-only mode
+
+The connection dialog offers an explicit **Live read-only** mode in the Tauri development host for Direct MySQL/MariaDB. Browser mode and new profiles default to Mock. PostgreSQL, SQLite and SSH remain mock-only; live schema discovery, Browse, mutations and transfers are not exposed.
+
+Choose a configured database and a SELECT-only account, then **Test connection** or **Save & connect**. Testing opens and closes a separate real session. TLS certificate and hostname verification are mandatory. System trust roots are used by default; an optional PEM CA certificate (16 KiB maximum) is held for this session only. Private keys are rejected. Passwords, CA contents and native handles are never saved in local storage. Non-secret profiles and their explicit mode persist; reopening/reloading requires manual reconnect and password entry.
+
+Each profile has independent SQL tabs, results and connection state. Disconnect or closing its workspace releases its owned native pool; application shutdown closes all pools. Sessions expire after one hour. The active profile status is checked on tab switches and every 30 seconds; this is registry status, not a network health probe. Reloading the renderer loses its handles; unreconciled native leases expire or close with the application. No automatic reconnect is attempted.
+
+Live mode makes real network connections and executes real restricted SQL. It is a development slice, not production connectivity or a backup facility. Use trusted databases and least-privilege accounts; read-only enforcement cannot establish that views or indirect functions are harmless.

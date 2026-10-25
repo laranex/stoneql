@@ -1,6 +1,6 @@
 # Roadmap
 
-**Status: revised roadmap and continuation through milestones authorized on 2026-10-25.** M001 is committed. M002's macOS development host is implemented, with Linux dependency-audit and cross-OS gates open. M003 lifecycle/read-only evaluation passes local fixtures; the user approved the scoped SQLx receive-limit patch. Live UI binding and broader driver/OS/release acceptance remain open. Other milestones are pending, not completed by this authorization. Signing, publishing and deployment remain separate decisions.
+**Status: revised roadmap and continuation through milestones authorized on 2026-10-25.** M001 is committed. M002's macOS development host is implemented, with Linux dependency-audit and cross-OS gates open. M003 lifecycle/read-only evaluation passes local fixtures; the user approved the scoped SQLx receive-limit patch. Explicit native live SQL binding is implemented; full native GUI interaction and broader driver/OS/release acceptance remain open. Other milestones are pending, not completed by this authorization. Signing, publishing and deployment remain separate decisions.
 
 ## Milestones and dependencies
 

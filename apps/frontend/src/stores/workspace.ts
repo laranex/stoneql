@@ -1,3 +1,6 @@
+import { openLive, closeLive, queryLive, liveStatus } from '../services/liveConnections';
+import {NativeOperationError} from '../services/nativeHost';
+import type {LiveConnection} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
@@ -90,6 +93,55 @@ export const useWorkspace = defineStore('workspace', () => {
     if (i < 0 || !other) return;
     [groups.value[i], groups.value[i + direction]] = [other, groups.value[i]!];
   }
+  const liveSessions = ref<Record<string,{status:'connecting'|'connected'|'disconnected'|'error';info?:LiveConnection;error?:string}>>({});
+  const liveGenerations = new Map<string,number>();
+  async function disconnectLiveProfile(id:string) {
+    liveGenerations.set(id,(liveGenerations.get(id)||0)+1);
+    const handle=liveSessions.value[id]?.info?.handle;
+    liveSessions.value[id]={status:'disconnected'};
+    if(handle) { try { await closeLive(handle); } catch(error) { if(!(error instanceof NativeOperationError && error.code==='FORBIDDEN')) {liveSessions.value[id]={status:'error',error:(error as Error).message};throw error;} } }
+  }
+  async function connectLiveProfile(profile:Connection) {
+    await disconnectLiveProfile(profile.id);
+    const generation=liveGenerations.get(profile.id)!;
+    liveSessions.value[profile.id]={status:'connecting'};
+    try {
+      const info=await openLive(profile);
+      if(liveGenerations.get(profile.id)!==generation){await closeLive(info.handle);throw new Error('Connection configuration changed during startup.');}
+      liveSessions.value[profile.id]={status:'connected',info};
+    }catch(error){
+      if(liveGenerations.get(profile.id)===generation)liveSessions.value[profile.id]={status:'error',error:(error as Error).message};
+      throw error;
+    }
+  }
+  async function refreshLiveStatus(id:string) {
+    const current=liveSessions.value[id];
+    if(current?.status!=='connected'||!current.info)return;
+    const generation=liveGenerations.get(id);
+    try {
+      const status=await liveStatus(current.info.handle);
+      if(liveGenerations.get(id)===generation && !status.connected){
+        liveGenerations.set(id,(generation||0)+1);
+        liveSessions.value[id]={status:'disconnected',error:'Live session expired or closed. Reconnect before running SQL.'};
+      }
+    }catch(error){if(liveGenerations.get(id)===generation)liveSessions.value[id]={...current,status:'error',error:(error as Error).message};}
+  }
+  async function executeLive(id:string,sql:string) {
+    const current=liveSessions.value[id];
+    if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile before running SQL.');
+    const generation=liveGenerations.get(id);
+    try {
+      const result=await queryLive(current.info.handle,sql);
+      if(liveGenerations.get(id)!==generation)throw new Error('Query results were discarded because the connection changed.');
+      return result;
+    }catch(error){
+      if(error instanceof NativeOperationError && ['FORBIDDEN','CONNECTION_UNAVAILABLE'].includes(error.code) && liveGenerations.get(id)===generation){
+        try{await disconnectLiveProfile(id);}catch{};
+        liveSessions.value[id]={status:'error',error:error.message};
+      }
+      throw error;
+    }
+  }
   const savedPageSize = Number(localStorage.getItem('dbadmin-default-page-size'));
   const defaultPageSize = ref(
     [15, 25, 50, 100, 250, 500].includes(savedPageSize) ? savedPageSize : 25,
@@ -101,13 +153,16 @@ export const useWorkspace = defineStore('workspace', () => {
   const opened = ref(connections.value.slice(0, 2).map((c) => c.id));
   const workspaces = ref<Record<string, Workspace>>({});
   function initialize(id: string) {
+    const profile=connections.value.find(c=>c.id===id);
+    const live=profile?.mode==='live';
+    const initialSql=live?'SELECT 1;':'SELECT * FROM users\nORDER BY id ASC\nLIMIT 25;';
     if (!workspaces.value[id])
       workspaces.value[id] = {
-        databases: createDatabases(connections.value.find((c) => c.id === id)?.engine),
-        scope: 'table',
-        database: 'acme_store',
-        table: 'users',
-        view: 'Browse',
+        databases: live ? [{name:profile!.database,tables:[]}] : createDatabases(profile?.engine),
+        scope: live?'database':'table',
+        database: live?profile!.database:'acme_store',
+        table: live?'':'users',
+        view: live?'SQL':'Browse',
         page: 1,
         pageSize: defaultPageSize.value,
         treeFilter: '',
@@ -120,8 +175,8 @@ export const useWorkspace = defineStore('workspace', () => {
           {
             id: 1,
             title: 'Query 1',
-            sql: 'SELECT * FROM users\nORDER BY id ASC\nLIMIT 25;',
-            saved: 'SELECT * FROM users\nORDER BY id ASC\nLIMIT 25;',
+            sql: initialSql,
+            saved: initialSql,
           },
         ],
         queryId: 1,
@@ -187,7 +242,8 @@ export const useWorkspace = defineStore('workspace', () => {
   }
   function mutationContext() {
     if (!database.value || !table.value) throw new Error('Select a table first.');
-    return { db: database.value, table: table.value, engine: connection.value.engine };
+    return {
+    db: database.value, table: table.value, engine: connection.value.engine };
   }
   function defaultValue(c: Column): Row[string] {
     return mockDefault(mutationContext().table, c);
@@ -248,6 +304,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function saveEvent(draft:ScheduledEvent,original='') {objectActions.saveEvent(objectDatabase(),JSON.parse(JSON.stringify(draft)),connection.value.engine,original);}
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
+    liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,
     connections,
     groups,

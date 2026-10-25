@@ -1,3 +1,4 @@
+import type {ResultSet} from '../../../../contracts/generated/v1';
 import type { TableIndex, IndexKind, Routine, Trigger, ScheduledEvent } from './objects';
 export type Engine = 'MySQL' | 'MariaDB' | 'PostgreSQL' | 'SQLite';
 export type Transport =
@@ -21,6 +22,8 @@ export interface ConnectionGroup {
   collapsed: boolean;
 }
 export interface Connection {
+  mode?: 'mock'|'live';
+  rootCertificatePem?: string;
   id: string;
   name: string;
   engine: Engine;
@@ -75,6 +78,9 @@ export interface Database {
 export type View =
   'Browse' | 'Structure' | 'SQL' | 'Search' | 'Insert' | 'Export' | 'Import' | 'Operations' | 'Routines' | 'Triggers' | 'Events';
 export interface SqlResult {
+  raw?: ResultSet;
+  truncated?: boolean;
+  columnLabels?: Record<string,string>;
   rows: Row[];
   columns: string[];
   columnTypes?: Record<string, string>;

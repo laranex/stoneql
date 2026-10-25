@@ -33,6 +33,16 @@ impl Default for OwnerId {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ConnectionId(Uuid);
+impl ConnectionId {
+    pub fn parse(value: &str) -> Result<Self, LifecycleError> {
+        Uuid::parse_str(value)
+            .map(Self)
+            .map_err(|_| LifecycleError::Forbidden)
+    }
+    pub fn opaque(self) -> String {
+        self.0.to_string()
+    }
+}
 
 /// Never derives Debug/Serialize: credentials and certificate material stay in memory.
 pub struct DirectMySql {
@@ -49,8 +59,13 @@ impl DirectMySql {
         if !matches!(self.engine, Engine::MySql | Engine::MariaDb)
             || self.host.is_empty()
             || self.host.len() > 253
-            || self.host.chars().any(char::is_whitespace)
+            || self
+                .host
+                .chars()
+                .any(|character| character.is_whitespace() || character == '\0')
             || self.port == 0
+            || self.username.contains('\0')
+            || self.database.contains('\0')
             || self.username.is_empty()
             || self.username.len() > 256
             || self.database.is_empty()
@@ -107,6 +122,7 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 struct Entry {
+    engine_version: String,
     owner: OwnerId,
     pool: MySqlPool,
     expires: Instant,
@@ -177,10 +193,13 @@ impl Connections {
             sqlx::query_scalar::<_, String>("SELECT VERSION()").fetch_one(&pool),
         )
         .await;
-        match identity {
+        let version = match identity {
             Ok(Ok(version))
                 if version.to_ascii_lowercase().contains("mariadb")
-                    == (config.engine == Engine::MariaDb) => {}
+                    == (config.engine == Engine::MariaDb) =>
+            {
+                version
+            }
             other => {
                 pool.close().await;
                 return Err(match other {
@@ -189,8 +208,8 @@ impl Connections {
                     Ok(Ok(_)) => LifecycleError::EngineMismatch,
                 });
             }
-        }
-        match self.register(owner, pool.clone(), permit) {
+        };
+        match self.register(owner, pool.clone(), permit, version) {
             Ok(id) => Ok(id),
             Err(error) => {
                 pool.close().await;
@@ -203,6 +222,7 @@ impl Connections {
         owner: OwnerId,
         pool: MySqlPool,
         permit: OwnedSemaphorePermit,
+        engine_version: String,
     ) -> Result<ConnectionId, LifecycleError> {
         let id = ConnectionId(Uuid::new_v4());
         let (cancel, cancelled) = oneshot::channel();
@@ -215,6 +235,7 @@ impl Connections {
             entries.insert(
                 id,
                 Entry {
+                    engine_version,
                     owner,
                     pool,
                     expires,
@@ -241,6 +262,22 @@ impl Connections {
             }
         });
         Ok(id)
+    }
+    pub fn engine_version(
+        &self,
+        owner: OwnerId,
+        id: ConnectionId,
+    ) -> Result<String, LifecycleError> {
+        self.0
+            .entries
+            .lock()
+            .expect("connection registry lock")
+            .get(&id)
+            .filter(|entry| {
+                entry.owner == owner && entry.expires > Instant::now() && !entry.pool.is_closed()
+            })
+            .map(|entry| entry.engine_version.clone())
+            .ok_or(LifecycleError::Forbidden)
     }
     pub fn is_connected(&self, owner: OwnerId, id: ConnectionId) -> bool {
         self.0
@@ -300,7 +337,9 @@ mod tests {
             .max_connections(1)
             .min_connections(0)
             .connect_lazy_with(config().options().unwrap());
-        connections.register(owner, pool, permit).unwrap()
+        connections
+            .register(owner, pool, permit, "fixture".into())
+            .unwrap()
     }
     #[tokio::test]
     async fn handles_are_owner_scoped_and_disconnect_releases_capacity() {
@@ -355,7 +394,7 @@ mod tests {
         let pool = MySqlPoolOptions::new().connect_lazy_with(config().options().unwrap());
         connections.shutdown().await;
         assert_eq!(
-            connections.register(OwnerId::new(), pool.clone(), permit),
+            connections.register(OwnerId::new(), pool.clone(), permit, "fixture".into()),
             Err(LifecycleError::Capacity)
         );
         pool.close().await;
@@ -380,6 +419,21 @@ mod tests {
         assert!(connections.0.slots.clone().try_acquire_owned().is_ok());
         assert!(connections.0.entries.lock().unwrap().is_empty());
         server.abort();
+    }
+    #[test]
+    fn protocol_identifiers_reject_embedded_nuls_instead_of_truncating() {
+        for field in ["host", "username", "database"] {
+            let mut input = config();
+            match field {
+                "host" => input.host.push('\0'),
+                "username" => input.username.push('\0'),
+                _ => input.database.push('\0'),
+            }
+            assert!(matches!(
+                input.options(),
+                Err(LifecycleError::InvalidConfiguration)
+            ));
+        }
     }
     #[test]
     fn configuration_and_error_messages_do_not_expose_credentials() {

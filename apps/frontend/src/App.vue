@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { openLive, closeLive, liveSupported } from './services/liveConnections';
 import { hostState, resolveNativeClose } from './services/nativeHost';
 const nativeHostState = hostState();
+let liveStatusTimer: ReturnType<typeof setInterval> | undefined;
 import { insertRecords, RecordConstraintError } from './services/recordMutations';
 import { searchRows, searchOperators as availableSearchOperators, type SearchOperator } from './services/search';
 import DatabaseObjects from './components/DatabaseObjects.vue';
@@ -86,6 +88,8 @@ import {
 } from './services/columnDefinition';
 const store = useWorkspace();
 const w = computed(() => store.workspace);
+const isLive = computed(() => store.connection?.mode==='live');
+const liveSession = computed(() => store.liveSessions[store.activeId]);
 const table = computed(() => store.table);
 const tableMetadata = computed(() => {
   if (!table.value || (table.value.kind && table.value.kind!=='table')) return [];
@@ -210,7 +214,7 @@ const treeDatabases = computed(() =>
           `${d.name} ${t.name}`.toLowerCase().includes(treeSearch.value.toLowerCase()),
       ),
     }))
-    .filter((d) => d.tables.length),
+    .filter((d) => isLive.value ? !treeSearch.value || d.name.toLowerCase().includes(treeSearch.value.toLowerCase()) : d.tables.length),
 );
 function resize(e: MouseEvent) {
   const start = e.clientX,
@@ -411,6 +415,7 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
+  if(isLive.value && view!=='SQL') return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -418,6 +423,7 @@ async function navigate(view: View) {
   if (view === 'Insert') prepareInsert();
 }
 async function openDatabaseContext(name?: string) {
+  if(isLive.value) { w.value.view='SQL';w.value.scope='database';return; }
   if (!(await discard())) return;
   if (name) {
     const database = w.value.databases.find(d=>d.name===name);
@@ -434,6 +440,7 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL');
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -448,6 +455,7 @@ async function chooseTable(db: string, name: string) {
 async function switchConnection(id: string) {
   if (await discard()) {
     store.connect(id);
+    if(store.connection.mode==='live')void store.refreshLiveStatus(id);
     connectionMenu.value = false;
   }
 }
@@ -462,6 +470,7 @@ async function closeConnection(id: string) {
   )
     return;
   if (store.activeId === id && !(await discard())) return;
+  if(store.connections.find(c=>c.id===id)?.mode==='live') {try{await store.disconnectLiveProfile(id);}catch(error){notify((error as Error).message,'error');return;}}
   store.opened = store.opened.filter((x) => x !== id);
   if (store.activeId === id) {
     if (store.opened[0]) store.connect(store.opened[0]);
@@ -682,6 +691,7 @@ function newConnection(existing?: Connection) {
     ? JSON.parse(JSON.stringify(existing))
     : {
         id: crypto.randomUUID(),
+        mode: 'mock',
         name: '',
         engine: 'MySQL',
         host: '127.0.0.1',
@@ -695,18 +705,21 @@ function newConnection(existing?: Connection) {
         groupId: '',
         transport: { type: 'direct' },
       };
+  connectionDraft.value!.mode ||= 'mock';
   testMessage.value = '';
   connectionError.value = '';
   connectionDraftInitial.value = JSON.stringify(connectionDraft.value);
   connectionDialog.value = true;
 }
 async function closeConnectionDialog() {
+  if(testing.value)return;
   if (
     JSON.stringify(connectionDraft.value) !== connectionDraftInitial.value &&
     !(await askDiscard('Discard connection configuration changes?'))
   )
     return;
   connectionDialog.value = false;
+  if(connectionDraft.value?.mode==='live'){connectionDraft.value.password=undefined;connectionDraft.value=undefined;}
 }
 async function closeColumnDialog() {
   if (
@@ -745,19 +758,40 @@ async function restoreHistory(text: string) {
   showHistory.value = false;
 }
 function changeTransport(type: string) {
-  if (!connectionDraft.value) return;
+  if (!connectionDraft.value || testing.value) return;
   connectionDraft.value.transport =
     type === 'ssh'
       ? { type: 'ssh', host: '', port: 22, user: '', auth: 'agent' }
       : { type: 'direct' };
 }
+async function readCertificate(event:Event) {
+  const input=event.target as HTMLInputElement;
+  const file=input.files?.[0];
+  if(!file||!connectionDraft.value)return;
+  connectionError.value='';
+  if(file.size>16384){connectionError.value='CA certificate must be at most 16 KiB.';input.value='';return;}
+  const draft=connectionDraft.value;
+  try {
+    const pem=await file.text();
+    if(!pem.includes('-----BEGIN CERTIFICATE-----')||pem.includes('PRIVATE KEY')){connectionError.value='Choose a PEM CA certificate, not a private key.';input.value='';return;}
+    if(connectionDraft.value===draft)draft.rootCertificatePem=pem;
+  }catch{connectionError.value='The selected CA certificate could not be read.';}
+}
 async function testConnection() {
   if (!connectionDraft.value) return;
   testing.value = true;
-  const result = await mockTransport.test(connectionDraft.value);
-  testMessage.value = result.message;
-  testOk.value = result.ok;
-  testing.value = false;
+  try {
+    if(connectionDraft.value.mode==='live') {
+      const info=await openLive(connectionDraft.value);
+      await closeLive(info.handle);
+      testMessage.value=`Verified TLS connection successful · ${info.engineVersion} · Test session closed.`;
+      testOk.value=true;
+    } else {
+      const result=await mockTransport.test(connectionDraft.value);
+      testMessage.value=result.message;testOk.value=result.ok;
+    }
+  }catch(error){testMessage.value=(error as Error).message;testOk.value=false;}
+  finally{testing.value=false;}
 }
 async function saveConnection(connectNow = true) {
   const draft = connectionDraft.value;
@@ -766,6 +800,36 @@ async function saveConnection(connectNow = true) {
   if (!draft.name.trim() || (draft.engine !== 'SQLite' && (!draft.host.trim() || !draft.user.trim()))) { connectionError.value = 'Name, host, and username are required.'; return; }
   if (draft.environment === 'Custom' && !draft.customEnvironment?.trim()) { connectionError.value = 'Enter a custom environment label.'; return; }
   if (draft.transport.type === 'ssh' && (!draft.transport.host.trim() || !draft.transport.user.trim())) { connectionError.value = 'SSH host and username are required.'; return; }
+  if(draft.mode==='live') {
+    if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database){connectionError.value='Live connections require the desktop app, Direct MySQL/MariaDB and a database name.';return;}
+    const old=store.connections.find(c=>c.id===draft.id);
+    if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
+    if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
+    testing.value=true;
+    try {
+      if(old?.mode==='live')await store.disconnectLiveProfile(draft.id);
+      const saved={...draft,password:undefined};
+      const index=store.connections.findIndex(c=>c.id===draft.id);
+      if(index<0)store.connections.push(saved);else store.connections[index]=saved;
+      if(old?.mode!=='live')delete store.workspaces[draft.id];
+      if(connectNow || store.activeId===draft.id)store.connect(draft.id);
+      const workspace=store.workspaces[draft.id];
+      if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
+      if(connectNow)await store.connectLiveProfile(draft);
+      draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
+      connectionDialog.value=false;if(connectNow)manager.value=false;
+      notify(connectNow?'Live read-only connection opened over verified TLS.':'Live profile saved; connect explicitly before executing SQL.');
+    }catch(error){connectionError.value=(error as Error).message;}
+    finally{testing.value=false;}
+    return;
+  }
+  const previous=store.connections.find(c=>c.id===draft.id);
+  if(previous?.mode==='live') {
+    if(store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
+    if(store.activeId===draft.id && !(await discard()))return;
+    try{await store.disconnectLiveProfile(draft.id);}catch(error){connectionError.value=(error as Error).message;return;}
+    delete store.workspaces[draft.id];
+  }
   if (connectNow) {
     testing.value = true;
     const result = await mockTransport.test(draft);
@@ -776,7 +840,7 @@ async function saveConnection(connectNow = true) {
   const index = store.connections.findIndex(x => x.id === draft.id);
   if (index >= 0) store.connections[index] = draft;
   else store.connections.push(draft);
-  if (connectNow) store.connect(draft.id);
+  if (connectNow || (previous?.mode==='live' && store.activeId===draft.id)) store.connect(draft.id);
   connectionDialog.value = false;
   if (connectNow) manager.value = false;
   notify(connectNow ? 'Configuration saved; mock connection opened.' : 'Configuration saved without connecting. Secrets remain in memory only.');
@@ -786,7 +850,8 @@ function removeConnection(id: string) {
     title: 'Remove connection?',
     acceptLabel: 'Remove connection',
     message: 'The connection and its session data will be removed.',
-    action: () => {
+    action: async () => {
+      if(store.connections.find(c=>c.id===id)?.mode==='live'){try{await store.disconnectLiveProfile(id);}catch(error){notify((error as Error).message,'error');return;}}
       store.connections = store.connections.filter((c) => c.id !== id);
       store.opened = store.opened.filter((c) => c !== id);
       delete store.workspaces[id];
@@ -870,20 +935,23 @@ async function closeQuery(id: number) {
   if (w.value.queryId === id) w.value.queryId = w.value.queries[0]!.id;
 }
 async function execute() {
+  const profileId=store.activeId, live=isLive.value;
   const ws = w.value,
     q = query.value,
     database = ws.database,
     text = q.sql,
-    previewPlan = queryPlans.get(q) || browsePlan.value;
+    previewPlan = live ? undefined : queryPlans.get(q) || browsePlan.value;
   if (q.running) return;
   q.running = true;
   q.result = null;
   q.error = '';
   q.executedSql = text;
   q.resultDatabase = database;
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  if(!live)await new Promise((resolve) => setTimeout(resolve, 400));
   try {
-    q.result = selectQuery(
+    q.result = live
+      ? await store.executeLive(profileId,text)
+      : selectQuery(
       text,
       relations(ws.databases.find((d) => d.name === database)),
       previewPlan,
@@ -1117,6 +1185,7 @@ function repositionEditor() {
   if (editing.value?.anchor) Object.assign(editing.value, positionCellEditor(editing.value.anchor));
 }
 onMounted(() => {
+  if(nativeHostState.kind==='desktop')liveStatusTimer=setInterval(()=>{if(isLive.value)void store.refreshLiveStatus(store.activeId);},30000);
   window.addEventListener('scroll', repositionEditor, true);
   window.addEventListener('resize', repositionEditor);
   media.addEventListener('change', onThemeChange);
@@ -1125,6 +1194,7 @@ onMounted(() => {
   window.addEventListener('dbadmin-close-requested', nativeCloseRequested);
 });
 onBeforeUnmount(() => {
+  if(liveStatusTimer)clearInterval(liveStatusTimer);
   clearTimeout(toastTimer);
   window.removeEventListener('scroll', repositionEditor, true);
   window.removeEventListener('resize', repositionEditor);
@@ -1182,7 +1252,7 @@ onBeforeUnmount(() => {
             <button
               class="icon-button"
               title="Refresh explorer"
-              @click="notify('Mock explorer refreshed from session metadata.')"
+              @click="notify(isLive ? 'Live schema discovery is not available yet; use SQL with known table names.' : 'Mock explorer refreshed from session metadata.')"
             >
               <RefreshCw :size="13" /></button
             ><button class="icon-button" title="Collapse sidebar" @click="sidebarHidden = true">
@@ -1233,7 +1303,7 @@ onBeforeUnmount(() => {
           <div v-for="db in treeDatabases" :key="db.name" class="database-group">
             <div class="database-row">
               <button class="icon-button" :aria-label="`${expanded.includes(db.name) ? 'Collapse' : 'Expand'} ${db.name}`" :aria-expanded="expanded.includes(db.name)" @click="expanded.includes(db.name) ? expanded = expanded.filter(n => n !== db.name) : expanded.push(db.name)"><ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" /><ChevronRight v-else :size="12" /></button>
-              <button class="database-context-link" @click="openDatabaseContext(db.name)"><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" /><strong>{{ db.name }}</strong><span>{{ db.tables.length }}</span></button>
+              <button class="database-context-link" @click="openDatabaseContext(db.name)"><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" /><strong>{{ db.name }}</strong><span :title="isLive ? 'Schema discovery is not available yet' : ''">{{ isLive ? '—' : db.tables.length }}</span></button>
             </div>
             <div v-if="expanded.includes(db.name) || treeSearch" class="table-tree">
               <button
@@ -1248,12 +1318,13 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-if="!treeDatabases.length" class="tree-empty">No matching tables</div>
+          <p v-if="isLive" class="tree-empty">Schema discovery is not available yet. Use SQL with known table names.</p>
         </nav>
         <div class="sidebar-bottom">
           <div class="connection-status">
-            <span class="dot"></span> Connected
+            <span class="dot" :style="isLive && liveSession?.status!=='connected' ? {background:'var(--muted)'} : {}"></span> {{ isLive ? (liveSession?.status==='connected'?'Connected':'Disconnected') : 'Connected' }}
             <span>{{
-              store.connection?.engine === 'PostgreSQL'
+              isLive ? (liveSession?.info?.engineVersion || 'Live · read-only') : store.connection?.engine === 'PostgreSQL'
                 ? 'PostgreSQL 16.2 (mock)'
                 : store.connection?.engine === 'SQLite'
                   ? 'SQLite 3.45 (mock)'
@@ -1320,15 +1391,15 @@ onBeforeUnmount(() => {
             <component :is="tab.icon" :size="14" />{{ tab.name === 'Insert' && insertMode ? 'Edit' : tab.name }}
           </button>
         </nav>
-        <DatabaseObjects :key="store.activeId + ':' + w.database" ref="objectManager" :section="objectSection" :confirm-discard="askDiscard" @confirm="requestObjectConfirmation" />
-        <div v-if="!table && w.scope !== 'table' && !objectSection" class="content-area"><DatabaseOverview v-if="w.view === 'Structure'" :databases="w.databases" :database="store.database" :server="w.scope === 'server'" @database="openDatabaseContext" @table="openOverviewTable" @create-table="objectManager?.openTable()" @create-view="objectManager?.openView()" @definition="objectManager?.openView($event)" @drop-view="objectManager?.dropView($event)" /><ExportWorkflow v-if="w.scope === 'database' && w.view === 'Export'" /></div>
+        <DatabaseObjects v-if="!isLive" :key="store.activeId + ':' + w.database" ref="objectManager" :section="objectSection" :confirm-discard="askDiscard" @confirm="requestObjectConfirmation" />
+        <div v-if="!isLive && !table && w.scope !== 'table' && !objectSection" class="content-area"><DatabaseOverview v-if="w.view === 'Structure'" :databases="w.databases" :database="store.database" :server="w.scope === 'server'" @database="openDatabaseContext" @table="openOverviewTable" @create-table="objectManager?.openTable()" @create-view="objectManager?.openView()" @definition="objectManager?.openView($event)" @drop-view="objectManager?.dropView($event)" /><ExportWorkflow v-if="w.scope === 'database' && w.view === 'Export'" /></div>
         <div
           class="content-area"
           :class="{ 'record-content': w.view === 'Insert', 'sql-content': w.view === 'SQL', 'browse-content': w.view === 'Browse' }"
-          v-if="table && !objectSection"
+          v-if="(table || isLive) && !objectSection"
         >
           <DatabaseOverview v-if="w.scope === 'server' || (w.scope === 'database' && w.view === 'Structure')" :databases="w.databases" :database="store.database" :server="w.scope === 'server'" @database="openDatabaseContext" @table="openOverviewTable" @create-table="objectManager?.openTable()" @create-view="objectManager?.openView()" @definition="objectManager?.openView($event)" @drop-view="objectManager?.dropView($event)" />
-          <template v-else-if="w.view === 'Browse'">
+          <template v-else-if="table && w.view === 'Browse'">
             <div v-if="isReadOnly" class="notice info">Read-only {{table.kind === 'materialized-view' ? 'materialized view' : 'view'}} · mock snapshot. Refresh evaluates only the supported SELECT subset; no server query is run.</div>
             <ResultNotice v-if="viewError" kind="error" :notification-key="browseNoticeVersion">{{viewError}}</ResultNotice>
             <ResultNotice :notification-key="browseNoticeVersion">
@@ -1660,7 +1731,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </template>
-          <template v-else-if="w.view === 'Structure'"
+          <template v-else-if="table && w.view === 'Structure'"
             ><div v-if="isReadOnly" class="panel"><div class="workspace-toolbar"><span>{{table.kind==='materialized-view'?'Materialized view':'View'}} · read-only mock snapshot</span><div class="row-actions"><button @click="objectManager?.openView(table)">Definition / Edit</button><button @click="refreshBrowse">{{table.kind==='materialized-view'?'Refresh materialized view (mock)':'Refresh snapshot (mock)'}}</button><button class="danger-text" @click="objectManager?.dropView(table)">Drop view</button></div></div><pre class="object-definition"><SqlText :text="table.definition || ''" :engine="store.connection.engine" /></pre><div v-if="viewError" class="notice error" role="alert">{{viewError}}</div></div><div class="workspace-toolbar">
               <span class="muted">{{ table.columns.length }} columns</span
               ><button v-if="!isReadOnly" class="button" @click="editColumn()"><Plus :size="13" /> Add column</button>
@@ -1742,6 +1813,13 @@ onBeforeUnmount(() => {
             </div></template
           >
           <template v-else-if="w.view === 'SQL'">
+            <div v-if="isLive" class="editor-toolbar">
+              <span>Live · Direct · Read-only · TLS verification required</span>
+              <span class="toolbar-end">{{ liveSession?.status || 'disconnected' }}</span>
+              <button v-if="liveSession?.status!=='connected'" class="button" :disabled="liveSession?.status==='connecting'" @click="newConnection(store.connection)">Connect</button>
+              <button v-else class="button" @click="store.disconnectLiveProfile(store.activeId).catch(error=>notify(error.message,'error'))">Disconnect</button>
+            </div>
+            <ResultNotice v-if="isLive && liveSession?.error" kind="error" :notification-key="liveSession.error">{{ liveSession.error }}</ResultNotice>
             <div class="query-tabs">
               <div v-for="q in w.queries" :key="q.id" :class="{ active: q.id === w.queryId }">
                 <button @click="w.queryId = q.id">
@@ -1759,7 +1837,7 @@ onBeforeUnmount(() => {
               :schema="schema" :engine="store.connection.engine"
               @execute="store.shortcuts && execute()" />
             <div class="editor-toolbar">
-              <button class="button primary" :disabled="running" @click="execute">
+              <button class="button primary" :disabled="running || (isLive && liveSession?.status!=='connected')" @click="execute">
                 <LoaderCircle v-if="running" :size="13" class="spin" /><Play v-else :size="13" />{{
                   running ? 'Executing…' : 'Run query'
                 }}</button
@@ -1776,7 +1854,7 @@ onBeforeUnmount(() => {
               ><button class="button" @click="showHistory = !showHistory">
                 <Clock3 :size="13" /> Query history
                 <span class="count">{{ w.history.length }}</span></button
-              ><span class="toolbar-end">Mock engine · SELECT queries supported</span>
+              ><span class="toolbar-end">{{ isLive ? 'Live read-only · bounded SELECT subset' : 'Mock engine · SELECT queries supported' }}</span>
             </div>
             <div v-if="showHistory" class="panel history-panel">
               <h3>Query history</h3>
@@ -1794,9 +1872,10 @@ onBeforeUnmount(() => {
             }}</ResultNotice>
             <template v-if="result"
               ><ResultNotice :notification-key="w.history.length"
-                >{{ result.rows.length }} rows returned. Query executed successfully (simulated,
+                >{{ result.rows.length }} rows returned. Query executed successfully ({{ isLive ? 'live, read-only' : 'simulated' }},
                 {{ query.resultDatabase }}).</ResultNotice
               >
+              <ResultNotice v-if="result.truncated" kind="warning" :notification-key="w.history.length">Result limited to 1,000 rows or 1 MiB. Individual values were not truncated.</ResultNotice>
               <div class="data-grid-wrap">
                 <table class="data-grid" v-grid-resize="resultGridOptions">
                   <thead>
@@ -1813,7 +1892,7 @@ onBeforeUnmount(() => {
                         "
                       >
                         <button @click="sortResults(c)">
-                          {{ c
+                          {{ result.columnLabels?.[c] || c
                           }}<ArrowDown
                             v-if="query.resultSort === c && query.resultDescending"
                             :size="12"
@@ -1869,11 +1948,11 @@ onBeforeUnmount(() => {
             <div v-else-if="!sqlError" class="sql-empty">
               <Terminal :size="28" /><strong>Your next query starts here.</strong
               ><span>Write SQL above and press ⌘ / Ctrl + Enter to run.</span
-              ><button @click="query.sql = `SELECT * FROM ${w.table} LIMIT 25;`">
+              ><button @click="query.sql = isLive ? 'SELECT 1;' : `SELECT * FROM ${w.table} LIMIT 25;`">
                 Load a sample query <ArrowRight :size="12" />
               </button></div
           ></template>
-          <template v-else-if="w.view === 'Search'">
+          <template v-else-if="table && w.view === 'Search'">
             <form @submit.prevent="runSearch">
               <div v-if="searchError" class="notice error" role="alert">{{ searchError }}</div>
               <table class="data-grid form-grid">
@@ -1946,7 +2025,7 @@ onBeforeUnmount(() => {
               </div>
             </div></template
           >
-          <template v-else-if="w.view === 'Insert'">
+          <template v-else-if="table && w.view === 'Insert'">
             <form
               class="record-form"
               :aria-label="insertMode ? 'Edit record' : 'Insert record'"
@@ -2044,7 +2123,7 @@ onBeforeUnmount(() => {
           <ExportWorkflow
             v-else-if="w.view === 'Export'"
             :key="store.activeId + w.database + w.scope"
-          /><template v-else-if="w.view === 'Import'">
+          /><template v-else-if="table && w.view === 'Import'">
             <div class="panel transfer-panel">
               <h3>File to import</h3>
               <label v-if="w.scope === 'database'" class="form-label">Target table<select v-model="w.table"><option v-for="target in store.database?.tables" :key="target.name" :value="target.name">{{ target.name }}</option></select></label>
@@ -2088,7 +2167,7 @@ onBeforeUnmount(() => {
               </div>
             </div></template
           >
-          <template v-else-if="w.view === 'Operations'">
+          <template v-else-if="table && w.view === 'Operations'">
             <div class="operations-grid">
               <form class="panel" @submit.prevent="renameTable">
                 <h3>Rename table</h3>
@@ -2144,7 +2223,7 @@ onBeforeUnmount(() => {
       <span class="footer-session"
         ><Terminal :size="12" /><strong>dbAdmin</strong><span class="footer-divider">|</span
         ><span class="session-detail"
-          >{{ nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
+          >{{ isLive ? `Live read-only · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
         ></span
       >
       <div class="footer-controls">
@@ -2297,7 +2376,7 @@ onBeforeUnmount(() => {
                   >
                   <p>
                     {{ c.engine }} · {{ c.user }}@{{ c.host }}:{{ c.port }} ·
-                    {{ c.transport.type === 'ssh' ? 'SSH' : 'Direct' }}
+                    {{ c.transport.type === 'ssh' ? 'SSH' : 'Direct' }} · {{ c.mode==='live' ? 'Live read-only' : 'Mock' }}
                   </p>
                 </div>
                 <select
@@ -2383,6 +2462,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-button"
             aria-label="Close connection setup"
+            :disabled="testing"
             @click="closeConnectionDialog()"
           >
             <X :size="17" />
@@ -2390,14 +2470,16 @@ onBeforeUnmount(() => {
         </header>
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
+            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · MySQL/MariaDB Direct)</option></select></label>
+            <label v-if="connectionDraft.mode==='live'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">
               <label class="form-label"
-                >Connection name<input
+                >Connection name<input :disabled="testing"
                   v-model="connectionDraft.name"
                   placeholder="e.g. Local development"
                   required /></label
               ><label class="form-label"
-                >Database engine<select
+                >Database engine<select :disabled="testing"
                   v-model="connectionDraft.engine"
                   @change="
                     connectionDraft.port =
@@ -2410,14 +2492,14 @@ onBeforeUnmount(() => {
                 >
                   <option>MySQL</option>
                   <option>MariaDB</option>
-                  <option>PostgreSQL</option>
-                  <option>SQLite</option>
+                  <option :disabled="connectionDraft.mode==='live'">PostgreSQL</option>
+                  <option :disabled="connectionDraft.mode==='live'">SQLite</option>
                 </select></label
               >
             </div>
             <div class="form-two">
               <label class="form-label"
-                >Environment<select
+                >Environment<select :disabled="testing"
                   v-model="connectionDraft.environment"
                   aria-label="Connection environment"
                 >
@@ -2426,7 +2508,7 @@ onBeforeUnmount(() => {
                   </option>
                 </select></label
               ><label class="form-label"
-                >Group<select v-model="connectionDraft.groupId" aria-label="Connection group">
+                >Group<select :disabled="testing" v-model="connectionDraft.groupId" aria-label="Connection group">
                   <option value="">Ungrouped</option>
                   <option v-for="group in store.groups" :key="group.id" :value="group.id">
                     {{ group.name }}
@@ -2435,13 +2517,13 @@ onBeforeUnmount(() => {
               >
             </div>
             <label v-if="connectionDraft.environment === 'Custom'" class="form-label"
-              >Custom environment<input
+              >Custom environment<input :disabled="testing"
                 v-model="connectionDraft.customEnvironment"
                 aria-label="Custom environment"
                 maxlength="40"
                 required
             /></label>
-            <fieldset class="connection-color-picker">
+            <fieldset class="connection-color-picker" :disabled="testing">
               <legend>Connection color</legend>
               <button
                 v-for="color in connectionColors"
@@ -2467,6 +2549,7 @@ onBeforeUnmount(() => {
               ><button
                 type="button"
                 :class="{ active: connectionDraft.transport.type === 'ssh' }"
+                :disabled="connectionDraft.mode==='live'"
                 @click="changeTransport('ssh')"
               >
                 <KeyRound :size="13" /> SSH Tunnel</button
@@ -2475,9 +2558,9 @@ onBeforeUnmount(() => {
             <template v-if="connectionDraft.engine !== 'SQLite'"
               ><div class="host-port">
                 <label class="form-label"
-                  >Host<input v-model="connectionDraft.host" required /></label
+                  >Host<input :disabled="testing" v-model="connectionDraft.host" required /></label
                 ><label class="form-label"
-                  >Port<input
+                  >Port<input :disabled="testing"
                     v-model.number="connectionDraft.port"
                     type="number"
                     min="1"
@@ -2487,12 +2570,12 @@ onBeforeUnmount(() => {
               </div>
               <div class="form-two">
                 <label class="form-label"
-                  >Username<input
+                  >Username<input :disabled="testing"
                     v-model="connectionDraft.user"
                     autocomplete="off"
                     required /></label
                 ><label class="form-label"
-                  >Password<input
+                  >Password<input :disabled="testing"
                     v-model="connectionDraft.password"
                     type="password"
                     autocomplete="new-password"
@@ -2503,7 +2586,7 @@ onBeforeUnmount(() => {
                 connectionDraft.engine === 'SQLite'
                   ? 'Database file path (simulated)'
                   : 'Default database'
-              }}<input
+              }}<input :disabled="testing"
                 v-model="connectionDraft.database"
                 :placeholder="
                   connectionDraft.engine === 'SQLite' ? '/path/to/database.sqlite' : 'acme_store'
@@ -2513,12 +2596,12 @@ onBeforeUnmount(() => {
               <h3>SSH tunnel configuration</h3>
               <div class="host-port">
                 <label class="form-label"
-                  >SSH host<input
+                  >SSH host<input :disabled="testing"
                     v-model="connectionDraft.transport.host"
                     required
                     placeholder="bastion.example.com" /></label
                 ><label class="form-label"
-                  >SSH port<input
+                  >SSH port<input :disabled="testing"
                     v-model.number="connectionDraft.transport.port"
                     type="number"
                     min="1"
@@ -2528,9 +2611,9 @@ onBeforeUnmount(() => {
               </div>
               <div class="form-two">
                 <label class="form-label"
-                  >SSH username<input v-model="connectionDraft.transport.user" required /></label
+                  >SSH username<input :disabled="testing" v-model="connectionDraft.transport.user" required /></label
                 ><label class="form-label"
-                  >Authentication<select v-model="connectionDraft.transport.auth">
+                  >Authentication<select :disabled="testing" v-model="connectionDraft.transport.auth">
                     <option value="agent">SSH agent</option>
                     <option value="private-key">Private key</option>
                     <option value="password">Password</option>
@@ -2538,18 +2621,18 @@ onBeforeUnmount(() => {
                 >
               </div>
               <label v-if="connectionDraft.transport.auth === 'password'" class="form-label"
-                >SSH password<input
+                >SSH password<input :disabled="testing"
                   v-model="connectionDraft.transport.password"
                   type="password" /></label
               ><template v-if="connectionDraft.transport.auth === 'private-key'"
                 ><label class="form-label"
-                  >Private key (memory only)<textarea
+                  >Private key (memory only)<textarea :disabled="testing"
                     v-model="connectionDraft.transport.privateKey"
                     rows="3"
                     placeholder="Paste a test key; never use production credentials"
                   ></textarea></label
                 ><label class="form-label"
-                  >Passphrase (optional)<input
+                  >Passphrase (optional)<input :disabled="testing"
                     v-model="connectionDraft.transport.passphrase"
                     type="password" /></label
               ></template>
@@ -2573,7 +2656,7 @@ onBeforeUnmount(() => {
               Test connection
             </button>
             <div>
-              <button type="button" class="button" @click="closeConnectionDialog()">Cancel</button
+              <button type="button" class="button" :disabled="testing" @click="closeConnectionDialog()">Cancel</button
               ><button type="button" class="button" :disabled="testing" @click="saveConnection(false)">Save</button><button class="button primary" :disabled="testing">Save & connect</button>
             </div>
           </footer>

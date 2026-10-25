@@ -619,8 +619,10 @@ version = "0.1.0"
 dependencies = [
  "dbadmin-contracts",
  "dbadmin-core",
+ "dbadmin-runtime",
  "serde",
  "serde_json",
+ "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

@@ -1,6 +1,6 @@
 # API contract proposal
 
-**Status: M001 v1 DTO foundation implemented; host/API bindings remain proposed.** Rust wire types and generated TypeScript exist with local verification. No endpoint or IPC command exists; the HTTP table remains a proposal, not an implemented OpenAPI specification.
+**Status: v1 DTOs and scoped Tauri IPC implemented.** The HTTP table remains proposed; no Axum endpoint or implemented OpenAPI specification exists.
 
 ## Responsibilities and versioning
 
@@ -14,7 +14,7 @@ M001 implements Rust v1 DTOs in `crates/dbadmin-contracts/src/v1.rs`, generating
 
 `decode_query_request` rejects malformed/duplicate/unknown fields, unsupported versions, invalid opaque IDs and over-budget envelopes (128 KiB), SQL text (64 KiB), row limit (1–1000) and result-byte limit (1–1 MiB). Database context is required as a string or explicit null (at most 1024 bytes). These are initial foundation bounds, not a production quota service. SQL text is preserved and not parsed/executed or record-form-validated. The generic DTO derives do not replace this entry validation. Core errors project only allowlisted codes, static messages and explicit outcomes, with no raw driver/SQL diagnostic payload and no automatic retry permission.
 
-Machine engine IDs are `mysql`, `mariadb`, `postgresql`, `sqlite`. `QueryResult` carries ordered result sets and exact string affected-row counts; unsupported engine types can retain opaque bytes/type names. The M003 runtime evaluation decodes a tested MySQL/MariaDB raw-value subset, including zero dates, without UI exposure. The M002 native handshake/probe uses strict versioned envelopes; database IPC/job framing remains unimplemented. Frontend database mocks do not consume live result DTOs yet.
+Machine engine IDs are `mysql`, `mariadb`, `postgresql`, `sqlite`. `QueryResult` carries ordered result sets and exact string affected-row counts; unsupported engine types can retain opaque bytes/type names. The M003 runtime evaluation decodes a tested MySQL/MariaDB raw-value subset, including zero dates, with explicit native SQL UI binding. The M002 handshake/probe and M003 database commands use strict versioned envelopes. Browser/default mocks remain independent; job framing is unimplemented.
 
 M003's initial read-only request uses v1 bounded result/error DTOs through a simple core/IPC request-response path. It does not need a query-job protocol, HTTP server or full schema cache. Single-statement/read-only enforcement, explicit row/byte limits and safe deadlines are part of that initial contract. Timeout is not confirmation of server cancellation. M006 introduces job/batch/cancel/transaction and schema-revision DTOs; preserve v1 compatibility or version breaking changes. M008 binds approved contracts to HTTP later. Do not implement the HTTP bindings below to unblock M003.
 
@@ -75,3 +75,16 @@ Codes should cover validation, unauthorized/forbidden, capability mismatch, stal
 ## Acceptance
 
 Golden DTO round-trips cover raw precision, NULL/default, multiple result sets, binary/unknown values and structured errors. Ownership/resource checks remain future host/core service work; no connection/job service exists in M001. Test dropped clients, stale cursors, out-of-order progress and expired leases. Publish an executable OpenAPI contract only when HTTP scope is approved; no Postman workspace or API has been created by this planning task.
+
+## Implemented desktop database commands
+
+| Command | v1 request → response | Boundary |
+| --- | --- | --- |
+| `connect_direct` | `DirectConnectionRequest` → `LiveConnection` | MySQL/MariaDB Direct, verified TLS; transient password/optional PEM CA |
+| `read_only_query` | `LiveQueryRequest` → `ResultSet` | Owned handle, restricted SELECT, bounded rows/bytes and three-second deadline |
+| `disconnect_database` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Remove owned handle and close pool |
+| `database_status` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Registry/lease state; no network query |
+
+Every request includes the native session ID inside the strict v1 envelope; command envelopes are bounded to 64 KiB. Connection handles are opaque UUIDs, scoped to the host session. The host admits at most 16 active connect/query requests and eight logical pools, with one-hour leases. Secret-bearing DTOs intentionally do not derive Debug. PEM CA input is bounded to 16 KiB; private-key content is rejected. Renderer secrets are transient, with no credential vault or filesystem permission.
+
+Additional allowlisted errors include DEADLINE_EXCEEDED, PACKET_TOO_LARGE, QUERY_REJECTED, CONNECTION_UNAVAILABLE, CAPACITY and UNSUPPORTED_SQL. Validation/refusal is rejected; uncertain execution failures remain unknown outcomes. The frontend receives fixed safe text, never raw driver errors, and never retries SQL or falls back to mocks. M006 job/transaction contracts and future HTTP authorization remain separate work.

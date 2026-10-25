@@ -74,6 +74,12 @@ pub enum ErrorCode {
     ConnectionLost,
     Cancelled,
     Internal,
+    DeadlineExceeded,
+    PacketTooLarge,
+    QueryRejected,
+    ConnectionUnavailable,
+    Capacity,
+    UnsupportedSql,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -86,6 +92,20 @@ impl ErrorCode {
             Self::Conflict => "The operation conflicts with current state.",
             Self::ConnectionLost => "The database connection was lost.",
             Self::Cancelled => "The operation was cancelled.",
+            Self::DeadlineExceeded => {
+                "The operation deadline was exceeded; server cancellation is unconfirmed."
+            }
+            Self::PacketTooLarge => {
+                "The response exceeded the incoming packet limit; its connection was discarded."
+            }
+            Self::QueryRejected => {
+                "The database rejected or could not complete the read-only query."
+            }
+            Self::ConnectionUnavailable => {
+                "Connection failed. Check authentication, TLS and availability."
+            }
+            Self::Capacity => "Connection capacity reached.",
+            Self::UnsupportedSql => "This read-only SQL form is not supported.",
             Self::Internal => "The operation could not be completed.",
         }
     }

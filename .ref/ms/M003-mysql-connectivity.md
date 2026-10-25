@@ -1,7 +1,7 @@
 # M003 — MySQL/MariaDB lifecycle and read-only SQL
 
 ## Status
-Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native UI binding and complete acceptance gates remain pending.
+Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native Direct MySQL/MariaDB SQL binding is implemented; complete native GUI/OS, memory and trust acceptance gates remain pending.
 
 ## Objective and scope
 A usable Direct vertical slice: connect, inspect minimal server identity, run one bounded read-only statement, display typed results/errors, and disconnect. Include basic read-only SQL now; preserve advanced execution for M006.
@@ -60,3 +60,13 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Root Cargo patch points to reviewed, MIT-attributed SQLx MySQL 0.9.0 source. Core/contracts still import no driver/runtime/host framework. Source/provenance drift checks run in CI.
 - Runtime cap: 2 MiB per logical incoming packet, independent of 1 MiB result serialization. Oversize produces `PacketTooLarge`, discards the physical connection and does not retry SQL. Fixture regression selects a 3 MiB stored value and then verifies a subsequent small query on a fresh connection.
 - Packet tests share the same source as the runtime. Full memory/metadata profiles, native binding and other acceptance gates remain open; M003 not complete.
+
+## Native live binding increment
+
+- Explicit Live/Mock mode is wired into the active connection dialog and existing SQL workspace. Default browser/mock workflows remain unchanged. Direct MySQL/MariaDB only; configured database context, no simulated schema discovery or live mutation controls.
+- Strict generated v1 commands enforce native identity/origin/ownership, bounded admission and shutdown cleanup. Raw results preserve precision, temporal text, NULL and duplicate column labels. Password/PEM/handles stay out of local profile persistence; reconnect is manual.
+- Added Light/Dark live-bridge browser coverage and actual-handler integration against owned TLS fixtures. Evidence distinguishes simulated browser bridge, Tauri MockRuntime with real SQLx/database, and real Wry startup. None substitutes for full native GUI-to-database testing.
+- New narrow-window browser regression exposed a scrolling connection footer; only the form body now scrolls, preserving readable controls and reachable actions.
+- M003 remains in progress. Full OS/native GUI coverage, aggregate metadata/memory bounds, indirect view/function trust and renderer-reload lease reconciliation are not accepted by this increment. M002's two Linux GTK audit findings remain unresolved.
+
+Verification: 151 JavaScript tests, 30 default Rust tests, 21 browser scenarios, both-engine actual-handler fixtures, Rust formatting/Clippy/contracts/boundaries/provenance, frontend/native/docs builds and real macOS Wry startup smoke (1,597 ms) passed. Safe evidence: `.ref/planning/m003-native-binding/`. The owning-fixture test is ignored in the default Rust suite and executed separately by `test:native-database`.

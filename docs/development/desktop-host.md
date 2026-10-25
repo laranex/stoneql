@@ -2,7 +2,7 @@
 
 ## Implementation status
 
-M002 adds a Tauri 2 development host around the shared Vue frontend. All database operations remain session mocks. No database driver, SSH, vault, updater or HTTP server is exposed by this host. Browser development remains available through `npm run dev` without native imports.
+M002 adds a Tauri 2 development host around the shared Vue frontend. Browser/default profiles remain session mocks. M003 adds explicit Direct MySQL/MariaDB live read-only profiles. SSH, vault, updater and HTTP server are not exposed. Browser development remains available through `npm run dev` without native imports.
 
 Use Node 26 and the pinned Rust toolchain. Install the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/) first.
 
@@ -20,7 +20,7 @@ The smoke command opens the actual native window, checks that Vue rendered, roun
 
 The native adapter lives in `apps/desktop/src-tauri`. Shared core/contracts contain no Tauri types. Rust generates `contracts/generated/v1.ts`; the browser-safe `nativeHost.ts` bridge uses that contract without importing an SDK. Requests have a version, correlation ID and strict bounded payload. Unknown fields, unsupported versions, forged sessions, untrusted origins and auxiliary windows are rejected.
 
-The application manifest explicitly registers protected commands. Only the main local window receives host-info, synthetic contract-probe and close-resolution permissions. No renderer filesystem, shell, dialog or remote-origin permissions are granted. The dialog plugin is used only by trusted Rust shutdown fallback code. CSP excludes remote scripts, frames and connections.
+The application manifest explicitly registers protected commands. Only the main local window receives host-info, synthetic contract-probe, close-resolution and the four database command permissions described below. No renderer filesystem, shell, dialog or remote-origin permissions are granted. The dialog plugin is used only by trusted Rust shutdown fallback code. CSP excludes remote scripts, frames and connections.
 
 Native close/quit requests reuse the existing unsaved-change confirmation. Cancel preserves edits; an unresponsive renderer receives a native warning before forced close. The fallback dialog's manual interaction remains unverified. Failed IPC disables the bridge while preserving mock mode; it never implies a real connection.
 
@@ -31,3 +31,11 @@ macOS ARM real native smoke previously completed in 609 ms; latest verification 
 Windows/Linux native execution, signed packaging, representative repeated startup/IPC benchmarks and OS-level fallback-dialog interaction remain pending. CI is prepared, not remotely executed.
 
 A full-lockfile dependency audit currently fails on transitive Linux GTK dependencies: [GLib RUSTSEC-2024-0429](https://rustsec.org/advisories/RUSTSEC-2024-0429) and [proc-macro-error RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370). GLib's fixed version is a different major API line; changing the lockfile alone cannot upgrade Tauri's GTK dependency graph. No advisory ignores or security exceptions have been added. M002 security acceptance and Linux distribution remain open pending a compatible upstream fix or an explicitly reviewed dependency patch. This does not affect the independently evaluated M001 core/contracts dependency graph.
+
+## M003 native binding verification
+
+The active connection dialog and existing SQL workspace use `connect_direct`, `read_only_query`, `disconnect_database` and `database_status`. All enforce the local main-window origin, native session identity and owned opaque handles. Connection/query admission is limited to 16 concurrent requests and eight logical pools. Shutdown rejects new work and awaits pool cleanup before exit. No secret-bearing request derives Debug; ordinary profile persistence excludes passwords, PEM contents and handles.
+
+Run `npm run test:native-database` with local Docker and Rust tooling. It provisions owned TLS fixtures and executes actual Tauri handlers (MockRuntime) against MySQL/MariaDB: exact raw values, duplicate labels, refusal, packet recovery and independent disconnect. This is real IPC-handler/database integration, not native WebView interaction.
+
+The browser suite has 21 scenarios, including two new Light/Dark live-bridge simulations exercising the actual UI, password/CA non-persistence, connection switching, SQL results/errors and narrow dialog actions. The real macOS smoke separately checks Wry startup and the mounted frontend. These three checks do **not** constitute a complete native GUI-to-real-database end-to-end test. Native GUI interaction, renderer-reload handle reconciliation, Windows/Linux execution, aggregate allocation profiles and indirect view/function trust remain open gates.

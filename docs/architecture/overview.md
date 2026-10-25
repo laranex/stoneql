@@ -1,6 +1,6 @@
 # Architecture overview
 
-**Status: production architecture remains proposed.** M001 foundation is committed; the M002 mock-only Tauri development host is verified on macOS, with cross-OS/security gates open. M003 runtime evaluation is implemented but not exposed to the UI. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
+**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
 
 ## Current system
 
@@ -34,7 +34,7 @@ Desktop targets macOS, Windows and Linux. A later standalone Axum binary serves 
 | Persistence | OS credential references; separate non-secret profiles | Server vault/key management needs threat review |
 | Jobs | In-process bounded queues | Durable resumable queue is a separate requirement |
 
-`crates/` contains shared core/contracts and the host-independent runtime evaluation. `apps/desktop/src-tauri/` contains the development host; `apps/server/` remains reserved. Split crates when ownership and compile dependencies justify it, rather than creating one crate per type. M001 should keep the domain/application core and wire-contract generation independent of both host frameworks; generated frontend contracts cannot introduce a Tauri dependency. Database adapters and connection transports remain separate extension boundaries. M001 introduced core/contracts and the driver lab; subsequent increments add the [desktop host](../development/desktop-host.md) and unexposed [connection runtime](../development/connection-lifecycle.md). See [driver evaluation](./driver-evaluation.md) for the historical M001 evidence.
+`crates/` contains shared core/contracts and the host-independent runtime evaluation. `apps/desktop/src-tauri/` contains the development host; `apps/server/` remains reserved. Split crates when ownership and compile dependencies justify it, rather than creating one crate per type. M001 should keep the domain/application core and wire-contract generation independent of both host frameworks; generated frontend contracts cannot introduce a Tauri dependency. Database adapters and connection transports remain separate extension boundaries. M001 introduced core/contracts and the driver lab; subsequent increments add the [desktop host](../development/desktop-host.md) and scoped [connection runtime](../development/connection-lifecycle.md). See [driver evaluation](./driver-evaluation.md) for the historical M001 evidence.
 
 ## Failure boundaries and risks
 

@@ -2,7 +2,7 @@
 
 **Database management, made familiar.**
 
-A compact phpMyAdmin-inspired Vue database client prototype. Browse, edit, SQL, database objects, connections and transfers use realistic session-only mock data. No production database connectivity or Axum backend is implemented. A Tauri development host preserves the session mocks. The approved M001 Rust foundation and isolated SQLx evaluation do not replace frontend mocks.
+A compact phpMyAdmin-inspired Vue database client prototype. Browse, edit, SQL, database objects, connections and transfers use realistic session-only mock data. No production database connectivity or Axum backend is implemented. A Tauri development host preserves session mocks and offers explicit Direct MySQL/MariaDB live read-only SQL profiles. The approved M001 Rust foundation and isolated SQLx evaluation do not replace frontend mocks.
 
 ## Run
 

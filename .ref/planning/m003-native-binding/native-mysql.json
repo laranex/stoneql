@@ -1,0 +1,10 @@
+{
+  "realDatabase": true,
+  "tauriMockRuntime": true,
+  "strictIpc": true,
+  "independentHandles": true,
+  "exactValues": true,
+  "readOnlyRefusal": true,
+  "packetRecovery": true,
+  "disconnect": true
+}
