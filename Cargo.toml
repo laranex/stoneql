@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["vendor/sqlx-mysql"]
 members = ["crates/dbadmin-core", "crates/dbadmin-contracts", "experiments/sqlx-spike", "apps/desktop/src-tauri", "crates/dbadmin-runtime"]
 default-members = ["crates/dbadmin-core", "crates/dbadmin-contracts"]
 
@@ -26,3 +27,6 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[patch.crates-io]
+sqlx-mysql = { path = "vendor/sqlx-mysql" }

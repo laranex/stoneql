@@ -1,19 +1,19 @@
 # SQLx receive-limit evaluation
 
-Status: isolated evaluation; **not adopted by the root workspace or native app**.
+Status: evaluated patch approved and adopted in the main runtime on 2026-10-25. This separate test harness now shares the reviewed source under `vendor/sqlx-mysql`; native live UI integration remains pending.
 
 ## Reproduce
 
-Requires the pinned Rust toolchain, Node 26, POSIX `tar` and `patch`.
+Requires the pinned Rust toolchain and Node 26.
 
 ```sh
 npm run test:receive-limit
 npm run test:receive-limit:live
 ```
 
-The live command additionally requires OpenSSL and a local Docker daemon. It reuses the owning M003 fixture runner, random loopback ports/identities and automatic cleanup. No saved profiles, arbitrary database URLs or nonlocal Docker contexts are used. Generated source is ignored under `driver/`; binaries are ignored under root `target/receive-limit/`. The independent Cargo.lock is tracked.
+The live command additionally requires OpenSSL and a local Docker daemon. It reuses the owning M003 fixture runner, random loopback ports/identities and automatic cleanup. No saved profiles, arbitrary database URLs or nonlocal Docker contexts are used. The old generated `driver/` copy is ignored and unused; binaries are ignored under root `target/receive-limit/`. The independent Cargo.lock is tracked.
 
-`tools/prepare-receive-limit.mjs` locates the pinned registry archive through root Cargo metadata, verifies its package SHA-256, extracts a private copy and applies `receive-limit.patch`. It checks the prepared tree before reuse and refuses to overwrite modifications. It never edits Cargo's registry cache or patches the root dependency graph.
+`tools/prepare-receive-limit.mjs` retains the original command entry point and verifies the approved vendored source through `tools/check-sqlx-vendor.mjs`. Fresh checkouts no longer require generated driver copies, tar or patch utilities. The source is tracked with package/patch/license fingerprints; Cargo's registry cache is never modified. See `docs/development/connection-lifecycle.md` and `vendor/sqlx-mysql/DBADMIN.md` for current adoption and maintenance rules.
 
 ## Change under evaluation
 
@@ -29,7 +29,7 @@ Oversize is a fixed protocol error. The connection must be discarded; consuming 
 
 On macOS ARM, two adversarial socket integration tests passed: an oversized first header without payload, and a continuation header exceeding the aggregate limit without its payload. All 31 upstream-copy library tests passed, including the added exact-boundary, aggregate, integer-overflow and legacy-default test. The evaluation crate passes all-target Clippy with warnings denied. The isolated 134-package advisory scan has no findings (it reports an unavailable local crates.io index; no advisory exceptions). Both MySQL 8.4.6 and MariaDB 11.4.8 TLS fixtures passed a 65,536-byte limit with an oversized row, hostname/CA rejection and a clean fresh connection afterward. Reports are in ignored `artifacts/m003/packet-*.json`, with safe copies in `.ref/planning/m003-packet-evidence/`.
 
-Remaining: production adoption/maintenance decision, runtime wiring, cross-OS execution, larger memory/latency profiles, expired certificate and broader codec/protocol regression coverage. Root SQLx and the completed Vue UI remain unchanged. M003 is not complete.
+The runtime now enables a 2 MiB logical packet cap and tests oversized responses plus recovery on both engines. Expired-certificate checks are covered by the lifecycle runner. Cross-OS execution, aggregate memory/latency profiles, broader codecs and native live UI binding remain open. M003 is not complete.
 
 ## Provenance and licensing
 

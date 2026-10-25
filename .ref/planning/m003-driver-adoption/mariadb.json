@@ -1,0 +1,21 @@
+{
+  "verifiedTls": true,
+  "runtimePacketLimitBytes": 2097152,
+  "oversizedPacketRejected": true,
+  "freshConnectionRecovery": true,
+  "serverExpiryCleanup": true,
+  "hostnameMismatchRejected": true,
+  "certificateReasonsVerified": true,
+  "readOnlyGuards": true,
+  "losslessRawValues": true,
+  "boundedResults": true,
+  "ownerIsolation": true,
+  "wrongPasswordRejected": true,
+  "untrustedCaRejected": true,
+  "engineMismatchRejected": true,
+  "capacityAndShutdown": true,
+  "lifecycleSamples": 100,
+  "p50Us": 5972,
+  "p95Us": 7222,
+  "maxUs": 7699
+}

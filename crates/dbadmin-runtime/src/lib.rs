@@ -71,6 +71,9 @@ impl DirectMySql {
             .database(&self.database)
             .ssl_mode(MySqlSslMode::VerifyIdentity)
             .statement_cache_capacity(0)
+            .max_receive_packet_size(
+                std::num::NonZeroUsize::new(2 * 1024 * 1024).expect("nonzero packet limit"),
+            )
             .timezone(None)
             .pipes_as_concat(false)
             .no_engine_substitution(false)

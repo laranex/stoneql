@@ -359,6 +359,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     registry.disconnect(owner, id).await?;
+    let packet_id = registry
+        .connect(owner, config(engine, port, password.clone(), ca.clone()))
+        .await?;
+    assert_eq!(
+        registry
+            .read_only(owner, packet_id, "SELECT payload FROM raw_large", limits)
+            .await,
+        Err(ReadError::PacketTooLarge)
+    );
+    let recovered = registry
+        .read_only(
+            owner,
+            packet_id,
+            "SELECT id FROM raw_values ORDER BY id",
+            limits,
+        )
+        .await?;
+    assert_eq!(recovered.rows.len(), 2);
+    registry.disconnect(owner, packet_id).await?;
     let mut samples = Vec::new();
     for _ in 0..100 {
         let start = Instant::now();
@@ -421,7 +440,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!registry.is_connected(other, two));
     samples.sort_unstable();
     println!(
-        "{{\"verifiedTls\":true,\"serverExpiryCleanup\":true,\"hostnameMismatchRejected\":true,\"certificateReasonsVerified\":true,\"readOnlyGuards\":true,\"losslessRawValues\":true,\"boundedResults\":true,\"ownerIsolation\":true,\"wrongPasswordRejected\":true,\"untrustedCaRejected\":true,\"engineMismatchRejected\":true,\"capacityAndShutdown\":true,\"lifecycleSamples\":100,\"p50Us\":{},\"p95Us\":{},\"maxUs\":{}}}",
+        "{{\"verifiedTls\":true,\"runtimePacketLimitBytes\":2097152,\"oversizedPacketRejected\":true,\"freshConnectionRecovery\":true,\"serverExpiryCleanup\":true,\"hostnameMismatchRejected\":true,\"certificateReasonsVerified\":true,\"readOnlyGuards\":true,\"losslessRawValues\":true,\"boundedResults\":true,\"ownerIsolation\":true,\"wrongPasswordRejected\":true,\"untrustedCaRejected\":true,\"engineMismatchRejected\":true,\"capacityAndShutdown\":true,\"lifecycleSamples\":100,\"p50Us\":{},\"p95Us\":{},\"maxUs\":{}}}",
         samples[50], samples[95], samples[99]
     );
     Ok(())

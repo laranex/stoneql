@@ -117,6 +117,8 @@ extendedKeyUsage = serverAuth
     writeFileSync(override, JSON.stringify({ services: { [engine]: { volumes: [`${exposed}:/dbadmin-tls:ro`], command: ['--ssl-ca=/dbadmin-tls/ca.pem', '--ssl-cert=/dbadmin-tls/server.pem', '--ssl-key=/dbadmin-tls/server-key.pem', '--require-secure-transport=ON'] } } }));
     writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE dbadmin_fixture_marker(id VARCHAR(64) PRIMARY KEY); INSERT INTO dbadmin_fixture_marker VALUES ('${marker}');
 SET SESSION sql_mode='';
+CREATE TABLE raw_large(payload LONGBLOB);
+INSERT INTO raw_large VALUES(REPEAT('x',3145728));
 CREATE TABLE raw_values(id INT PRIMARY KEY, s BIGINT, u BIGINT UNSIGNED, d DECIMAL(38,4), b VARBINARY(4), dt DATETIME(6), zd DATE, zt DATETIME, tm TIME(6), e ENUM('active','suspended'), txt VARCHAR(20), n VARCHAR(20));
 INSERT INTO raw_values VALUES (1,-9223372036854775808,18446744073709551615,123456789012345678901234567890.4500,0x00ff0180,'2024-02-29 12:34:56.123456','0000-00-00','0000-00-00 00:00:00','-26:03:04.123456','active','',NULL),(2,0,0,0,x'','2024-01-01','2024-01-01','2024-01-01','00:00:00','suspended','active',NULL);
 CREATE USER 'dbadmin_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON dbadmin_m001_fixture.* TO 'dbadmin_writer'@'%';

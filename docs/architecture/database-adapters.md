@@ -1,6 +1,6 @@
 # Database adapters
 
-**Status: production adoption remains gated.** M001 isolated SQLx experiments and an unexposed [M003 runtime evaluation](../development/connection-lifecycle.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
+**Status: scoped M003 driver adoption approved; broader capabilities remain gated.** M001 isolated SQLx experiments and an unexposed [M003 runtime evaluation](../development/connection-lifecycle.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
 
 ## Adapter contract
 
@@ -19,7 +19,7 @@ Indexes retain ordered columns, uniqueness, method, expression/predicate and eng
 
 ## Driver evaluation
 
-SQLx remains the **proposed shared driver**, not a production-approved dependency. Native PostgreSQL/MySQL drivers and rusqlite are fallback alternatives only after an evidenced capability gap and explicit exception decision. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove dbAdmin requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before approving the affected production capability. M001 records the evidence matrix; M003 adopts only the basic read-only subset, while M006 gates multiple result sets, routines, advanced transactions and cancellation. A documented API is not proof that our versions, raw-value fidelity and cleanup requirements work.
+SQLx 0.9.0 with the user-approved receive-limit patch is adopted for the tested M003 MySQL/MariaDB runtime subset. Broader engine/type/transaction support and release readiness remain gated. Native PostgreSQL/MySQL drivers and rusqlite are fallback alternatives only after an evidenced capability gap and explicit exception decision. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove dbAdmin requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before approving the affected production capability. M001 records the evidence matrix; M003 adopts only the basic read-only subset, while M006 gates multiple result sets, routines, advanced transactions and cancellation. A documented API is not proof that our versions, raw-value fidelity and cleanup requirements work.
 
 [SQLx raw SQL documentation](https://docs.rs/sqlx/latest/sqlx/fn.raw_sql.html) distinguishes raw statements from prepared parameterized queries; generated CRUD must retain bound values, and arbitrary script/routine behavior needs separate probes. Never infer safe concatenation or cross-engine atomicity from a generic execution API.
 

@@ -29,7 +29,7 @@ Desktop targets macOS, Windows and Linux. A later standalone Axum binary serves 
 | Concern | Proposed baseline | Alternative / approval gate |
 | --- | --- | --- |
 | Hosting | Desktop first; one server process later | Distributed services only with measured need |
-| Drivers | SQLx proposed; adopt only evidenced engine capabilities | Native-driver exceptions require a recorded capability gap and approval |
+| Drivers | SQLx receive-limit patch adopted for tested M003 MySQL/MariaDB subset; other capabilities remain gated | Native-driver exceptions require a recorded capability gap and approval |
 | Contracts | Rust-owned versioned wire DTOs with generated TypeScript; IPC/HTTP bindings | Generator, runtime validation and framing require approval/spikes |
 | Persistence | OS credential references; separate non-secret profiles | Server vault/key management needs threat review |
 | Jobs | In-process bounded queues | Durable resumable queue is a separate requirement |

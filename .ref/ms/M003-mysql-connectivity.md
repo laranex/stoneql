@@ -42,7 +42,7 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Safe raw summaries: `.ref/planning/m003-evidence/`. See `docs/development/connection-lifecycle.md`; debug microbenchmarks are not release gates.
 
 ## Receive-limit evaluation
-- Isolated patch (not root adoption) checks logical packet sizes before payload reads, including aggregate continuation size and arithmetic overflow. Root SQLx remains registry 0.9.0.
+- Initial isolated patch (before the adoption approval recorded below) checked logical packet sizes before payload reads, including aggregate continuation size and arithmetic overflow. At that evaluation checkpoint, root SQLx remained registry 0.9.0.
 - Two adversarial socket tests plus one upstream-copy boundary unit test passed. Both real TLS fixtures rejected oversized rows and hostname/untrusted-CA failures; fresh connections worked afterward. Prepared source/checksum provenance and MIT attribution retained.
 - Evidence in `.ref/planning/m003-packet-evidence/`; reproducible scripts `test:receive-limit` / `test:receive-limit:live`; source/diff in `experiments/sqlx-receive-limit/`.
 - Production patch adoption/maintenance, broader protocol/OS/memory profiles and native UI binding remain pending. No dependency exception or milestone completion inferred.
@@ -54,3 +54,9 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Fixed the effective-Docker-context guard to honor DOCKER_CONTEXT over DOCKER_HOST; both runner regressions refuse a remote context before container operations.
 - The expired MariaDB readiness observer uses only its authenticated container-local Unix socket, independently of dbAdmin's verified TCP rejection.
 - Safe summaries/checksums are retained separately under `.ref/planning/m003-lifecycle-hardening/`. Final checks are recorded in local progress. M003 remains in progress: production receive-limit adoption, native binding, OS/profile coverage and indirect function/view trust are not accepted by this increment.
+
+## Approved receive-limit adoption
+- User explicitly approved the tested patch for the main runtime on 2026-10-25 (“do it”). D002 records its limited scope; no release/security/OS waiver.
+- Root Cargo patch points to reviewed, MIT-attributed SQLx MySQL 0.9.0 source. Core/contracts still import no driver/runtime/host framework. Source/provenance drift checks run in CI.
+- Runtime cap: 2 MiB per logical incoming packet, independent of 1 MiB result serialization. Oversize produces `PacketTooLarge`, discards the physical connection and does not retry SQL. Fixture regression selects a 3 MiB stored value and then verifies a subsequent small query on a fresh connection.
+- Packet tests share the same source as the runtime. Full memory/metadata profiles, native binding and other acceptance gates remain open; M003 not complete.

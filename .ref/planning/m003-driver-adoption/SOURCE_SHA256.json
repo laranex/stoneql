@@ -1,0 +1,11 @@
+{
+  "Cargo.toml": "0457e69257671b2c82b441edf81397c39f7762cb9a47287ca94b98d86def3351",
+  "Cargo.lock": "6c02f19843e323ad325fadff6a285783bba705ecb9f45c2a3489bda988f5d931",
+  ".gitattributes": "e3079fd6a39d18190212c3ee9895ce621b1ce7f2a5ef5c000620405d016bff78",
+  "crates/dbadmin-runtime/src/lib.rs": "c7743fd6d604fd5a7fefb0bd89ab72c9a0d198f7b65c2568651fd9e19c1181b5",
+  "crates/dbadmin-runtime/src/read_only.rs": "1fe9e3b153e21b89504ecb228a6c3145555993012fda3ca658b37f0a63d9c306",
+  "crates/dbadmin-runtime/examples/lifecycle.rs": "224e1b70f8a24a90e96f209e3135a6d9b2d172c3c4cf5367bd7e651d6fd7e324",
+  "tools/check-sqlx-vendor.mjs": "adb5f228ab0c76f35f6a5de0f4d753bcc4cb0e0e804afe3b3b81a885112c59a0",
+  "vendor/sqlx-mysql/dbadmin-provenance.json": "68499650356baf442cc130553c410f911ca6c0b51d925d0b750d50050bb4842b",
+  "tests/sqlx-vendor.test.mjs": "ed19f1b7ba4a0e718ea7dd51cdf40894994635ecdd70e06ee37e85f880a9bb2b"
+}

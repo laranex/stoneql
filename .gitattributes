@@ -1,0 +1,8 @@
+
+# Preserve reviewed source/patch bytes for cross-platform provenance checks.
+/vendor/sqlx-mysql/** -text
+/experiments/sqlx-receive-limit/receive-limit.patch -text
+/experiments/sqlx-receive-limit/SQLX-LICENSE-MIT -text
+# Keep the two upstream whitespace quirks byte-identical; provenance checks cover these files.
+/vendor/sqlx-mysql/src/types/str.rs whitespace=-blank-at-eol
+/vendor/sqlx-mysql/src/testing/mod.rs whitespace=-blank-at-eol

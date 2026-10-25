@@ -7,7 +7,7 @@ Revision 2026-10-25. The user approved the revised roadmap/M001 and subsequently
 | ID | Decision / recommendation | Status and evidence gate |
 | --- | --- | --- |
 | D001 | Framework-independent core/contracts; separate IPC/HTTP adapters and engine/transport boundaries | Approved M001 boundary; core/contracts implemented and transitive host/driver/runtime checks passed; no Tauri/Axum types in shared crates |
-| D002 | **SQLx remains proposed**; native drivers are exceptions, not equal default choices | Evaluation authorized only: SQLx 0.9.0 has 28 passing live assertions and explicit limits. Production adoption remains unapproved; trusted TLS, exhaustive raw types, pool/transaction/permission semantics need later evidence |
+| D002 | SQLx 0.9.0 with the scoped MySQL receive-limit patch | User approved adoption (“do it”, 2026-10-25) after reviewing the tested patch. Root runtime enables a 2 MiB logical packet cap; vendored provenance/license and CI drift checks retained. This approves the patch mechanism, not unverified engines/types, server security, OS compatibility or release readiness |
 | D003 | Rust-owned v1 wire DTOs generate TypeScript; deterministic regeneration and runtime validation at boundaries | Approved direction implemented with ts-rs 12.0.1 and strict v1 serde/golden/TS fixtures. Foundation tool choice verified locally; evolving compatibility/host validation remains reviewable |
 | D004 | Principal-owned pools, leases and schema generations | Recommendation; M003-L lifecycle proof before M005, M006 advanced jobs/transactions/cache; no cross-principal/session leakage |
 | D005 | OS secret references on desktop; separately approved server vault | Recommendation; desktop provider gates M005, server vault gates M008/M011 and never desktop progress |
@@ -53,3 +53,11 @@ Unresolved later gates are intentionally separate: desktop OS secret provider/SS
 ## Continuation authorization
 
 The user instructed “commit and continue all ms” after receiving the M001 results. This authorizes local commits and implementation of the revised roadmap, including M002 onward. It does not waive unexecuted acceptance tests, automatically certify SQLx for untested capabilities, provide signing/server identity configuration, or authorize pushing, publishing or deployment. Use the documented recommendations for reversible implementation choices and record evidence/deviations. External release prerequisites remain explicit gates.
+
+## D002 scoped receive-limit adoption approval
+
+- Approver: user in this conversation, “do it”, responding to the explicit request to adopt the tested receive-limit patch in the main runtime before live UI integration.
+- Scope: root `[patch.crates-io]` for SQLx MySQL 0.9.0; reviewed source under `vendor/sqlx-mysql`, MIT selection with complete upstream grant/attribution; runtime logical-packet cap 2 MiB. Other SQLx consumers retain the upstream default unless opting into the limit.
+- Mechanism: incoming headers/continuations checked before payload reads; oversized connections discarded, clear runtime error, fresh physical connection on subsequent work. No automatic retry of failed SQL.
+- Maintenance: provenance checked by `npm run rust:vendor` and CI; advisory review and complete affected test matrix on upgrades; remove fork when a compatible upstream API meets the same tests. Shared Rust core/contracts remain host/driver independent.
+- Not approved by this decision: production release, signing/deployment, complete RSS/metadata bounds, arbitrary SQL sandboxing, all codecs/engines/platforms, or waivers for the existing Linux GTK advisories. M003 live binding and other gates remain separate work.

@@ -23,6 +23,7 @@ pub enum ReadError {
     Timeout,
     Database,
     ResultTooWide,
+    PacketTooLarge,
 }
 impl std::fmt::Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,11 +33,23 @@ impl std::fmt::Display for ReadError {
             Self::Connection(_) => "Connection is not available to this session.",
             Self::Timeout => "Query deadline exceeded; server cancellation is unconfirmed.",
             Self::Database => "The database rejected or could not complete the query.",
+            Self::PacketTooLarge => "The database response exceeded the incoming packet limit; its connection was discarded.",
             Self::ResultTooWide => "Result metadata exceeds the configured byte limit.",
         })
     }
 }
 impl std::error::Error for ReadError {}
+fn driver_error(error: sqlx::Error) -> ReadError {
+    match error {
+        sqlx::Error::Protocol(message)
+            if message == "receive packet exceeds configured byte limit" =>
+        {
+            ReadError::PacketTooLarge
+        }
+        _ => ReadError::Database,
+    }
+}
+
 impl Connections {
     pub async fn read_only(
         &self,
@@ -66,20 +79,20 @@ impl Connections {
                 .ok_or(ReadError::Connection(LifecycleError::Forbidden))?
         };
         tokio::time::timeout(limits.deadline, async {
-            let mut connection = pool.acquire().await.map_err(|_| ReadError::Database)?;
+            let mut connection = pool.acquire().await.map_err(driver_error)?;
             // Discard even successful connections: no caller-controlled session state is reused.
             // On timeout/error the socket is closed, never returned with an uncertain transaction.
             connection.close_on_drop();
             sqlx::raw_sql("START TRANSACTION READ ONLY")
                 .execute(&mut *connection)
                 .await
-                .map_err(|_| ReadError::Database)?;
+                .map_err(driver_error)?;
             // This is the complete, explicitly requested SQL-editor statement, never a
             // generated query containing interpolated data. The refusal policy ran above.
             let statement = connection
                 .prepare(sqlx::AssertSqlSafe(sql).into_sql_str())
                 .await
-                .map_err(|_| ReadError::Database)?;
+                .map_err(driver_error)?;
             let columns: Vec<_> = statement
                 .columns()
                 .iter()
@@ -104,7 +117,7 @@ impl Connections {
             }
             {
                 let mut rows = statement.query().persistent(false).fetch(&mut *connection);
-                while let Some(row) = rows.try_next().await.map_err(|_| ReadError::Database)? {
+                while let Some(row) = rows.try_next().await.map_err(driver_error)? {
                     if result.rows.len() == limits.rows {
                         result.truncated = true;
                         break;
@@ -126,7 +139,7 @@ impl Connections {
             }
             // Closing also rolls back this private safety transaction. Never expose a lease.
             // No need to drain an oversized stream or reuse its protocol state.
-            connection.close().await.map_err(|_| ReadError::Database)?;
+            connection.close().await.map_err(driver_error)?;
             Ok(result)
         })
         .await
@@ -416,6 +429,20 @@ fn temporal(kind: &str, bytes: &[u8]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn packet_limit_errors_are_distinct_and_other_driver_details_remain_private() {
+        assert_eq!(
+            driver_error(sqlx::Error::Protocol(
+                "receive packet exceeds configured byte limit".into()
+            )),
+            ReadError::PacketTooLarge
+        );
+        let error = driver_error(sqlx::Error::Protocol(
+            "synthetic private SQL or connection details".into(),
+        ));
+        assert_eq!(error, ReadError::Database);
+        assert!(!error.to_string().contains("private"));
+    }
     #[test]
     fn select_subset_accepts_joins_aggregates_and_quoted_data() {
         for sql in [

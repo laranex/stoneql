@@ -1,0 +1,8 @@
+{
+  "verifiedTls": true,
+  "packetLimitBytes": 65536,
+  "oversizedTlsRowRejected": true,
+  "hostnameMismatchRejected": true,
+  "untrustedCaRejected": true,
+  "freshConnectionAfterRejection": true
+}

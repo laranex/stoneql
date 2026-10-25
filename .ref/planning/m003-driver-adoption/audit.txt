@@ -1,0 +1,20 @@
+      Loaded 1352 security advisories (from /private/tmp/dbadmin-m001-advisory-db)
+warning: couldn't open crates.io index: registry: No such file or directory (os error 2)
+    Scanning Cargo.lock for vulnerabilities (498 crate dependencies)
+Crate:     proc-macro-error
+Version:   1.0.4
+Warning:   unmaintained
+Title:     proc-macro-error is unmaintained
+Date:      2024-09-01
+ID:        RUSTSEC-2024-0370
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0370
+
+Crate:     glib
+Version:   0.18.5
+Warning:   unsound
+Title:     Unsoundness in `Iterator` and `DoubleEndedIterator` impls for `glib::VariantStrIter`
+Date:      2024-03-30
+ID:        RUSTSEC-2024-0429
+URL:       https://rustsec.org/advisories/RUSTSEC-2024-0429
+
+error: 2 denied warnings found!

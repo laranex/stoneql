@@ -6,7 +6,7 @@ rust-version = "1.99.1"
 license = "MIT"
 publish = false
 
-# Isolated evaluation: the main workspace retains the unmodified registry driver.
+# Separate test harness sharing the approved, provenance-checked source.
 [workspace]
 
 [dependencies]
@@ -14,4 +14,4 @@ sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-toki
 tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [patch.crates-io]
-sqlx-mysql = { path = "driver" }
+sqlx-mysql = { path = "../../vendor/sqlx-mysql" }
