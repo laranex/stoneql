@@ -1,7 +1,7 @@
 # M004 — PostgreSQL and SQLite adapters
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Extend the verified lifecycle/basic read-only slice to PostgreSQL and SQLite. Preserve engine-specific capabilities and typed values; advanced schema/object workflows remain M006.

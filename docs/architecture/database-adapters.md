@@ -1,6 +1,6 @@
 # Database adapters
 
-**Status: production adapters proposed / unapproved.** M001 isolated SQLx experiments are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
+**Status: production adoption remains gated.** M001 isolated SQLx experiments and an unexposed [M003 runtime evaluation](../development/connection-lifecycle.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
 
 ## Adapter contract
 

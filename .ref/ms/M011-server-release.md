@@ -1,7 +1,7 @@
 # M011 — Server Release
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Separate future Linux server distribution: standalone binary/systemd first, optional restricted Docker. No dependency on completing desktop distribution.

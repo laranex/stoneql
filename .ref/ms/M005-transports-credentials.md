@@ -1,7 +1,7 @@
 # M005 — SSH and secure credentials
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Desktop secret references and Direct/SSH transport integration; allow work as soon as connection ownership/cleanup is stable. Do not implement Teleport, SSM or a server vault here.

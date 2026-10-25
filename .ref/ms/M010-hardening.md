@@ -1,7 +1,7 @@
 # M010 — Continuous hardening and release evidence
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Add adversarial, performance, recovery and compatibility evidence continuously. Do not defer security/integrity tests or couple desktop and server release completion.

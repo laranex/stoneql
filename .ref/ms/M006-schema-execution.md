@@ -1,7 +1,7 @@
 # M006 — Advanced SQL, schema metadata and integrity
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Own advanced query jobs, streaming/batches, multiple result sets, transaction leases, cancellation, object/schema management and introspection/cache lifecycle. Extend M003 read-only results rather than replacing its working path.

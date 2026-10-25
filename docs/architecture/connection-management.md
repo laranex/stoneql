@@ -1,6 +1,6 @@
 # Connection management
 
-**Status: Proposed / awaiting approval.** Profile/group UI exists; actual pools and tunnels do not.
+**Status: partially implemented evaluation.** Profile/group UI uses mocks. The unexposed [M003 runtime](../development/connection-lifecycle.md) has owner-scoped MySQL/MariaDB pools, TLS, expiry and shutdown tests. Native live-connection binding, credentials and tunnels remain unimplemented.
 
 ## Identity and ownership
 

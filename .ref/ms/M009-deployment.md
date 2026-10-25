@@ -1,7 +1,7 @@
 # M009 — Desktop Release
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Signed desktop distribution for macOS, Windows and Linux. This retains the M009 specification path while separating all server packaging into M011.

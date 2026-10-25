@@ -39,4 +39,4 @@ The desktop development host is documented in [Desktop development](docs/develop
 
 The [preserved prototype reference](docs/development/prototype-reference.md) retains the previous detailed workflow documentation. Advanced autocomplete helpers are not all integrated; see the SQL guide rather than assuming helper existence proves support.
 
-Architecture is **proposed, awaiting approval**. No commit implies backend design approval. Documentation publishing requires an explicit manual deployment; no site has been published.
+The revised roadmap and local milestone continuation are authorized. Detailed production driver/security/release decisions remain gated; no commit certifies unverified capabilities. Documentation publishing requires an explicit manual deployment; no site has been published.

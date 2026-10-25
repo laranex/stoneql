@@ -1,7 +1,7 @@
 # M008 — Authenticated Axum server
 
 ## Status
-Proposed / awaiting approval. No backend implementation authorized by this document.
+Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Future standalone Axum host and authenticated HTTP binding of the same core. It is not a desktop release dependency.
