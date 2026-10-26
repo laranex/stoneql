@@ -3,14 +3,18 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
+import { parseMaximumRss } from './resource-report.mjs';
+import { cpus, totalmem, release, arch } from 'node:os';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
+const resourceEvaluation = process.argv.slice(2).includes('--resource-profile');
+if(resourceEvaluation && !['darwin','linux'].includes(process.platform))throw Error('Resource profiling requires macOS or Linux');
 const nativeEvaluation = process.argv.slice(2).includes('--native-ipc');
-if(packetEvaluation && nativeEvaluation)throw Error('Choose a single fixture mode');
+if([packetEvaluation,nativeEvaluation,resourceEvaluation].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
 let nativeBinary;
-if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc'].includes(argument))) throw Error('Unknown fixture option');
+if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile'].includes(argument))) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
   const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 240_000 });
   if (result.status !== 0 || result.error) {
@@ -23,7 +27,9 @@ function run(command, args, env = base) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
-if(nativeEvaluation){
+if(resourceEvaluation){
+  run('cargo',['build','--locked','-p','stoneql-runtime','--example','resources']);
+} else if(nativeEvaluation){
   const artifacts=run('cargo',['test','--locked','-p','stoneql-desktop','--features','custom-protocol','--test','live_database','--no-run','--message-format=json']);
   nativeBinary=artifacts.split('\n').map(line=>JSON.parse(line)).find(message=>message.reason==='compiler-artifact'&&message.target.name==='live_database'&&message.executable)?.executable;
   if(!nativeBinary)throw Error('Native fixture test binary missing');
@@ -96,7 +102,7 @@ authorityKeyIdentifier = keyid:always
     run('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(tls, 'server-key.pem'), '-out', join(tls, 'server.csr'), '-subj', '/CN=localhost']);
     writeFileSync(join(tls, 'extensions.cnf'), 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n');
     run('openssl', ['x509', '-req', '-in', join(tls, 'server.csr'), '-CA', join(tls, 'ca.pem'), '-CAkey', join(tls, 'ca-key.pem'), '-CAcreateserial', '-out', join(tls, 'server.pem'), '-days', '1', '-extfile', join(tls, 'extensions.cnf')]);
-    if (!packetEvaluation && !nativeEvaluation) {
+    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation) {
       mkdirSync(join(tls, 'issued'));
       writeFileSync(join(tls, 'index.txt'), '');
       writeFileSync(join(tls, 'serial'), '1000\n');
@@ -144,16 +150,24 @@ CREATE SQL SECURITY INVOKER VIEW trust_safe_view AS SELECT id,txt FROM raw_value
 CREATE SQL SECURITY DEFINER VIEW trust_lock_view AS SELECT GET_LOCK('stoneql_${marker}',0) AS acquired;
 CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
+    if(resourceEvaluation){
+      writeFileSync(join(init,'002-resource.sql'),`CREATE TABLE resource_digit(n INT PRIMARY KEY); INSERT INTO resource_digit VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE resource_rows(id INT PRIMARY KEY,payload VARCHAR(1024) NOT NULL) ENGINE=InnoDB;
+INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT('r',1024) FROM resource_digit a CROSS JOIN resource_digit b CROSS JOIN resource_digit c CROSS JOIN resource_digit d CROSS JOIN resource_digit e;`);
+    }
     started = true;
     run('docker', [...args, 'up', '-d', engine], env);
     await waitForFixture();
-    const binary = nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
-    const result = run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
+    const binary = resourceEvaluation ? 'target/debug/examples/resources' : nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
+    const measured = resourceEvaluation ? spawnSync('/usr/bin/time',[process.platform==='darwin'?'-l':'-v',resolve(root,binary)],{cwd:root,env,encoding:'utf8',timeout:240000}) : null;
+    if(measured && (measured.status!==0||measured.error))throw Error('Resource fixture execution failed; credentials and raw errors withheld');
+    const result = measured ? measured.stdout.trim() : run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
     const report = JSON.parse(nativeEvaluation ? result.split('\n').find(line=>line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null' : result);
-    if(!report)throw Error('Native fixture report missing');
-    writeFileSync(join(output, `${nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
-    console.log(nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
-    if (!packetEvaluation && !nativeEvaluation) {
+    if(!report)throw Error('Fixture report missing');
+    if(measured){report.processMaxRssBytes=parseMaximumRss(measured.stderr,process.platform);report.machine={platform:process.platform,arch:arch(),osRelease:release(),cpu:cpus()[0]?.model,logicalCpus:cpus().length,totalMemoryBytes:totalmem()};}
+    writeFileSync(join(output, `${resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
+    console.log(resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
+    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation) {
       run('docker', [...args, 'stop', engine], env);
       writeFileSync(join(exposed, 'server.pem'), readFileSync(join(tls, 'expired-server.pem')));
       run('docker', [...args, 'up', '-d', '--force-recreate', engine], env);
@@ -179,7 +193,7 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT 
         rmSync(temp, { recursive: true, force: true });
       } finally {
         cleanup.temporaryRemoved = !existsSync(temp);
-        writeFileSync(join(output, `${nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
+        writeFileSync(join(output, `${resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
       }
     }
   }

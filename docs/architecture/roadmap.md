@@ -68,9 +68,9 @@ Every relevant milestone must carry these gates and its own feature-specific tes
 | G5 Reliability | Timeout/disconnect/shutdown/failure injection; bounded cleanup, no cross-session leaks or automatic mutation retry; accurate partial/unknown outcomes |
 | G6 Packaging | Per-track artifact checksums, install/upgrade/rollback/uninstall, applicable signing/notarization verification, SBOM/license and secret scans; restore/rollback drills |
 
-### Proposed measurement profile — not approved or measured
+### Proposed release measurement profile — numerical budgets not approved
 
-These are reviewable starting budgets, not existing product guarantees. M001 first records the exact reference OS/CPU (at least 4 cores), RAM (8 GiB), SSD, toolchain/engine versions and local disposable DB RTT (at most 5 ms). Cross-OS runners are separately recorded. No production credentials or databases are used.
+These are reviewable starting budgets, not existing product guarantees. Local M003 [runtime resource profiles](../development/resource-profiles.md) now measure a subset; they exclude native IPC/renderer overhead and do not satisfy the full release gates. M001 first records the exact reference OS/CPU (at least 4 cores), RAM (8 GiB), SSD, toolchain/engine versions and local disposable DB RTT (at most 5 ms). Cross-OS runners are separately recorded. No production credentials or databases are used.
 
 | Measurement | Proposed threshold / reproducible workload | First owner |
 | --- | --- | --- |

@@ -36,6 +36,7 @@
     "test:receive-limit": "node tools/prepare-receive-limit.mjs && cargo test --locked --manifest-path experiments/sqlx-receive-limit/Cargo.toml --target-dir target/receive-limit && cargo test --locked --manifest-path experiments/sqlx-receive-limit/Cargo.toml --target-dir target/receive-limit -p sqlx-mysql receive_limit_tests",
     "test:receive-limit:live": "node tools/prepare-receive-limit.mjs && node tools/test-connection-lifecycle.mjs --packet-limit",
     "rust:vendor": "node tools/check-sqlx-vendor.mjs",
-    "test:native-database": "node tools/test-connection-lifecycle.mjs --native-ipc"
+    "test:native-database": "node tools/test-connection-lifecycle.mjs --native-ipc",
+    "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile"
   }
 }

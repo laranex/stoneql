@@ -1,0 +1,9 @@
+{
+  "crates/stoneql-runtime/examples/resources.rs": "0b1aa3ee93f97ddcec0c4760248007fd8efbbbd56a2051c57442ab9e0bce0519",
+  "tools/test-connection-lifecycle.mjs": "940d878949a26b03c1b88a9cd71eee430e973614807a996c9bfb8b80fd377d2d",
+  "tools/resource-report.mjs": "9d763e75b1d8644a086534c94f218288731548c2f1fd966d3524fb841ff2968c",
+  "tests/resource-report.test.mjs": "2a5bd0a1e77bd97fba0e5bc047660b30dc9979d2126f921db87706dc4f41bd96",
+  "tests/fixture-cleanup.test.mjs": "327cf111a1ec949026432a0d9f4f729859edcc952f30f5d556d5d0eb031071dc",
+  "tests/fixture-readiness.test.mjs": "f804d49bc7ff37d9a9e6ddb3d0f79c94c4278fd77495015eb609fb70308341c8",
+  "crates/stoneql-runtime/src/read_only.rs": "c735068b050f48aa969dddec544e684cf014cf119514ba28bfb402f25830ce7f"
+}

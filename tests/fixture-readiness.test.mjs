@@ -10,7 +10,7 @@ test('lifecycle fixture waits for final TCP startup after the init-server marker
   const workspace=join(temp,'workspace');const scratch=join(temp,'scratch');
   mkdirSync(join(workspace,'tools'),{recursive:true});mkdirSync(scratch);
   try {
-    for(const name of ['test-connection-lifecycle.mjs','fixture-environment.mjs'])copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
+    for(const name of ['test-connection-lifecycle.mjs','fixture-environment.mjs', 'resource-report.mjs'])copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
     const prefix=`#!${process.execPath}\nimport * as fs from 'node:fs';\nimport {join} from 'node:path';\nconst root=process.cwd();const args=process.argv.slice(2);\n`;
     writeFileSync(join(temp,'cargo'),prefix+`
 fs.mkdirSync(join(root,'target/debug/examples'),{recursive:true});

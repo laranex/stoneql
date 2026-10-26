@@ -46,3 +46,5 @@ Additional live checks now verify hostname mismatch, a valid but untrusted v3 CA
 Earlier CA tests using LibreSSL defaults could reject a version-1 root certificate before issuer validation. Explicit v3 CAs now establish the intended untrusted-issuer test. Historical reports are retained; current hardening evidence is separate under `.ref/planning/m003-lifecycle-hardening/`.
 
 Native binding is implemented and separate [read-only trust tests](./read-only-safety.md) cover indirect fixture writes and advisory-lock cleanup. Full native GUI/OS/version compatibility, general hostile view/UDF safety and representative aggregate performance/memory profiles remain pending. M003 and its lifecycle checkpoint are not marked complete.
+
+`npm run test:resources` adds the owned 100,000-row/indexed-SELECT, wide metadata and eight-concurrent-result profile. See [measurement scope and remaining allocation risks](./resource-profiles.md). It measures the existing approved driver without claiming an aggregate metadata cap or release performance sign-off.

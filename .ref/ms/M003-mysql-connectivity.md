@@ -86,3 +86,11 @@ Verification: 151 JavaScript tests, 30 default Rust tests, 21 browser scenarios,
 - Tests cover registry reset/re-registration, native stale probes and real both-engine idle-session closure, old token/handle rejection and eight-slot reuse. Actual graphical reload/cross-OS, aggregate resource profiles and hostile UDF/external effects remain open; no milestone completion inferred.
 
 Verified local record: `.ref/planning/m003-renderer-reload/` (checks executed2026-10-25, reviewed after pause2026-10-26):155 JS tests,33 default Rust tests,22 browser scenarios, both real TLS handler fixtures, formatting/Clippy/contracts/boundaries/provenance and frontend/native/docs builds passed. Initial real macOS smoke948ms; no graphical live-database reload or cross-OS acceptance claimed.
+
+## Runtime resource characterization
+
+- Opt-in `test:resources` provisions 100,000 1 KiB rows per owned TLS fixture, verifies PRIMARY range planning, records 100 200-row SELECT/serialization samples and observes standalone runtime RSS.
+- Tests 16–2048-column empty metadata, explicit 128-byte metadata rejection/fresh-query recovery, and eight simultaneous row-boundary-truncated results under independent 1 MiB allowances. Records CPU/OS/RAM/tooling context, raw timings and cleanup; no credentials or original query data.
+- Release numerical thresholds remain unapproved. This is debug runtime+JSON, excluding Tauri/WebView and Docker server memory. Existing packet cap does not bound cumulative driver descriptors; hostile metadata/protocol, native GUI/OS coverage and external/UDF gates remain open. No driver patch/adoption, production query behavior change or M003 completion.
+
+Safe executed report: `.ref/planning/m003-resource-profile/` (2026-10-26). Both profiles passed; local debug runtime+JSON p95 MySQL14.583ms/MariaDB14.252ms, peak standalone RSS23.375/22.875MiB.157 JS/33 Rust tests and build/lint/contracts/boundaries/vendor/docs checks passed. Numerical budgets remain proposed and full native/aggregate-memory acceptance is open.

@@ -22,7 +22,7 @@ for (const {script,stage} of cases) test(`${script}: ${stage} failure removes pr
   try {
     copyFileSync(resolve(import.meta.dirname,'../Cargo.lock'),join(workspace,'Cargo.lock'));
     // Run exact source copies so synthetic failure tests cannot overwrite real fixture evidence.
-    for (const name of [script, 'fixture-environment.mjs']) copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
+    for (const name of [script, 'fixture-environment.mjs', 'resource-report.mjs']) copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
     for (const command of ['docker', 'cargo', 'rustc', 'openssl']) {
       writeFileSync(join(temp, command), `#!${process.execPath}
 import {appendFileSync,writeFileSync} from 'node:fs';
