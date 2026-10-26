@@ -1,6 +1,6 @@
 {
   "identifier": "main-window",
-  "description": "Local main-window protocol, confirmed close and bounded Direct read-only database commands. No filesystem, shell, renderer native-dialog or remote-origin grants.",
+  "description": "Local main-window protocol, confirmed close, bounded Direct read-only database commands and a native-owned SQLite file picker. No filesystem, shell, renderer native-dialog or remote-origin grants.",
   "windows": [
     "main"
   ],
@@ -11,6 +11,8 @@
     "allow-connect-direct",
     "allow-read-only-query",
     "allow-disconnect-database",
-    "allow-database-status"
+    "allow-database-status",
+    "allow-pick-sqlite-file",
+    "allow-connect-sqlite"
   ]
 }

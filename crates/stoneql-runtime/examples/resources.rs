@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 use stoneql_core::Engine;
-use stoneql_runtime::{Connections, DirectMySql, OwnerId, QueryLimits, ReadError};
+use stoneql_runtime::{Connections, DirectServer, OwnerId, QueryLimits, ReadError};
 use tokio::{sync::Barrier, task::JoinSet};
 fn rss_bytes() -> Result<u64, Box<dyn std::error::Error>> {
     let output = Command::new("/bin/ps")
@@ -85,7 +85,7 @@ async fn profile() -> Result<(), Box<dyn std::error::Error>> {
             registry
                 .connect(
                     owner,
-                    DirectMySql {
+                    DirectServer {
                         engine,
                         host: "127.0.0.1".into(),
                         port,

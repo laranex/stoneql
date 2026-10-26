@@ -40,3 +40,12 @@ test('live preference migration never persists credentials, CA content or runtim
  for(const secret of ['synthetic-password','synthetic-public-ca','not-allowed'])assert.ok(!serialized.includes(secret));
  assert.equal(loadConnectionPreferences({getItem:()=>JSON.stringify(connections)},connections).connections[0]!.mode,undefined);
 });
+test('live PostgreSQL uses the network engine id and SQLite requires a native grant',async()=>{
+ const f=fixture();await bootstrapNativeHost(f.global);
+ await openLive({...profile,engine:'PostgreSQL',port:5432});
+ assert.equal(f.calls.find(c=>c.command==='connect_direct')!.payload.engine,'postgresql');
+ await assert.rejects(openLive({...profile,engine:'SQLite'}),/Choose the SQLite file again/);
+ assert.ok(!f.calls.some(c=>c.command==='connect_sqlite'));
+ await assert.rejects(openLive({...profile,engine:'PostgreSQL',transport:{type:'ssh',host:'h',port:22,user:'u',auth:'agent'}}),/support Direct/);
+ await bootstrapNativeHost({});
+});

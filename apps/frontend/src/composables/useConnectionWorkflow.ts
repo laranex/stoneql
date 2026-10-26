@@ -1,6 +1,6 @@
 import { ref, type Ref } from 'vue';
 import { useWorkspace } from '../stores/workspace';
-import { openLive, closeLive, liveSupported } from '../services/liveConnections';
+import { openLive, closeLive, liveSupported, pickSqliteFile } from '../services/liveConnections';
 import { hostState } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
@@ -103,6 +103,17 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if(connectionDraft.value===draft)draft.rootCertificatePem=pem;
     }catch{connectionError.value='The selected CA certificate could not be read.';}
   }
+  async function chooseSqliteFile() {
+    const draft=connectionDraft.value;
+    if(!draft||testing.value)return;
+    connectionError.value='';
+    testing.value=true;
+    try {
+      const selected=await pickSqliteFile();
+      if(selected.grant&&connectionDraft.value===draft){draft.sqliteGrant=selected.grant;draft.database=selected.fileName||'';testMessage.value='';}
+    }catch(error){connectionError.value=(error as Error).message;}
+    finally{testing.value=false;}
+  }
   async function testConnection() {
     if (!connectionDraft.value) return;
     testing.value = true;
@@ -110,7 +121,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if(connectionDraft.value.mode==='live') {
         const info=await openLive(connectionDraft.value);
         await closeLive(info.handle);
-        testMessage.value=`Verified TLS connection successful · ${info.engineVersion} · Test session closed.`;
+        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':'Verified TLS connection successful'} · ${info.engineVersion} · Test session closed.`;
         testOk.value=true;
       } else {
         const result=await mockTransport.test(connectionDraft.value);
@@ -120,7 +131,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     finally{testing.value=false;}
   }
   async function saveLiveConnection(draft: Connection, connectNow: boolean) {
-    if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database){connectionError.value='Live connections require the desktop app, Direct MySQL/MariaDB and a database name.';return;}
+    if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database||(draft.engine==='SQLite'&&!draft.sqliteGrant)){connectionError.value=draft.engine==='SQLite'?'Live SQLite requires the desktop app and a file chosen with Choose file.':'Live connections require the desktop app, Direct MySQL, MariaDB or PostgreSQL and a database name.';return;}
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
@@ -137,7 +148,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if(connectNow)await store.connectLiveProfile(draft);
       draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
-      notify(connectNow?'Live read-only connection opened over verified TLS.':'Live profile saved; connect explicitly before executing SQL.');
+      notify(connectNow?(draft.engine==='SQLite'?'Live read-only SQLite file opened.':'Live read-only connection opened over verified TLS.'):'Live profile saved; connect explicitly before executing SQL.');
     }catch(error){connectionError.value=(error as Error).message;}
     finally{testing.value=false;}
   }
@@ -190,7 +201,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
     testing, testMessage, testOk,
-    newConnection, closeConnectionDialog, changeTransport, readCertificate,
+    newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
     testConnection, saveConnection, removeConnection, closeConnection,
   };
 }

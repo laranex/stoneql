@@ -37,6 +37,7 @@
     "test:receive-limit:live": "node tools/prepare-receive-limit.mjs && node tools/test-connection-lifecycle.mjs --packet-limit",
     "rust:vendor": "node tools/check-sqlx-vendor.mjs",
     "test:native-database": "node tools/test-connection-lifecycle.mjs --native-ipc",
+    "test:native-postgres": "node tools/test-postgres-fixture.mjs",
     "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile"
   }
 }

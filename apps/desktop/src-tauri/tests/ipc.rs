@@ -185,6 +185,8 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
         "read_only_query",
         "disconnect_database",
         "database_status",
+        "pick_sqlite_file",
+        "connect_sqlite",
     ] {
         let payload = json!({"version":1,"requestId":"denied","payload":config});
         assert!(invoke(&other, command, payload.clone(), "tauri://localhost").is_err());
@@ -212,6 +214,17 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
         )
         .unwrap_err()["code"],
         "UNSUPPORTED_CAPABILITY"
+    );
+    // A forged session is refused before any native picker is shown.
+    assert_eq!(
+        invoke(
+            &main,
+            "pick_sqlite_file",
+            json!({"version":1,"requestId":"pick","payload":{"sessionId":"forged"}}),
+            "tauri://localhost"
+        )
+        .unwrap_err()["code"],
+        "FORBIDDEN"
     );
     payload["payload"]["engine"] = json!("mysql");
     payload["payload"]["rootCertificatePem"] = json!("-----BEGIN PRIVATE KEY-----synthetic");

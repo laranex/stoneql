@@ -20,6 +20,12 @@ Positive controls prevent a false pass caused by missing routine privileges, inv
 
 The native tests use Tauri MockRuntime and real SQLx/database connections. They verify command-handler/database integration, not graphical WebView-to-database interaction. Cleanup reports and safe results are retained under `.ref/planning/m003-read-only-trust/` in the repository; no secrets, certificate material or user query data are retained.
 
+## PostgreSQL and SQLite
+
+`npm run test:native-postgres` repeats the indirect-write cases on an owned PostgreSQL 17.6 TLS fixture: a `SECURITY DEFINER` function behind a view, a nested view and a sequence advanced through a view. Positive controls prove the SELECT-only reader writes through them outside a read-only transaction; inside `START TRANSACTION READ ONLY` the engine refuses each with SQLSTATE 25006, native requests return `QUERY_REJECTED`/unknown, and the counter and sequence remain untouched. A deliberate mutation replacing the read-only transaction with `BEGIN` fails the fixture. An indirect advisory lock is possible and is released when the connection is discarded. User-defined operators and functions remain database-controlled code, exactly as for MySQL views.
+
+SQLite opens files with `SQLITE_OPEN_READONLY` and `query_only`; runtime tests prove `INSERT`/`CREATE` fail in the engine through the same options, independent of the lexer. `trusted_schema=OFF` prevents schema-defined views and triggers from calling side-effecting functions.
+
 ## Limits and deployment implications
 
 Result limits have one authority. `QueryLimits::MAX_ROWS` (1000) and `QueryLimits::MAX_BYTES` (1 MiB serialized) in `crates/stoneql-runtime/src/read_only.rs` are both the enforced upper bounds and the defaults. `LiveQueryRequest.maxRows`/`maxBytes` are optional: the renderer omits them, `apps/desktop/src-tauri/src/database.rs` substitutes the runtime maximums, the strict envelope decoder rejects `null`, and `Connections::read_only` rejects any explicit value outside 1–max; both surface as `INVALID_REQUEST`. The native query deadline is fixed at three seconds by the desktop adapter. The 2 MiB incoming packet cap is a separate driver receive limit, not a result limit.

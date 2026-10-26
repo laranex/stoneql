@@ -60,7 +60,7 @@ const nativeMessages: Record<string,string> = {
   CAPACITY: 'Connection limit reached. Disconnect another live workspace.',
   UNSUPPORTED_SQL: 'This read-only SQL form is not supported.',
 };
-export async function nativeDatabase<T>(command: 'connect_direct'|'read_only_query'|'disconnect_database'|'database_status', payload: Record<string,unknown>): Promise<T> {
+export async function nativeDatabase<T>(command: 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status', payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
   try {
     return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, 8000);

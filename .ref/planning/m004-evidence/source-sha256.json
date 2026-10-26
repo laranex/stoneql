@@ -1,0 +1,17 @@
+{
+  "crates/stoneql-runtime/src/lib.rs": "8eafc4a34647361b880702286e33a9974b976b808c523929b6cf10e9f91f54cc",
+  "crates/stoneql-runtime/src/read_only.rs": "159b0068a7badb9fe1f73422466aab68a01f7faeee3b2c8868616026b23543ee",
+  "crates/stoneql-runtime/src/mysql.rs": "b7407776acf984ef86a79b3d826c80c621e9038a50974023bf195620fed9749d",
+  "crates/stoneql-runtime/src/postgres.rs": "4578d07b2a07bf3bf06b0d3edc323aa96fab17a43db76b549706b3635178d3e2",
+  "crates/stoneql-runtime/src/sqlite.rs": "f5c6f08e42fab1bdd8cbdf992bc5988b38e4acddb684b9039f308d64b4e419dc",
+  "crates/stoneql-contracts/src/v1.rs": "bd292787a83f044db8a14965ab04f43e6c2998ddc7fa160c96f5c5e6f577b9d9",
+  "contracts/generated/v1.ts": "e2002619a04a6cdd7000038af1cc37b12549de14b1779e701d23324a473bb4d9",
+  "apps/desktop/src-tauri/src/database.rs": "5fa9fc7cc3093d3aba73a5ea3709ddb4611078a9928af090caa396802fc5b87e",
+  "apps/desktop/src-tauri/src/sqlite_file.rs": "d40cd07c57737714dee25b0d4c8fa184c69d950e875b017c3b42cbd42cfa6f8b",
+  "apps/desktop/src-tauri/src/lib.rs": "a67a2b68b2a1ffe8cb798c91f58441dc14578445651cfe83dc025b0d2704a547",
+  "apps/desktop/src-tauri/capabilities/main-window.json": "b6b560689ab100c3c246083d6794bfb601fe0bf7c98d84bfcc1dc3b1d1b9ff9f",
+  "apps/desktop/src-tauri/tests/live_postgres.rs": "b913f9d88e4ac05b7f0326f9c8d58c82e70caa1a929e05d4cae0814d82702a64",
+  "apps/desktop/src-tauri/tests/sqlite_database.rs": "75139b07aa68a4b7e8765a288b2d975a8a7acc9e113847949b4ee7c19f63f6d0",
+  "tools/test-postgres-fixture.mjs": "3ec7437262b11c635931bc001401fd23f4f8023c60898687fd21f6a62637ae10",
+  "Cargo.lock": "44071179e7b674bdc5342512385fa77c90e71880ccde82df54ceabd412a9ad13"
+}

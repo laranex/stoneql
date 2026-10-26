@@ -24,6 +24,7 @@ export const sidebar = [
     { text: 'Documentation', link: '/development/documentation' },
     { text: 'Branding', link: '/development/branding' },
     { text: 'Read-only SQL Safety', link: '/development/read-only-safety' },
+    { text: 'PostgreSQL & SQLite', link: '/development/postgres-sqlite' },
     { text: 'Resource Profiles', link: '/development/resource-profiles' },
     { text: 'UX Review', link: '/ux-review-remediation' }
   ] }

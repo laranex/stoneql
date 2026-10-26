@@ -20,5 +20,5 @@ features:
   - title: Shared frontend
     details: Vue 3 browser prototype, designed to remain independent of future Tauri and HTTP adapters.
   - title: Explicit boundaries
-    details: Browser/default profiles are simulated. Explicit desktop MySQL/MariaDB read-only connectivity is a development slice; production and server releases remain planned.
+    details: Browser/default profiles are simulated. Explicit desktop MySQL/MariaDB/PostgreSQL/SQLite read-only connectivity is a development slice; production and server releases remain planned.
 ---

@@ -662,7 +662,7 @@ const manager = ref(false);
 const {
   connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
   testing, testMessage, testOk,
-  newConnection, closeConnectionDialog, changeTransport, readCertificate,
+  newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
   testConnection, saveConnection, removeConnection, closeConnection,
 } = useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm: (request) => { confirmation.value = request; } });
 async function closeColumnDialog() {
@@ -2310,8 +2310,8 @@ onBeforeUnmount(() => {
         </header>
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
-            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · MySQL/MariaDB Direct)</option></select></label>
-            <label v-if="connectionDraft.mode==='live'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
+            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · Direct server or SQLite file)</option></select></label>
+            <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">
               <label class="form-label"
                 >Connection name<input :disabled="testing"
@@ -2321,6 +2321,7 @@ onBeforeUnmount(() => {
               ><label class="form-label"
                 >Database engine<select :disabled="testing"
                   v-model="connectionDraft.engine"
+                  aria-label="Database engine"
                   @change="
                     connectionDraft.port =
                       connectionDraft.engine === 'PostgreSQL'
@@ -2332,8 +2333,8 @@ onBeforeUnmount(() => {
                 >
                   <option>MySQL</option>
                   <option>MariaDB</option>
-                  <option :disabled="connectionDraft.mode==='live'">PostgreSQL</option>
-                  <option :disabled="connectionDraft.mode==='live'">SQLite</option>
+                  <option>PostgreSQL</option>
+                  <option>SQLite</option>
                 </select></label
               >
             </div>
@@ -2421,7 +2422,7 @@ onBeforeUnmount(() => {
                     autocomplete="new-password"
                     placeholder="Optional"
                 /></label></div></template
-            ><label class="form-label"
+            ><label v-if="connectionDraft.mode!=='live' || connectionDraft.engine!=='SQLite'" class="form-label"
               >{{
                 connectionDraft.engine === 'SQLite'
                   ? 'Database file path (simulated)'
@@ -2432,6 +2433,7 @@ onBeforeUnmount(() => {
                   connectionDraft.engine === 'SQLite' ? '/path/to/database.sqlite' : 'acme_store'
                 "
             /></label>
+            <div v-if="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite'" class="form-label">SQLite file (opened read-only)<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSqliteFile">Choose file…</button><span :class="{ muted: !connectionDraft.sqliteGrant }">{{ connectionDraft.sqliteGrant ? connectionDraft.database : 'No file chosen for this app session' }}</span></div><span class="muted">The native picker grants this file only. Access is not saved; choose it again after restarting.</span></div>
             <div v-if="connectionDraft.transport.type === 'ssh'" class="ssh-fields">
               <h3>SSH tunnel configuration</h3>
               <div class="host-port">

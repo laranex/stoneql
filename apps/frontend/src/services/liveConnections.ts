@@ -1,13 +1,20 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { nativeDatabase } from './nativeHost.ts';
+const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
 export function liveSupported(connection: Connection): boolean {
-  return connection.transport.type === 'direct' && ['MySQL','MariaDB'].includes(connection.engine);
+  return connection.engine === 'SQLite' || (connection.transport.type === 'direct' && !!networkEngines[connection.engine]);
 }
+/** Opens the native file picker. The renderer receives an opaque grant, never a filesystem path. */
+export const pickSqliteFile = () => nativeDatabase<SqliteFileGrant>('pick_sqlite_file', {});
 export async function openLive(connection: Connection): Promise<LiveConnection> {
-  if (!liveSupported(connection)) throw new Error('Live connections currently support Direct MySQL and MariaDB only.');
+  if (!liveSupported(connection)) throw new Error('Live connections support Direct MySQL, MariaDB and PostgreSQL, or a chosen SQLite file.');
+  if (connection.engine === 'SQLite') {
+    if (!connection.sqliteGrant) throw new Error('Choose the SQLite file again; file access is granted for this app session only.');
+    return nativeDatabase<LiveConnection>('connect_sqlite', { grant: connection.sqliteGrant });
+  }
   return nativeDatabase<LiveConnection>('connect_direct', {
-    engine: connection.engine === 'MariaDB' ? 'mariadb' : 'mysql', host: connection.host, port: connection.port,
+    engine: networkEngines[connection.engine], host: connection.host, port: connection.port,
     username: connection.user, password: connection.password || '', database: connection.database,
     rootCertificatePem: connection.rootCertificatePem || null,
   });

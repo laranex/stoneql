@@ -1,6 +1,6 @@
 # Database adapters
 
-**Status: scoped M003 driver adoption approved; broader capabilities remain gated.** M001 isolated SQLx experiments and an unexposed [M003 runtime evaluation](../development/connection-lifecycle.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
+**Status: scoped M003/M004 read-only adapters implemented locally; broader capabilities remain gated.** M001 isolated SQLx experiments, the [M003 MySQL/MariaDB runtime](../development/connection-lifecycle.md) and the [M004 PostgreSQL/SQLite adapters](../development/postgres-sqlite.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
 
 ## Adapter contract
 
@@ -19,11 +19,15 @@ Indexes retain ordered columns, uniqueness, method, expression/predicate and eng
 
 ## Driver evaluation
 
-SQLx 0.9.0 with the user-approved receive-limit patch is adopted for the tested M003 MySQL/MariaDB runtime subset. Broader engine/type/transaction support and release readiness remain gated. Native PostgreSQL/MySQL drivers and rusqlite are fallback alternatives only after an evidenced capability gap and explicit exception decision. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove StoneQL requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before approving the affected production capability. M001 records the evidence matrix; M003 adopts only the basic read-only subset, while M006 gates multiple result sets, routines, advanced transactions and cancellation. A documented API is not proof that our versions, raw-value fidelity and cleanup requirements work.
+SQLx 0.9.0 with the user-approved receive-limit patch is adopted for the tested M003 MySQL/MariaDB runtime subset. M004 uses the same SQLx release for the tested PostgreSQL 17.6 and bundled SQLite 3.51.3 read-only subset; the receive-limit patch is MySQL-only, so PostgreSQL and SQLite rows have no equivalent per-message allocation cap. Broader engine/type/transaction support and release readiness remain gated. Native PostgreSQL/MySQL drivers and rusqlite are fallback alternatives only after an evidenced capability gap and explicit exception decision. [SQLx connection APIs](https://docs.rs/sqlx/latest/sqlx/trait.Connection.html) expose engine connections and transactions, but that alone does not prove StoneQL requirements are satisfied. Spike dynamic unknown types, multiple result sets, raw statements, COPY, procedure calls, cancellation, TLS, DECIMAL/BIGINT decoding and pool reset before approving the affected production capability. M001 records the evidence matrix; M003 adopts only the basic read-only subset, while M006 gates multiple result sets, routines, advanced transactions and cancellation. A documented API is not proof that our versions, raw-value fidelity and cleanup requirements work.
 
 [SQLx raw SQL documentation](https://docs.rs/sqlx/latest/sqlx/fn.raw_sql.html) distinguishes raw statements from prepared parameterized queries; generated CRUD must retain bound values, and arbitrary script/routine behavior needs separate probes. Never infer safe concatenation or cross-engine atomicity from a generic execution API.
 
-SQLite work must not block the async executor. Evaluate a bounded dedicated worker and transaction-affine connection against driver-provided workers. Avoid pretending concurrent writers or cross-engine DDL transactions have identical semantics.
+SQLite work must not block the async executor. M004 uses SQLx's dedicated per-connection worker thread (one connection per pool, at most eight pools) with a busy timeout and a deadline interrupt; no second StoneQL worker pool was needed. Avoid pretending concurrent writers or cross-engine DDL transactions have identical semantics.
+
+## Implemented runtime layout
+
+`crates/stoneql-runtime` keeps one registry (`lib.rs`: ownership, capacity, expiry, reset/shutdown, SQLite file grants) and one bounded executor (`read_only.rs`: limits, the dialect-aware SELECT lexer and row/byte streaming). Engine modules own only what differs: `mysql.rs` (options, identity, MySQL binary values), `postgres.rs` (VerifyFull TLS, read-only transaction and statement timeout, binary NUMERIC/temporal decoding) and `sqlite.rs` (file authorization, read-only open, worker interrupt, storage-class values). Unsupported engine features (SQLite routines/events, PostgreSQL `CALL`, multiple statements, casts, dollar quoting) are refused, not emulated.
 
 ## Verification gate
 

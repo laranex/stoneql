@@ -1,0 +1,8 @@
+{
+  "source": "apps/desktop/src-tauri/tests/sqlite_database.rs (cargo test --nocapture, debug, Tauri MockRuntime)",
+  "samples": 100,
+  "p50Micros": 363,
+  "p95Micros": 576,
+  "maxMicros": 1442,
+  "note": "Open/identity/close via actual connect_sqlite/disconnect_database handlers on a private temporary file. Characterization only, not an approved budget."
+}

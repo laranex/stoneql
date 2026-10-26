@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-26",
+  "machine": "macOS ARM (Apple M5), Node 26.11.1, Rust 1.99.1, Docker context desktop-linux",
+  "checks": {
+    "npm test": "149 frontend + 19 repository tests passed",
+    "npm run build": "passed (existing >500 KiB chunk advisory)",
+    "npm run test:browser": "24/24 Chromium scenarios passed, sandbox enabled (22 existing + 2 new Light/Dark live SQLite)",
+    "rust:build": "passed",
+    "rust:fmt": "passed",
+    "rust:lint": "passed, 0 warnings",
+    "rust:test": "47 passed, 0 failed, 2 ignored owning-fixture tests",
+    "rust:boundaries": "stoneql-core 1 package, stoneql-contracts 22 packages; no tauri/axum/sqlx/tokio",
+    "contracts:generate + contracts:check": "deterministic regeneration and TS consumer checks passed",
+    "rust:vendor": "76 files verified; vendor/sqlx-mysql untouched",
+    "desktop:test": "9 passed (2 unit, 6 IPC, 1 SQLite command integration), 2 ignored fixtures",
+    "desktop:smoke": "nativeSmokePassed, startupMs 795",
+    "test:native-database": "mysql and mariadb real database IPC checks passed (regression)",
+    "test:lifecycle": "mysql and mariadb 100 TLS lifecycle samples and expired-certificate rejection passed (regression after registry refactor)",
+    "test:native-postgres": "postgresql 17.6 real database IPC checks passed, 100 TLS lifecycle samples, cleanup 0 containers/0 networks/temp removed",
+    "docs:build": "passed"
+  },
+  "mutations": {
+    "postgres BEGIN instead of START TRANSACTION READ ONLY": "fixture failed at indirect-write refusal; source restored and fixture re-passed",
+    "sqlite progress handler always continues": "deadline_interrupts_the_worker_and_releases_the_connection failed; source restored"
+  }
+}

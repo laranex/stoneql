@@ -1,0 +1,18 @@
+{
+  "realDatabase": true,
+  "tauriMockRuntime": true,
+  "strictIpc": true,
+  "independentHandles": true,
+  "exactValues": true,
+  "readOnlyRefusal": true,
+  "packetRecovery": true,
+  "indirectWritesRejected": true,
+  "definerPositiveControls": true,
+  "nonTransactionalWritesRejected": true,
+  "indirectLockReleased": true,
+  "rendererReloadCleanup": true,
+  "bootstrapRetryIdempotent": true,
+  "reloadCapacityReused": true,
+  "disconnect": true,
+  "defaultQueryLimits": true
+}

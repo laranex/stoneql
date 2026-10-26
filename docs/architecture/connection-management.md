@@ -1,6 +1,6 @@
 # Connection management
 
-**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped MySQL/MariaDB pools, TLS, expiry and shutdown tests. Native live binding and renderer-bootstrap cleanup are implemented; credential storage and tunnels remain unimplemented.
+**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB/PostgreSQL and SQLite-file read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped pools, TLS, expiry and shutdown tests; [M004](../development/postgres-sqlite.md) adds PostgreSQL VerifyFull TLS and owner-scoped SQLite file grants. Native live binding and renderer-bootstrap cleanup are implemented; credential storage and tunnels remain unimplemented.
 
 ## Identity and ownership
 

@@ -13,7 +13,7 @@ Object.assign(globalThis, {
 const { useConnectionWorkflow } = await loadModule('../../src/composables/useConnectionWorkflow.ts');
 const { useWorkspace } = await loadModule('../../src/stores/workspace.ts');
 const { bootstrapNativeHost } = await loadModule('../../src/services/nativeHost.ts');
-function nativeFixture(failConnect = false) {
+function nativeFixture(failConnect = false, pickerCancelled = false) {
   const calls: Array<{ command: string; payload: any }> = [];
   const global = { __TAURI__: { core: { async invoke(command: string, args: { message: string }) {
     const request = JSON.parse(args.message);
@@ -22,6 +22,8 @@ function nativeFixture(failConnect = false) {
     const payload = command === 'host_info' ? { runtime: 'desktop', appVersion: '0.1.0', sessionId: 'test_session', nonce: request.payload.nonce, simulated: true }
       : command === 'contract_probe' ? { values: request.payload.values, simulated: true }
       : command === 'connect_direct' ? { handle: 'owned_handle', engineVersion: 'fixture-version', database: request.payload.database, expiresAfterSeconds: 3600 }
+      : command === 'pick_sqlite_file' ? (pickerCancelled ? { grant: null, fileName: null } : { grant: 'opaque_grant', fileName: 'chosen.sqlite' })
+      : command === 'connect_sqlite' ? { handle: 'sqlite_handle', engineVersion: 'SQLite 3.51.3', database: 'chosen.sqlite', expiresAfterSeconds: 3600 }
       : { connected: false };
     return { version: 1, requestId: request.requestId, payload };
   } } } };
@@ -80,7 +82,7 @@ test('live profiles are refused outside the desktop host before any state change
   const before = JSON.stringify(store.connections);
   liveDraft(flow);
   await flow.saveConnection();
-  assert.equal(flow.connectionError.value, 'Live connections require the desktop app, Direct MySQL/MariaDB and a database name.');
+  assert.equal(flow.connectionError.value, 'Live connections require the desktop app, Direct MySQL, MariaDB or PostgreSQL and a database name.');
   assert.equal(JSON.stringify(store.connections), before);
   await flow.testConnection();
   assert.equal(flow.testOk.value, false);
@@ -167,4 +169,31 @@ test('CA certificate reading rejects oversized or private-key files', async () =
   await flow.readCertificate(input('-----BEGIN CERTIFICATE-----\nsynthetic'));
   assert.equal(flow.connectionError.value, '');
   assert.equal(flow.connectionDraft.value.rootCertificatePem, '-----BEGIN CERTIFICATE-----\nsynthetic');
+});
+test('live SQLite uses a native file grant, sends no path and never persists the grant', async () => {
+  const cancelled = nativeFixture(false, true);
+  const first = await setup(cancelled.global);
+  liveDraft(first.flow);
+  Object.assign(first.flow.connectionDraft.value, { engine: 'SQLite', database: '/renderer/typed/path.sqlite' });
+  await first.flow.chooseSqliteFile();
+  assert.equal(first.flow.connectionDraft.value.sqliteGrant, undefined, 'a cancelled picker grants nothing');
+  await first.flow.saveConnection();
+  assert.equal(first.flow.connectionError.value, 'Live SQLite requires the desktop app and a file chosen with Choose file.');
+  assert.ok(!cancelled.calls.some(c => c.command === 'connect_sqlite'));
+  const native = nativeFixture();
+  const { store, flow, notices } = await setup(native.global);
+  liveDraft(flow);
+  Object.assign(flow.connectionDraft.value, { engine: 'SQLite', database: '/renderer/typed/path.sqlite' });
+  await flow.chooseSqliteFile();
+  assert.equal(flow.connectionDraft.value.sqliteGrant, 'opaque_grant');
+  assert.equal(flow.connectionDraft.value.database, 'chosen.sqlite');
+  await flow.saveConnection();
+  const id = flow.connectionDraft.value.id;
+  assert.equal(store.liveSessions[id].status, 'connected');
+  assert.equal(notices.at(-1), 'success:Live read-only SQLite file opened.');
+  const connect = native.calls.find(c => c.command === 'connect_sqlite')!;
+  assert.deepEqual(connect.payload, { grant: 'opaque_grant', sessionId: 'test_session' });
+  assert.ok(!JSON.stringify(native.calls).includes('/renderer/typed/path.sqlite'));
+  const persisted = preferences.get('stoneql-connections') || '';
+  assert.ok(persisted.includes('chosen.sqlite') && !persisted.includes('opaque_grant'));
 });

@@ -12,7 +12,7 @@ stoneql-contracts = { path = "../stoneql-contracts" }
 futures-util.workspace = true
 serde_json.workspace = true
 # Runtime drivers are isolated here, never in core/contracts or host adapters.
-sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "mysql"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "mysql", "postgres", "sqlite"] }
 tokio.workspace = true
 uuid.workspace = true
 

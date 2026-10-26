@@ -5,9 +5,9 @@ use stoneql_contracts::v1::{
     LiveConnection, LiveConnectionStatus, LiveQueryRequest, ProtocolVersion, ResultSet,
 };
 use stoneql_core::{CoreError, Engine, ErrorCode, Outcome};
-use stoneql_runtime::{ConnectionId, DirectMySql, LifecycleError, QueryLimits, ReadError};
+use stoneql_runtime::{ConnectionId, DirectServer, LifecycleError, QueryLimits, ReadError};
 use tauri::{Runtime, State, WebviewWindow};
-fn authorize<R: Runtime>(
+pub(crate) fn authorize<R: Runtime>(
     window: &WebviewWindow<R>,
     session: &NativeSession,
     id: &str,
@@ -18,13 +18,13 @@ fn authorize<R: Runtime>(
     }
     Ok(())
 }
-struct RequestSlot<'a>(&'a std::sync::atomic::AtomicUsize);
+pub(crate) struct RequestSlot<'a>(&'a std::sync::atomic::AtomicUsize);
 impl Drop for RequestSlot<'_> {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
-fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto> {
+pub(crate) fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto> {
     session
         .active_requests
         .try_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
@@ -33,7 +33,7 @@ fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto> {
         .map_err(|_| ErrorDto::from(CoreError::rejected(ErrorCode::Capacity)))?;
     Ok(RequestSlot(&session.active_requests))
 }
-fn lifecycle(error: LifecycleError) -> ErrorDto {
+pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
     CoreError::rejected(match error {
         LifecycleError::InvalidConfiguration | LifecycleError::EngineMismatch => {
             ErrorCode::InvalidRequest
@@ -79,7 +79,11 @@ pub async fn connect_direct<R: Runtime>(
     let engine = match input.engine {
         EngineDto::MySql => Engine::MySql,
         EngineDto::MariaDb => Engine::MariaDb,
-        _ => return Err(CoreError::rejected(ErrorCode::UnsupportedCapability).into()),
+        EngineDto::PostgreSql => Engine::PostgreSql,
+        // SQLite has no network endpoint; it is opened only through a native file grant.
+        EngineDto::Sqlite => {
+            return Err(CoreError::rejected(ErrorCode::UnsupportedCapability).into());
+        }
     };
     if input.root_certificate_pem.as_ref().is_some_and(|pem| {
         pem.len() > 16_384
@@ -93,7 +97,7 @@ pub async fn connect_direct<R: Runtime>(
         .connections
         .connect(
             session.owner,
-            DirectMySql {
+            DirectServer {
                 engine,
                 host: input.host,
                 port: input.port,
@@ -103,9 +107,27 @@ pub async fn connect_direct<R: Runtime>(
                 root_certificate_pem: input.root_certificate_pem.map(String::into_bytes),
             },
         )
-        .await
-        .map_err(lifecycle)?;
-    if !session.is_current(&input.session_id) {
+        .await;
+    connected(
+        &session,
+        &input.session_id,
+        request.request_id,
+        handle,
+        database,
+    )
+    .await
+}
+/// Shared post-connect step: a handle that completed after a renderer bootstrap is closed
+/// before any reply, so a stale renderer never learns a live handle.
+pub(crate) async fn connected(
+    session: &NativeSession,
+    session_id: &str,
+    request_id: String,
+    handle: Result<ConnectionId, LifecycleError>,
+    database: String,
+) -> Result<Envelope<LiveConnection>, ErrorDto> {
+    let handle = handle.map_err(lifecycle)?;
+    if !session.is_current(session_id) {
         let _ = session.connections.disconnect(session.owner, handle).await;
         return Err(forbidden());
     }
@@ -115,7 +137,7 @@ pub async fn connect_direct<R: Runtime>(
         .map_err(lifecycle)?;
     Ok(Envelope {
         version: ProtocolVersion,
-        request_id: request.request_id,
+        request_id,
         payload: LiveConnection {
             handle: handle.opaque(),
             engine_version,

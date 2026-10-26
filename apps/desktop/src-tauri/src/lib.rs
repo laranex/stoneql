@@ -1,5 +1,8 @@
 mod database;
+mod sqlite_file;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
+pub use sqlite_file::authorize_sqlite_file;
+use sqlite_file::{connect_sqlite, pick_sqlite_file};
 use std::{
     sync::{
         Mutex,
@@ -323,7 +326,9 @@ pub fn app_builder<R: Runtime>(builder: tauri::Builder<R>, smoke: bool) -> tauri
             connect_direct,
             read_only_query,
             disconnect_database,
-            database_status
+            database_status,
+            pick_sqlite_file,
+            connect_sqlite
         ])
 }
 pub fn run() {

@@ -9,9 +9,9 @@ use std::{
 };
 use stoneql_contracts::v1::CellValue;
 use stoneql_core::Engine;
-use stoneql_runtime::{Connections, DirectMySql, LifecycleError, OwnerId, QueryLimits, ReadError};
-fn config(engine: Engine, port: u16, password: String, ca: Vec<u8>) -> DirectMySql {
-    DirectMySql {
+use stoneql_runtime::{Connections, DirectServer, LifecycleError, OwnerId, QueryLimits, ReadError};
+fn config(engine: Engine, port: u16, password: String, ca: Vec<u8>) -> DirectServer {
+    DirectServer {
         engine,
         host: "127.0.0.1".into(),
         port,

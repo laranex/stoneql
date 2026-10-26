@@ -196,3 +196,21 @@ fn live_query_limits_are_optional_but_never_null() {
         assert!(decode_envelope::<LiveQueryRequest>(&null.to_string()).is_err());
     }
 }
+#[test]
+fn sqlite_requests_carry_grants_never_paths() {
+    let connect = json!({"version":1,"requestId":"open","payload":{"sessionId":"s","grant":"g"}});
+    let decoded: Envelope<SqliteConnectionRequest> = decode_envelope(&connect.to_string()).unwrap();
+    assert_eq!(decoded.payload.grant, "g");
+    let mut path = connect.clone();
+    path["payload"]["path"] = json!("/etc/passwd");
+    assert!(decode_envelope::<SqliteConnectionRequest>(&path.to_string()).is_err());
+    let pick =
+        json!({"version":1,"requestId":"pick","payload":{"sessionId":"s","path":"/tmp/x.db"}});
+    assert!(decode_envelope::<SqliteFileRequest>(&pick.to_string()).is_err());
+    let cancelled = serde_json::to_value(SqliteFileGrant {
+        grant: None,
+        file_name: None,
+    })
+    .unwrap();
+    assert_eq!(cancelled, json!({"grant":null,"fileName":null}));
+}

@@ -1,4 +1,4 @@
-import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto } from '../generated/v1.js';
+import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto, SqliteConnectionRequest, SqliteFileGrant } from '../generated/v1.js';
 const value: CellValue = { kind: 'integer', text: '18446744073709551615' };
 const request: Envelope<QueryRequest> = { version: 1, requestId: 'r', payload: { connectionId: 'c', database: null, sql: "SELECT 'unchanged'", maxRows: 200, maxBytes: 262144 } };
 const result: Envelope<QueryResult> = { version: 1, requestId: 'r', payload: { resultSets: [{ index: 0, columns: [{name: 'n', databaseType: 'BIGINT', nullable: null}], rows: [[value]], affectedRows: '0', truncated: false }] } };
@@ -12,4 +12,8 @@ const liveDefaults: LiveQueryRequest = {sessionId: 's', handle: 'h', sql: 'SELEC
 const liveExplicit: LiveQueryRequest = {...liveDefaults, maxRows: 10, maxBytes: 1024};
 // @ts-expect-error omitted limits are absent, not null; the native decoder rejects null
 const liveNull: LiveQueryRequest = {...liveDefaults, maxRows: null};
-void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull];
+const sqliteOpen: SqliteConnectionRequest = {sessionId: 's', grant: 'g'};
+// @ts-expect-error SQLite connections name an opaque native grant, never a renderer path
+const sqlitePath: SqliteConnectionRequest = {sessionId: 's', path: '/etc/passwd'};
+const pickerCancelled: SqliteFileGrant = {grant: null, fileName: null};
+void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull, sqliteOpen, sqlitePath, pickerCancelled];

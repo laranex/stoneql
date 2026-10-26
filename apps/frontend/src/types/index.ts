@@ -24,6 +24,8 @@ export interface ConnectionGroup {
 export interface Connection {
   mode?: 'mock'|'live';
   rootCertificatePem?: string;
+  /** Opaque native SQLite file grant; session-only, never persisted. */
+  sqliteGrant?: string;
   id: string;
   name: string;
   engine: Engine;

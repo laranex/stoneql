@@ -87,3 +87,52 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await expect(page.getByRole('button',{name:'Save & connect',exact:true})).toBeInViewport();
  await expect(page.getByRole('button',{name:'Cancel',exact:true})).toBeInViewport();
 });
+for(const theme of ['light','dark'])test(`${theme}: live SQLite opens a natively granted file without exposing a path`,async({page})=>{
+ await page.addInitScript(theme=>{
+  localStorage.setItem('stoneql-theme',theme);
+  (window as any).liveCalls=[];
+  (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
+   const request=JSON.parse(args.message);const p=request.payload;(window as any).liveCalls.push({command,payload:p});
+   let payload:any;
+   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true};
+   else if(command==='contract_probe')payload={values:p.values,simulated:true};
+   else if(command==='pick_sqlite_file')payload={grant:'opaque_fixture_grant',fileName:'inventory.sqlite'};
+   else if(command==='connect_sqlite'){if(p.grant!=='opaque_fixture_grant')throw{code:'FORBIDDEN'};payload={handle:'00000000-0000-0000-0000-000000000009',engineVersion:'SQLite 3.51.3',database:'inventory.sqlite',expiresAfterSeconds:3600};}
+   else if(command==='disconnect_database')payload={connected:false};
+   else if(command==='database_status')payload={connected:true};
+   else if(command==='read_only_query'){
+    if(!p.sql.startsWith('SELECT'))throw{code:'UNSUPPORTED_SQL'};
+    payload={index:0,affectedRows:'0',truncated:false,columns:[{name:'stored',databaseType:'INTEGER'},{name:'stored',databaseType:'NULL'}],rows:[[{kind:'text',text:'not a number'},{kind:'integer',text:'-9223372036854775808'}]]};
+   }else throw{code:'INVALID_REQUEST'};
+   return{version:1,requestId:request.requestId,payload};
+  }}};
+ },theme);
+ await page.goto('/');
+ await page.getByTitle('Manage connections',{exact:true}).click();
+ await page.getByRole('button',{name:'New connection',exact:true}).click();
+ await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await page.getByLabel('Database engine',{exact:true}).selectOption('SQLite');
+ await page.getByPlaceholder('e.g. Local development').fill('Live file');
+ await expect(page.getByLabel('Trusted CA certificate',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('Host',{exact:true})).toHaveCount(0);
+ await expect(page.getByPlaceholder('/path/to/database.sqlite')).toHaveCount(0);
+ await expect(page.getByText('No file chosen for this app session',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Choose file…',exact:true}).click();
+ await expect(page.getByText('inventory.sqlite',{exact:true})).toBeVisible();
+ await page.screenshot({path:`test-results/live-sqlite-${theme}-dialog.png`,fullPage:true});
+ await page.getByRole('button',{name:'Save & connect',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'Connection setup'})).toHaveCount(0);
+ await expect(page.locator('.footer-session')).toContainText('Live read-only · connected');
+ await expect(page.getByText('SQLite 3.51.3',{exact:true})).toBeVisible();
+ await expect(page.locator('.view-tabs [role=tab]')).toHaveText('SQL');
+ await page.locator('.cm-content').fill('SELECT stored, stored FROM affinity');
+ await page.getByRole('button',{name:'Run query',exact:true}).click();
+ await expect(page.getByText('not a number',{exact:true})).toBeVisible();
+ await expect(page.getByText('-9223372036854775808',{exact:true})).toBeVisible();
+ await page.screenshot({path:`test-results/live-sqlite-${theme}-results.png`,fullPage:true});
+ const calls=await page.evaluate(()=>(window as any).liveCalls);
+ expect(calls.find((call:any)=>call.command==='connect_sqlite').payload).toEqual({grant:'opaque_fixture_grant',sessionId:'fixture_session'});
+ expect(JSON.stringify(calls)).not.toContain('/');
+ const serialized=await page.evaluate(()=>localStorage.getItem('stoneql-connections')!);
+ expect(serialized).toContain('inventory.sqlite');expect(serialized).not.toContain('opaque_fixture_grant');
+});

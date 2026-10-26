@@ -8,6 +8,8 @@ fn main() {
             "read_only_query",
             "disconnect_database",
             "database_status",
+            "pick_sqlite_file",
+            "connect_sqlite",
         ]),
     ))
     .expect("validate StoneQL native configuration and command permissions");

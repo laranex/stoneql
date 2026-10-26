@@ -1,13 +1,14 @@
 //! Host-independent connection lifecycle. No renderer/HTTP access or credential persistence.
+mod mysql;
+mod postgres;
 mod read_only;
+mod sqlite;
 pub use read_only::{QueryLimits, ReadError};
-use sqlx::{
-    ConnectOptions, MySqlPool,
-    mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode},
-};
+use sqlx::{MySqlPool, PgPool, SqlitePool};
 use std::{
     collections::HashMap,
     fmt,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -47,8 +48,9 @@ impl ConnectionId {
     }
 }
 
-/// Never derives Debug/Serialize: credentials and certificate material stay in memory.
-pub struct DirectMySql {
+/// Network engine profile (MySQL, MariaDB or PostgreSQL). Never derives Debug/Serialize:
+/// credentials and certificate material stay in memory.
+pub struct DirectServer {
     pub engine: Engine,
     pub host: String,
     pub port: u16,
@@ -57,10 +59,12 @@ pub struct DirectMySql {
     pub database: String,
     pub root_certificate_pem: Option<Vec<u8>>,
 }
-impl DirectMySql {
-    fn options(&self) -> Result<MySqlConnectOptions, LifecycleError> {
-        if !matches!(self.engine, Engine::MySql | Engine::MariaDb)
-            || self.host.is_empty()
+impl DirectServer {
+    fn validate(&self) -> Result<(), LifecycleError> {
+        if !matches!(
+            self.engine,
+            Engine::MySql | Engine::MariaDb | Engine::PostgreSql
+        ) || self.host.is_empty()
             || self.host.len() > 253
             || self
                 .host
@@ -69,6 +73,7 @@ impl DirectMySql {
             || self.port == 0
             || self.username.contains('\0')
             || self.database.contains('\0')
+            || self.password.contains('\0')
             || self.username.is_empty()
             || self.username.len() > 256
             || self.database.is_empty()
@@ -81,25 +86,7 @@ impl DirectMySql {
         {
             return Err(LifecycleError::InvalidConfiguration);
         }
-        let mut options = MySqlConnectOptions::new()
-            .host(&self.host)
-            .port(self.port)
-            .username(&self.username)
-            .password(&self.password)
-            .database(&self.database)
-            .ssl_mode(MySqlSslMode::VerifyIdentity)
-            .statement_cache_capacity(0)
-            .max_receive_packet_size(
-                std::num::NonZeroUsize::new(2 * 1024 * 1024).expect("nonzero packet limit"),
-            )
-            .timezone(None)
-            .pipes_as_concat(false)
-            .no_engine_substitution(false)
-            .disable_statement_logging();
-        if let Some(pem) = &self.root_certificate_pem {
-            options = options.ssl_ca_from_pem(pem.clone());
-        }
-        Ok(options)
+        Ok(())
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,10 +111,41 @@ impl fmt::Display for LifecycleError {
     }
 }
 impl std::error::Error for LifecycleError {}
+fn connect_error(error: sqlx::Error) -> LifecycleError {
+    if matches!(error, sqlx::Error::PoolTimedOut) {
+        LifecycleError::Timeout
+    } else {
+        LifecycleError::Unavailable
+    }
+}
+/// One bounded single-connection pool per logical handle. Engine-specific work stays in the
+/// engine modules; the registry only owns lifetime, ownership and cleanup.
+#[derive(Clone)]
+enum EnginePool {
+    MySql(MySqlPool),
+    Postgres(PgPool),
+    Sqlite(SqlitePool),
+}
+impl EnginePool {
+    async fn close(&self) {
+        match self {
+            Self::MySql(pool) => pool.close().await,
+            Self::Postgres(pool) => pool.close().await,
+            Self::Sqlite(pool) => pool.close().await,
+        }
+    }
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::MySql(pool) => pool.is_closed(),
+            Self::Postgres(pool) => pool.is_closed(),
+            Self::Sqlite(pool) => pool.is_closed(),
+        }
+    }
+}
 struct Entry {
     engine_version: String,
     owner: OwnerId,
-    pool: MySqlPool,
+    pool: EnginePool,
     expires: Instant,
     _permit: OwnedSemaphorePermit,
     _expiry_cancel: oneshot::Sender<()>,
@@ -135,6 +153,7 @@ struct Entry {
 struct Inner {
     generation: AtomicU64,
     entries: Mutex<HashMap<ConnectionId, Entry>>,
+    grants: Mutex<HashMap<Uuid, (OwnerId, PathBuf)>>,
     slots: Arc<Semaphore>,
     deadline: Duration,
     lifetime: Duration,
@@ -143,6 +162,8 @@ struct Inner {
 #[derive(Clone)]
 pub struct Connections(Arc<Inner>);
 impl Connections {
+    /// Outstanding SQLite file grants per registry; reset/shutdown revoke them all.
+    pub const MAX_FILE_GRANTS: usize = 32;
     pub fn new(
         capacity: usize,
         deadline: Duration,
@@ -159,62 +180,99 @@ impl Connections {
         Ok(Self(Arc::new(Inner {
             generation: AtomicU64::new(0),
             entries: Mutex::new(HashMap::new()),
+            grants: Mutex::new(HashMap::new()),
             slots: Arc::new(Semaphore::new(capacity)),
             deadline,
             lifetime,
         })))
     }
+    /// Opens a verified-TLS MySQL, MariaDB or PostgreSQL handle.
     pub async fn connect(
         &self,
         owner: OwnerId,
-        config: DirectMySql,
+        config: DirectServer,
     ) -> Result<ConnectionId, LifecycleError> {
+        config.validate()?;
         let generation = self.0.generation.load(Ordering::SeqCst);
-        let options = config.options()?;
-        let permit = self
-            .0
+        let permit = self.permit()?;
+        let deadline = self.0.deadline;
+        let (pool, version) = match config.engine {
+            Engine::PostgreSql => postgres::open(&config, deadline)
+                .await
+                .map(|(pool, version)| (EnginePool::Postgres(pool), version))?,
+            _ => mysql::open(&config, deadline)
+                .await
+                .map(|(pool, version)| (EnginePool::MySql(pool), version))?,
+        };
+        self.register_or_close(owner, pool, permit, version, generation)
+            .await
+    }
+    /// Trusted host file-picker result → owner-scoped opaque grant. The renderer never supplies
+    /// a path; it can only name a grant previously issued to its own session.
+    pub fn grant_sqlite_file(&self, owner: OwnerId, path: &Path) -> Result<String, LifecycleError> {
+        let canonical = sqlite::authorize(path)?;
+        let mut grants = self.0.grants.lock().expect("file grant lock");
+        if let Some((id, _)) = grants
+            .iter()
+            .find(|(_, (grant_owner, granted))| *grant_owner == owner && *granted == canonical)
+        {
+            return Ok(id.to_string());
+        }
+        if grants.len() >= Self::MAX_FILE_GRANTS {
+            return Err(LifecycleError::Capacity);
+        }
+        let id = Uuid::new_v4();
+        grants.insert(id, (owner, canonical));
+        Ok(id.to_string())
+    }
+    /// File name of an owned grant, for display only.
+    pub fn sqlite_file_name(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
+        let path = self.granted_path(owner, grant)?;
+        Ok(path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned())
+    }
+    fn granted_path(&self, owner: OwnerId, grant: &str) -> Result<PathBuf, LifecycleError> {
+        let id = Uuid::parse_str(grant).map_err(|_| LifecycleError::Forbidden)?;
+        self.0
+            .grants
+            .lock()
+            .expect("file grant lock")
+            .get(&id)
+            .filter(|(grant_owner, _)| *grant_owner == owner)
+            .map(|(_, path)| path.clone())
+            .ok_or(LifecycleError::Forbidden)
+    }
+    /// Opens an owned SQLite grant read-only on SQLx's dedicated worker thread.
+    pub async fn connect_sqlite(
+        &self,
+        owner: OwnerId,
+        grant: &str,
+    ) -> Result<ConnectionId, LifecycleError> {
+        let path = self.granted_path(owner, grant)?;
+        let generation = self.0.generation.load(Ordering::SeqCst);
+        let permit = self.permit()?;
+        let (pool, version) = sqlite::open(&path, self.0.deadline).await?;
+        self.register_or_close(owner, EnginePool::Sqlite(pool), permit, version, generation)
+            .await
+    }
+    fn permit(&self) -> Result<OwnedSemaphorePermit, LifecycleError> {
+        self.0
             .slots
             .clone()
             .try_acquire_owned()
-            .map_err(|_| LifecycleError::Capacity)?;
-        let pool = tokio::time::timeout(
-            self.0.deadline,
-            MySqlPoolOptions::new()
-                .max_connections(1)
-                .min_connections(0)
-                .acquire_timeout(self.0.deadline)
-                .connect_with(options),
-        )
-        .await
-        .map_err(|_| LifecycleError::Timeout)?
-        .map_err(|error| {
-            if matches!(error, sqlx::Error::PoolTimedOut) {
-                LifecycleError::Timeout
-            } else {
-                LifecycleError::Unavailable
-            }
-        })?;
-        let identity = tokio::time::timeout(
-            self.0.deadline,
-            sqlx::query_scalar::<_, String>("SELECT VERSION()").fetch_one(&pool),
-        )
-        .await;
-        let version = match identity {
-            Ok(Ok(version))
-                if version.to_ascii_lowercase().contains("mariadb")
-                    == (config.engine == Engine::MariaDb) =>
-            {
-                version
-            }
-            other => {
-                pool.close().await;
-                return Err(match other {
-                    Err(_) => LifecycleError::Timeout,
-                    Ok(Err(_)) => LifecycleError::Unavailable,
-                    Ok(Ok(_)) => LifecycleError::EngineMismatch,
-                });
-            }
-        };
+            .map_err(|_| LifecycleError::Capacity)
+    }
+    async fn register_or_close(
+        &self,
+        owner: OwnerId,
+        pool: EnginePool,
+        permit: OwnedSemaphorePermit,
+        version: String,
+        generation: u64,
+    ) -> Result<ConnectionId, LifecycleError> {
         match self.register(owner, pool.clone(), permit, version, generation) {
             Ok(id) => Ok(id),
             Err(error) => {
@@ -226,7 +284,7 @@ impl Connections {
     fn register(
         &self,
         owner: OwnerId,
-        pool: MySqlPool,
+        pool: EnginePool,
         permit: OwnedSemaphorePermit,
         engine_version: String,
         generation: u64,
@@ -273,6 +331,17 @@ impl Connections {
         });
         Ok(id)
     }
+    fn owned_pool(&self, owner: OwnerId, id: ConnectionId) -> Option<EnginePool> {
+        self.0
+            .entries
+            .lock()
+            .expect("connection registry lock")
+            .get(&id)
+            .filter(|entry| {
+                entry.owner == owner && entry.expires > Instant::now() && !entry.pool.is_closed()
+            })
+            .map(|entry| entry.pool.clone())
+    }
     pub fn engine_version(
         &self,
         owner: OwnerId,
@@ -290,14 +359,7 @@ impl Connections {
             .ok_or(LifecycleError::Forbidden)
     }
     pub fn is_connected(&self, owner: OwnerId, id: ConnectionId) -> bool {
-        self.0
-            .entries
-            .lock()
-            .expect("connection registry lock")
-            .get(&id)
-            .is_some_and(|entry| {
-                entry.owner == owner && entry.expires > Instant::now() && !entry.pool.is_closed()
-            })
+        self.owned_pool(owner, id).is_some()
     }
     pub async fn disconnect(&self, owner: OwnerId, id: ConnectionId) -> Result<(), LifecycleError> {
         let entry = {
@@ -310,12 +372,14 @@ impl Connections {
         entry.pool.close().await;
         Ok(())
     }
-    /// Trusted host reset revokes all handles and pending registrations, retaining capacity.
-    /// Closing pools waits for bounded active queries; it does not confirm server cancellation.
+    /// Trusted host reset revokes all handles, file grants and pending registrations, retaining
+    /// capacity. Closing pools waits for bounded active queries; it does not confirm server
+    /// cancellation.
     pub async fn reset(&self) {
         let entries: Vec<_> = {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
             self.0.generation.fetch_add(1, Ordering::SeqCst);
+            self.0.grants.lock().expect("file grant lock").clear();
             entries.drain().map(|(_, entry)| entry).collect()
         };
         for entry in entries {
@@ -326,6 +390,7 @@ impl Connections {
     /// Host shutdown closes every pool. Never retries user SQL or claims server cancellation.
     pub async fn shutdown(&self) {
         self.0.slots.close();
+        self.0.grants.lock().expect("file grant lock").clear();
         let entries: Vec<_> = self
             .0
             .entries
@@ -343,8 +408,9 @@ impl Connections {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn config() -> DirectMySql {
-        DirectMySql {
+    use sqlx::mysql::MySqlPoolOptions;
+    fn config() -> DirectServer {
+        DirectServer {
             engine: Engine::MySql,
             host: "127.0.0.1".into(),
             port: 3306,
@@ -356,10 +422,7 @@ mod tests {
     }
     fn register(connections: &Connections, owner: OwnerId) -> ConnectionId {
         let permit = connections.0.slots.clone().try_acquire_owned().unwrap();
-        let pool = MySqlPoolOptions::new()
-            .max_connections(1)
-            .min_connections(0)
-            .connect_lazy_with(config().options().unwrap());
+        let pool = lazy_pool();
         connections
             .register(
                 owner,
@@ -369,6 +432,14 @@ mod tests {
                 connections.0.generation.load(Ordering::SeqCst),
             )
             .unwrap()
+    }
+    fn lazy_pool() -> EnginePool {
+        EnginePool::MySql(
+            MySqlPoolOptions::new()
+                .max_connections(1)
+                .min_connections(0)
+                .connect_lazy_with(mysql::options(&config()).unwrap()),
+        )
     }
     #[tokio::test]
     async fn handles_are_owner_scoped_and_disconnect_releases_capacity() {
@@ -420,7 +491,7 @@ mod tests {
         let connections =
             Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
         let permit = connections.0.slots.clone().try_acquire_owned().unwrap();
-        let pool = MySqlPoolOptions::new().connect_lazy_with(config().options().unwrap());
+        let pool = lazy_pool();
         connections.shutdown().await;
         assert_eq!(
             connections.register(OwnerId::new(), pool.clone(), permit, "fixture".into(), 0),
@@ -446,7 +517,7 @@ mod tests {
             .collect();
         connections.reset().await;
         assert!(!connections.is_connected(owner, first));
-        assert!(pools.iter().all(MySqlPool::is_closed));
+        assert!(pools.iter().all(EnginePool::is_closed));
         assert!(connections.0.entries.lock().unwrap().get(&second).is_none());
         let next = register(&connections, owner);
         assert!(connections.is_connected(owner, next));
@@ -458,7 +529,7 @@ mod tests {
             Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
         let generation = connections.0.generation.load(Ordering::SeqCst);
         let permit = connections.0.slots.clone().try_acquire_owned().unwrap();
-        let pool = MySqlPoolOptions::new().connect_lazy_with(config().options().unwrap());
+        let pool = lazy_pool();
         connections.reset().await;
         assert_eq!(
             connections.register(
@@ -504,17 +575,41 @@ mod tests {
                 _ => input.database.push('\0'),
             }
             assert!(matches!(
-                input.options(),
+                mysql::options(&input),
+                Err(LifecycleError::InvalidConfiguration)
+            ));
+            input.engine = Engine::PostgreSql;
+            assert!(matches!(
+                postgres::options(&input),
                 Err(LifecycleError::InvalidConfiguration)
             ));
         }
+    }
+    #[test]
+    fn postgres_refuses_unix_sockets_and_engine_mismatch() {
+        let mut input = config();
+        input.engine = Engine::PostgreSql;
+        input.port = 5432;
+        assert!(postgres::options(&input).is_ok());
+        input.host = "/var/run/postgresql".into();
+        assert!(matches!(
+            postgres::options(&input),
+            Err(LifecycleError::InvalidConfiguration)
+        ));
+        assert!(matches!(
+            mysql::options(&DirectServer {
+                engine: Engine::PostgreSql,
+                ..config()
+            }),
+            Err(LifecycleError::InvalidConfiguration)
+        ));
     }
     #[test]
     fn configuration_and_error_messages_do_not_expose_credentials() {
         let mut input = config();
         input.engine = Engine::Sqlite;
         assert!(matches!(
-            input.options(),
+            input.validate(),
             Err(LifecycleError::InvalidConfiguration)
         ));
         for error in [

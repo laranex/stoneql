@@ -357,6 +357,26 @@ pub struct LiveQueryRequest {
 pub struct LiveConnectionStatus {
     pub connected: bool,
 }
+/// Asks the trusted host to show its native SQLite file picker. Carries no path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteFileRequest {
+    pub session_id: String,
+}
+/// Opaque, session-scoped grant for one user-selected file; `fileName` is display-only.
+/// `None` means the picker was cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteFileGrant {
+    pub grant: Option<String>,
+    pub file_name: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqliteConnectionRequest {
+    pub session_id: String,
+    pub grant: String,
+}
 
 pub fn typescript() -> String {
     let config = ts_rs::Config::default();
@@ -366,6 +386,9 @@ pub fn typescript() -> String {
         ConnectionHandleRequest::decl(&config),
         LiveQueryRequest::decl(&config),
         LiveConnectionStatus::decl(&config),
+        SqliteFileRequest::decl(&config),
+        SqliteFileGrant::decl(&config),
+        SqliteConnectionRequest::decl(&config),
         CloseAction::decl(&config),
         CloseDecision::decl(&config),
         CloseResult::decl(&config),
