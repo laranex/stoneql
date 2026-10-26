@@ -1,0 +1,10 @@
+{
+  "experiments/sqlx-metadata-limit/metadata-limit.patch": "4675a8b9664c10214a9461e16452254ec1008dfa546dc792a2d32a878a4297bd",
+  "experiments/sqlx-metadata-limit/Cargo.toml": "bd0da239665ca1d3e4566886c26f64be2e850e342e178c0bbcfc99c91c23cc06",
+  "experiments/sqlx-metadata-limit/Cargo.lock": "ad92e7f1d912d20cb4029493143f0718f8264b888a4060543025f61694be552e",
+  "experiments/sqlx-metadata-limit/prepare.mjs": "cdb7ab239587f9de4d00138fbbd204d7dcbd38b113307574a9a7fefe1a041574",
+  "experiments/sqlx-metadata-limit/run-live.mjs": "7db13958269e17858a31b673e3b8a9ff677b364b6c67f258f9599ac9a1c9104d",
+  "experiments/sqlx-metadata-limit/examples/live_metadata.rs": "29e738ef0e2f4ebf3a166451a9f8730bb923c05f60d5f00ce59a2c9f5b2ec69d",
+  "vendor/sqlx-mysql/dbadmin-provenance.json": "68499650356baf442cc130553c410f911ca6c0b51d925d0b750d50050bb4842b",
+  "vendor/sqlx-mysql/src/connection/executor.rs": "20aee2661aeed3391f26b0bead4e74ee6863cebd23a45f52e864a2f53c981303"
+}

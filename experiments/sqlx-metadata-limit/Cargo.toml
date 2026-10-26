@@ -1,0 +1,19 @@
+[package]
+name = "stoneql-metadata-limit-evaluation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "MIT"
+publish = false
+
+# Disposable evaluation harness. driver/ is regenerated from vendor/sqlx-mysql plus
+# metadata-limit.patch by prepare.mjs and is never committed.
+[workspace]
+
+[dependencies]
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "mysql"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+futures-util = "=0.3.34"
+
+[patch.crates-io]
+sqlx-mysql = { path = "driver" }
