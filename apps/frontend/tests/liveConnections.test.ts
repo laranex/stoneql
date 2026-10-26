@@ -26,6 +26,7 @@ test('live bridge preserves ordered duplicate labels and exact raw values withou
  assert.equal(result.rows[0]!.__live_0,'18446744073709551615');assert.equal(result.rows[0]!.__live_1,'12345678901234567890.4500');assert.equal(result.rows[0]!.__live_2,null);
  assert.equal(result.truncated,true);assert.equal(result.raw!.rows[0]![1]!.kind,'decimal');
  await closeLive(info.handle);assert.equal(f.calls.find(c=>c.command==='connect_direct')!.payload.sessionId,'test_session');
+ assert.deepEqual(f.calls.find(c=>c.command==='read_only_query')!.payload,{handle:'owned_handle',sql:'SELECT value,value,n FROM fixture',sessionId:'test_session'},'limits are left to the native runtime defaults');
  await bootstrapNativeHost({});
 });
 test('native query failures remain failures and hide untrusted error details',async()=>{

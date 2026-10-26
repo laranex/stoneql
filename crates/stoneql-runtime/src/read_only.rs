@@ -15,6 +15,11 @@ pub struct QueryLimits {
     pub bytes: usize,
     pub deadline: Duration,
 }
+impl QueryLimits {
+    /// Upper bounds enforced by `read_only`; hosts use them as defaults when a caller omits limits.
+    pub const MAX_ROWS: usize = 1000;
+    pub const MAX_BYTES: usize = 1_048_576;
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadError {
     InvalidLimits,
@@ -58,8 +63,8 @@ impl Connections {
         sql: &str,
         limits: QueryLimits,
     ) -> Result<ResultSet, ReadError> {
-        if !(1..=1000).contains(&limits.rows)
-            || !(1..=1_048_576).contains(&limits.bytes)
+        if !(1..=QueryLimits::MAX_ROWS).contains(&limits.rows)
+            || !(1..=QueryLimits::MAX_BYTES).contains(&limits.bytes)
             || limits.deadline.is_zero()
             || limits.deadline > Duration::from_secs(30)
         {

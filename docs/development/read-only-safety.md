@@ -22,6 +22,8 @@ The native tests use Tauri MockRuntime and real SQLx/database connections. They 
 
 ## Limits and deployment implications
 
+Result limits have one authority. `QueryLimits::MAX_ROWS` (1000) and `QueryLimits::MAX_BYTES` (1 MiB serialized) in `crates/stoneql-runtime/src/read_only.rs` are both the enforced upper bounds and the defaults. `LiveQueryRequest.maxRows`/`maxBytes` are optional: the renderer omits them, `apps/desktop/src-tauri/src/database.rs` substitutes the runtime maximums, the strict envelope decoder rejects `null`, and `Connections::read_only` rejects any explicit value outside 1–max; both surface as `INVALID_REQUEST`. The native query deadline is fixed at three seconds by the desktop adapter. The 2 MiB incoming packet cap is a separate driver receive limit, not a result limit.
+
 The function allowlist is **not transitive** through database-controlled views. Read-only transactions reject the tested persistent writes; they do not make arbitrary stored code, UDFs, plugins or external effects safe. Advisory locks are session-scoped effects that can occur before connection cleanup. Client timeouts remain distinct from confirmed server cancellation.
 
 Use trusted database definitions and least-privilege accounts, preferably grants on reviewed base tables rather than blanket access to unreviewed definer views. Do not describe M003 as safe for hostile database definitions, broad administrative accounts or arbitrary SQL. No UDF library is installed or executed by the tests. The test account's ability to invoke fixture views must not be treated as recommended production grants.

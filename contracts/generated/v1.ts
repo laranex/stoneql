@@ -2,7 +2,7 @@
 export type DirectConnectionRequest = { sessionId: string, engine: EngineDto, host: string, port: number, username: string, password: string, database: string, rootCertificatePem: string | null, };
 export type LiveConnection = { handle: string, engineVersion: string, database: string, expiresAfterSeconds: number, };
 export type ConnectionHandleRequest = { sessionId: string, handle: string, };
-export type LiveQueryRequest = { sessionId: string, handle: string, sql: string, maxRows: number, maxBytes: number, };
+export type LiveQueryRequest = { sessionId: string, handle: string, sql: string, maxRows?: number, maxBytes?: number, };
 export type LiveConnectionStatus = { connected: boolean, };
 export type CloseAction = "prompted" | "cancel" | "confirm";
 export type CloseDecision = { sessionId: string, action: CloseAction, };

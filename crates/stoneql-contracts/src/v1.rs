@@ -344,8 +344,13 @@ pub struct LiveQueryRequest {
     pub session_id: String,
     pub handle: String,
     pub sql: String,
-    pub max_rows: u32,
-    pub max_bytes: u32,
+    // Omitted limits use the native runtime maximums; explicit values are still bounds-checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_rows: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_bytes: Option<u32>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

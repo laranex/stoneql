@@ -153,6 +153,40 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     .unwrap();
     assert_eq!(duplicates["payload"]["columns"][0]["name"], "value");
     assert_eq!(duplicates["payload"]["columns"][1]["name"], "value");
+    // Omitted limits must apply the runtime maximums exactly like explicit 1000 rows / 1 MiB.
+    let read_default = |sql: &str| {
+        invoke(
+            "read_only_query",
+            json!({"sessionId":session,"handle":first["handle"],"sql":sql}),
+        )
+        .unwrap()["payload"]
+            .clone()
+    };
+    let read_maximum = |sql: &str| {
+        invoke(
+            "read_only_query",
+            json!({"sessionId":session,"handle":first["handle"],"sql":sql,"maxRows":1000,"maxBytes":1048576}),
+        )
+        .unwrap()["payload"]
+            .clone()
+    };
+    let product = (1..=11)
+        .map(|alias| format!("raw_values t{alias}"))
+        .collect::<Vec<_>>()
+        .join(" CROSS JOIN ");
+    let many_rows = format!("SELECT t1.id FROM {product}");
+    let rows = read_default(&many_rows);
+    assert_eq!(rows["rows"].as_array().unwrap().len(), 1000);
+    assert_eq!(rows["truncated"], true);
+    assert_eq!(rows, read_maximum(&many_rows));
+    let wide = "w".repeat(1500);
+    let many_bytes = format!("SELECT '{wide}' AS payload FROM {product}");
+    let bytes = read_default(&many_bytes);
+    let serialized = serde_json::to_vec(&bytes).unwrap().len();
+    assert_eq!(bytes["truncated"], true);
+    assert!(bytes["rows"].as_array().unwrap().len() < 1000);
+    assert!(serialized <= 1_048_576 && serialized + 1600 > 1_048_576);
+    assert_eq!(bytes, read_maximum(&many_bytes));
     assert_eq!(
         read(&first["handle"], "UPDATE raw_values SET id=9").unwrap_err()["code"],
         "UNSUPPORTED_SQL"
@@ -276,6 +310,6 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         .map_err(|_| "reload observer close failed")
         .unwrap();
     println!(
-        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true}}"
+        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true,\"defaultQueryLimits\":true}}"
     );
 }

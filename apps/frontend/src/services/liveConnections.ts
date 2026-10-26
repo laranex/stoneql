@@ -15,7 +15,8 @@ export async function openLive(connection: Connection): Promise<LiveConnection> 
 export const closeLive = (handle: string) => nativeDatabase<LiveConnectionStatus>('disconnect_database',{handle});
 export const liveStatus = (handle: string) => nativeDatabase<LiveConnectionStatus>('database_status',{handle});
 export async function queryLive(handle: string, sql: string): Promise<SqlResult> {
-  const raw = await nativeDatabase<ResultSet>('read_only_query',{handle,sql,maxRows:1000,maxBytes:1048576});
+  // Row/byte limits are omitted so the native runtime applies and enforces its own maximums.
+  const raw = await nativeDatabase<ResultSet>('read_only_query',{handle,sql});
   const columns=raw.columns.map((_,index)=>`__live_${index}`);
   return {
     columns, columnLabels:Object.fromEntries(columns.map((key,index)=>[key,raw.columns[index]!.name])),

@@ -225,6 +225,32 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
         invoke(&main, "read_only_query", payload, "tauri://localhost").unwrap_err()["code"],
         "FORBIDDEN"
     );
+    // Omitted limits take the runtime maximums; explicit out-of-range or null limits are refused.
+    let defaults = json!({"version":1,"requestId":"read","payload":{"sessionId":session,"handle":handle,"sql":"SELECT 1"}});
+    assert_eq!(
+        invoke(
+            &main,
+            "read_only_query",
+            defaults.clone(),
+            "tauri://localhost"
+        )
+        .unwrap_err()["code"],
+        "FORBIDDEN"
+    );
+    for (field, value) in [
+        ("maxRows", json!(1001)),
+        ("maxRows", json!(0)),
+        ("maxBytes", json!(1_048_577)),
+        ("maxRows", json!(null)),
+        ("maxBytes", json!(null)),
+    ] {
+        let mut payload = defaults.clone();
+        payload["payload"][field] = value;
+        assert_eq!(
+            invoke(&main, "read_only_query", payload, "tauri://localhost").unwrap_err()["code"],
+            "INVALID_REQUEST"
+        );
+    }
 }
 
 #[test]

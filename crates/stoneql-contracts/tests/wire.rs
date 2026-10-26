@@ -173,3 +173,26 @@ fn engine_identifiers_are_stable_machine_names() {
         json!(["mysql", "mariadb", "postgresql", "sqlite"])
     );
 }
+#[test]
+fn live_query_limits_are_optional_but_never_null() {
+    let omitted = json!({"version":1,"requestId":"read","payload":{"sessionId":"s","handle":"h","sql":"SELECT 1"}});
+    let decoded: Envelope<LiveQueryRequest> = decode_envelope(&omitted.to_string()).unwrap();
+    assert_eq!(
+        (decoded.payload.max_rows, decoded.payload.max_bytes),
+        (None, None)
+    );
+    assert_eq!(serde_json::to_value(decoded).unwrap(), omitted);
+    let mut explicit = omitted.clone();
+    explicit["payload"]["maxRows"] = json!(10);
+    explicit["payload"]["maxBytes"] = json!(1024);
+    let decoded: Envelope<LiveQueryRequest> = decode_envelope(&explicit.to_string()).unwrap();
+    assert_eq!(
+        (decoded.payload.max_rows, decoded.payload.max_bytes),
+        (Some(10), Some(1024))
+    );
+    for field in ["maxRows", "maxBytes"] {
+        let mut null = omitted.clone();
+        null["payload"][field] = json!(null);
+        assert!(decode_envelope::<LiveQueryRequest>(&null.to_string()).is_err());
+    }
+}

@@ -124,6 +124,14 @@ pub async fn connect_direct<R: Runtime>(
         },
     })
 }
+/// Omitted limits default to the runtime maximum; `read_only` remains the bounds authority.
+fn query_limits(max_rows: Option<u32>, max_bytes: Option<u32>) -> QueryLimits {
+    QueryLimits {
+        rows: max_rows.map_or(QueryLimits::MAX_ROWS, |rows| rows as usize),
+        bytes: max_bytes.map_or(QueryLimits::MAX_BYTES, |bytes| bytes as usize),
+        deadline: Duration::from_secs(3),
+    }
+}
 #[tauri::command]
 pub async fn read_only_query<R: Runtime>(
     window: WebviewWindow<R>,
@@ -141,11 +149,7 @@ pub async fn read_only_query<R: Runtime>(
             session.owner,
             handle,
             &input.sql,
-            QueryLimits {
-                rows: input.max_rows as usize,
-                bytes: input.max_bytes as usize,
-                deadline: Duration::from_secs(3),
-            },
+            query_limits(input.max_rows, input.max_bytes),
         )
         .await
         .map_err(query_error)?;
@@ -213,5 +217,15 @@ mod tests {
         );
         drop(slots.pop());
         assert!(admit(&session).is_ok());
+    }
+    #[test]
+    fn omitted_query_limits_use_runtime_maximums() {
+        let limits = query_limits(None, None);
+        assert_eq!(
+            (limits.rows, limits.bytes, limits.deadline),
+            (1000, 1_048_576, Duration::from_secs(3))
+        );
+        let explicit = query_limits(Some(10), Some(1024));
+        assert_eq!((explicit.rows, explicit.bytes), (10, 1024));
     }
 }

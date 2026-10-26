@@ -16,7 +16,7 @@ M001 implements Rust v1 DTOs in `crates/stoneql-contracts/src/v1.rs`, generating
 
 Machine engine IDs are `mysql`, `mariadb`, `postgresql`, `sqlite`. `QueryResult` carries ordered result sets and exact string affected-row counts; unsupported engine types can retain opaque bytes/type names. The M003 runtime evaluation decodes a tested MySQL/MariaDB raw-value subset, including zero dates, with explicit native SQL UI binding. The M002 handshake/probe and M003 database commands use strict versioned envelopes. Browser/default mocks remain independent; job framing is unimplemented.
 
-M003's initial read-only request uses v1 bounded result/error DTOs through a simple core/IPC request-response path. It does not need a query-job protocol, HTTP server or full schema cache. Single-statement/read-only enforcement, explicit row/byte limits and safe deadlines are part of that initial contract. Timeout is not confirmation of server cancellation. M006 introduces job/batch/cancel/transaction and schema-revision DTOs; preserve v1 compatibility or version breaking changes. M008 binds approved contracts to HTTP later. Do not implement the HTTP bindings below to unblock M003.
+M003's initial read-only request uses v1 bounded result/error DTOs through a simple core/IPC request-response path. It does not need a query-job protocol, HTTP server or full schema cache. Single-statement/read-only enforcement, bounded row/byte limits and safe deadlines are part of that initial contract; live requests may omit limits to take the runtime maximums (see [read-only safety](../development/read-only-safety.md#limits-and-deployment-implications)). Timeout is not confirmation of server cancellation. M006 introduces job/batch/cancel/transaction and schema-revision DTOs; preserve v1 compatibility or version breaking changes. M008 binds approved contracts to HTTP later. Do not implement the HTTP bindings below to unblock M003.
 
 ## Draft operations
 
@@ -81,7 +81,7 @@ Golden DTO round-trips cover raw precision, NULL/default, multiple result sets, 
 | Command | v1 request → response | Boundary |
 | --- | --- | --- |
 | `connect_direct` | `DirectConnectionRequest` → `LiveConnection` | MySQL/MariaDB Direct, verified TLS; transient password/optional PEM CA |
-| `read_only_query` | `LiveQueryRequest` → `ResultSet` | Owned handle, restricted SELECT, bounded rows/bytes and three-second deadline |
+| `read_only_query` | `LiveQueryRequest` → `ResultSet` | Owned handle, restricted SELECT, bounded rows/bytes (optional; default to runtime maximums) and three-second deadline |
 | `disconnect_database` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Remove owned handle and close pool |
 | `database_status` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Registry/lease state; no network query |
 
