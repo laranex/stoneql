@@ -333,16 +333,16 @@ pub struct DirectConnectionRequest {
     pub password: String,
     pub database: String,
     pub root_certificate_pem: Option<String>,
-    /// Opaque OS secret reference used when `password` is empty. Resolved only by the host.
+    // Opaque OS secret reference used when `password` is empty. Resolved only by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub password_ref: Option<String>,
-    /// Optional SSH tunnel. The database host/port stay the TLS identity and are resolved by
-    /// the SSH server; SQLite never accepts a tunnel.
+    // Optional SSH tunnel. The database host/port stay the TLS identity and are resolved by
+    // the SSH server; SQLite never accepts a tunnel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ssh: Option<SshTunnelRequest>,
-    /// Renderer-chosen opaque id that `cancel_connect` can name while setup is in flight.
+    // Renderer-chosen opaque id that `cancel_connect` can name while setup is in flight.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub attempt_id: Option<String>,
@@ -355,7 +355,7 @@ pub struct SshTunnelRequest {
     pub host: String,
     pub port: u16,
     pub username: String,
-    /// Absent means not enrolled; the host refuses before contacting the server.
+    // Absent means not enrolled; the host refuses before contacting the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub host_key: Option<String>,
