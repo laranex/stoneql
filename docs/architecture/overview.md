@@ -1,6 +1,6 @@
 # Architecture overview
 
-**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles and M004 adds Direct PostgreSQL and natively granted SQLite files; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
+**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles M004 adds Direct PostgreSQL and natively granted SQLite files, and M005 adds desktop SSH tunnels and macOS Keychain secret references; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
 
 ## Current system
 

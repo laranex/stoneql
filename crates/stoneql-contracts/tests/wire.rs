@@ -214,3 +214,58 @@ fn sqlite_requests_carry_grants_never_paths() {
     .unwrap();
     assert_eq!(cancelled, json!({"grant":null,"fileName":null}));
 }
+#[test]
+fn ssh_requests_are_strict_and_carry_references_or_grants_never_key_material() {
+    let direct = json!({"version":1,"requestId":"open","payload":{"sessionId":"s","engine":"mysql","host":"db.internal","port":3306,"username":"reader","password":"","database":"app","rootCertificatePem":null}});
+    let decoded: Envelope<DirectConnectionRequest> = decode_envelope(&direct.to_string()).unwrap();
+    assert!(decoded.payload.ssh.is_none() && decoded.payload.password_ref.is_none());
+    assert_eq!(serde_json::to_value(decoded).unwrap(), direct);
+    let mut tunnel = direct.clone();
+    tunnel["payload"]["passwordRef"] = json!("00000000-0000-4000-8000-000000000001");
+    tunnel["payload"]["attemptId"] = json!("attempt_1");
+    tunnel["payload"]["ssh"] = json!({"host":"bastion","port":22,"username":"deploy","hostKey":"ssh-ed25519 AAAA","auth":{"method":"key_file","grant":"g","passphraseRef":"r"}});
+    let decoded: Envelope<DirectConnectionRequest> = decode_envelope(&tunnel.to_string()).unwrap();
+    assert!(matches!(
+        decoded.payload.ssh.as_ref().unwrap().auth,
+        SshAuthRequest::KeyFile { ref passphrase_ref, passphrase: None, .. } if passphrase_ref.as_deref() == Some("r")
+    ));
+    assert_eq!(serde_json::to_value(decoded).unwrap(), tunnel);
+    for (path, value) in [
+        (
+            "/payload/ssh/auth/privateKey",
+            json!("-----BEGIN OPENSSH PRIVATE KEY-----"),
+        ),
+        ("/payload/ssh/auth/path", json!("/Users/me/.ssh/id_ed25519")),
+        ("/payload/ssh/hostKey", json!(null)),
+        ("/payload/ssh/auth/passphrase", json!(null)),
+        ("/payload/ssh/forwardAgent", json!(true)),
+    ] {
+        let mut invalid = tunnel.clone();
+        let (parent, field) = path.rsplit_once('/').unwrap();
+        invalid.pointer_mut(parent).unwrap()[field] = value;
+        assert!(
+            decode_envelope::<DirectConnectionRequest>(&invalid.to_string()).is_err(),
+            "{path}"
+        );
+    }
+    let agent = json!({"method":"agent"});
+    assert!(matches!(
+        serde_json::from_value::<SshAuthRequest>(agent).unwrap(),
+        SshAuthRequest::Agent
+    ));
+    let store = json!({"version":1,"requestId":"store","payload":{"sessionId":"s","purpose":"ssh_passphrase","target":{"engine":"postgresql","host":"db","port":5432,"username":"u","ssh":{"host":"b","port":22,"username":"d"}},"secret":"x"}});
+    let decoded: Envelope<StoreSecretRequest> = decode_envelope(&store.to_string()).unwrap();
+    assert_eq!(decoded.payload.purpose, SecretPurpose::SshPassphrase);
+    assert_eq!(
+        serde_json::to_value(SecretReference {
+            reference: "r".into()
+        })
+        .unwrap(),
+        json!({"reference":"r"})
+    );
+    let error: ErrorDto = CoreError::rejected(ErrorCode::SshHostKeyChanged).into();
+    assert_eq!(
+        serde_json::to_value(&error).unwrap()["code"],
+        json!("SSH_HOST_KEY_CHANGED")
+    );
+}

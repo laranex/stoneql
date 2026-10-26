@@ -1,5 +1,7 @@
 //! MySQL/MariaDB protocol options, identity check and lossless cell decoding.
-use super::{DirectServer, LifecycleError, ReadError, connect_error, read_only::hex};
+use super::{
+    DirectServer, LifecycleError, ReadError, connect_error, read_only::hex, ssh::Endpoint,
+};
 use sqlx::{
     ConnectOptions, MySqlPool, Row, TypeInfo, ValueRef,
     mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlRow, MySqlSslMode},
@@ -8,7 +10,11 @@ use std::time::Duration;
 use stoneql_contracts::v1::CellValue;
 use stoneql_core::Engine;
 
-pub(crate) fn options(config: &DirectServer) -> Result<MySqlConnectOptions, LifecycleError> {
+/// `endpoint` is an owned SSH tunnel socket. The original host stays the TLS identity.
+pub(crate) fn options(
+    config: &DirectServer,
+    endpoint: Option<&Endpoint>,
+) -> Result<MySqlConnectOptions, LifecycleError> {
     config.validate()?;
     if !matches!(config.engine, Engine::MySql | Engine::MariaDb) {
         return Err(LifecycleError::InvalidConfiguration);
@@ -31,14 +37,18 @@ pub(crate) fn options(config: &DirectServer) -> Result<MySqlConnectOptions, Life
     if let Some(pem) = &config.root_certificate_pem {
         options = options.ssl_ca_from_pem(pem.clone());
     }
+    if let Some(endpoint) = endpoint {
+        options = options.socket(&endpoint.socket);
+    }
     Ok(options)
 }
 
 pub(crate) async fn open(
     config: &DirectServer,
+    endpoint: Option<&Endpoint>,
     deadline: Duration,
 ) -> Result<(MySqlPool, String), LifecycleError> {
-    let options = options(config)?;
+    let options = options(config, endpoint)?;
     let pool = tokio::time::timeout(
         deadline,
         MySqlPoolOptions::new()

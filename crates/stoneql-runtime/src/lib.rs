@@ -3,8 +3,10 @@ mod mysql;
 mod postgres;
 mod read_only;
 mod sqlite;
+mod ssh;
 pub use read_only::{QueryLimits, ReadError};
 use sqlx::{MySqlPool, PgPool, SqlitePool};
+pub use ssh::{ENDPOINT_PREFIX, HostKey, SshAuth, SshConfig, endpoint_root};
 use std::{
     collections::HashMap,
     fmt,
@@ -97,6 +99,15 @@ pub enum LifecycleError {
     Unavailable,
     Timeout,
     EngineMismatch,
+    /// No enrolled SSH host key, or the server offered an unsupported host certificate.
+    HostKeyUnknown,
+    /// The SSH server presented a key different from the enrolled one. Never auto-accepted.
+    HostKeyChanged,
+    SshAuthentication,
+    AgentUnavailable,
+    /// Recognized but unsupported on this host/build (for example RSA SSH keys).
+    Unsupported,
+    Cancelled,
 }
 impl fmt::Display for LifecycleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -107,6 +118,12 @@ impl fmt::Display for LifecycleError {
             Self::Unavailable => "Connection failed. Check authentication, TLS and availability.",
             Self::Timeout => "Connection deadline exceeded.",
             Self::EngineMismatch => "The connected database engine does not match the profile.",
+            Self::HostKeyUnknown => "The SSH host key is not enrolled.",
+            Self::HostKeyChanged => "The SSH host key changed; connection refused.",
+            Self::SshAuthentication => "SSH authentication failed.",
+            Self::AgentUnavailable => "The SSH agent is unavailable.",
+            Self::Unsupported => "This transport option is not supported.",
+            Self::Cancelled => "Connection setup was cancelled.",
         })
     }
 }
@@ -146,17 +163,56 @@ struct Entry {
     engine_version: String,
     owner: OwnerId,
     pool: EnginePool,
+    /// SSH transport owned by this handle; closed after its pool, never shared.
+    tunnel: Option<ssh::Tunnel>,
     expires: Instant,
     _permit: OwnedSemaphorePermit,
     _expiry_cancel: oneshot::Sender<()>,
 }
+impl Entry {
+    fn usable(&self, owner: OwnerId) -> bool {
+        self.owner == owner
+            && self.expires > Instant::now()
+            && !self.pool.is_closed()
+            && self
+                .tunnel
+                .as_ref()
+                .is_none_or(|tunnel| !tunnel.is_closed())
+    }
+    /// The single close path for disconnect, expiry, reset and shutdown.
+    async fn close(self) {
+        self.pool.close().await;
+        if let Some(tunnel) = self.tunnel {
+            tunnel.close().await;
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GrantKind {
+    Sqlite,
+    SshKey,
+}
+struct Pending {
+    owner: OwnerId,
+    attempt: Option<String>,
+    cancel: oneshot::Sender<()>,
+}
 struct Inner {
     generation: AtomicU64,
     entries: Mutex<HashMap<ConnectionId, Entry>>,
-    grants: Mutex<HashMap<Uuid, (OwnerId, PathBuf)>>,
+    grants: Mutex<HashMap<Uuid, (OwnerId, GrantKind, PathBuf)>>,
+    pending: Mutex<HashMap<u64, Pending>>,
+    next_attempt: AtomicU64,
     slots: Arc<Semaphore>,
     deadline: Duration,
     lifetime: Duration,
+}
+/// Removes a pending setup on every exit path, including a dropped (cancelled) future.
+struct AttemptGuard(Arc<Inner>, u64);
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        self.0.pending.lock().expect("pending lock").remove(&self.1);
+    }
 }
 /// Clone shares one bounded registry; every handle is scoped to its trusted owner.
 #[derive(Clone)]
@@ -181,6 +237,8 @@ impl Connections {
             generation: AtomicU64::new(0),
             entries: Mutex::new(HashMap::new()),
             grants: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            next_attempt: AtomicU64::new(0),
             slots: Arc::new(Semaphore::new(capacity)),
             deadline,
             lifetime,
@@ -192,29 +250,167 @@ impl Connections {
         owner: OwnerId,
         config: DirectServer,
     ) -> Result<ConnectionId, LifecycleError> {
+        self.connect_with(owner, config, None, None).await
+    }
+    /// Opens a handle directly or through an owned SSH tunnel. `attempt` names this setup for
+    /// [`Connections::cancel_connect`]. Cancellation, deadline, failure, reset and shutdown all
+    /// drop partial transport state; only a registered handle owns a tunnel.
+    pub async fn connect_with(
+        &self,
+        owner: OwnerId,
+        config: DirectServer,
+        tunnel: Option<SshConfig>,
+        attempt: Option<&str>,
+    ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
+        if let Some(tunnel) = &tunnel {
+            tunnel.validate()?;
+        }
+        let key_text = match &tunnel {
+            Some(SshConfig {
+                auth: SshAuth::KeyFile { grant, .. },
+                ..
+            }) => Some(self.read_key_file(owner, grant)?),
+            _ => None,
+        };
         let generation = self.0.generation.load(Ordering::SeqCst);
         let permit = self.permit()?;
+        let (_guard, cancelled) = self.begin_attempt(owner, attempt)?;
         let deadline = self.0.deadline;
-        let (pool, version) = match config.engine {
-            Engine::PostgreSql => postgres::open(&config, deadline)
-                .await
-                .map(|(pool, version)| (EnginePool::Postgres(pool), version))?,
-            _ => mysql::open(&config, deadline)
-                .await
-                .map(|(pool, version)| (EnginePool::MySql(pool), version))?,
+        let setup = async {
+            let tunnel = match tunnel {
+                Some(ssh_config) => {
+                    let socket = match config.engine {
+                        Engine::PostgreSql => format!(".s.PGSQL.{}", config.port),
+                        _ => "mysql.sock".to_owned(),
+                    };
+                    Some(
+                        tokio::time::timeout(
+                            deadline,
+                            ssh::open(ssh_config, key_text, &config.host, config.port, &socket),
+                        )
+                        .await
+                        .map_err(|_| LifecycleError::Timeout)??,
+                    )
+                }
+                None => None,
+            };
+            let endpoint = tunnel.as_ref().map(ssh::Tunnel::endpoint);
+            let (pool, version) = match config.engine {
+                Engine::PostgreSql => postgres::open(&config, endpoint, deadline)
+                    .await
+                    .map(|(pool, version)| (EnginePool::Postgres(pool), version))?,
+                _ => mysql::open(&config, endpoint, deadline)
+                    .await
+                    .map(|(pool, version)| (EnginePool::MySql(pool), version))?,
+            };
+            Ok::<_, LifecycleError>((pool, version, tunnel))
         };
-        self.register_or_close(owner, pool, permit, version, generation)
+        let (pool, version, tunnel) = tokio::select! {
+            result = tokio::time::timeout(deadline * 2, setup) => {
+                result.map_err(|_| LifecycleError::Timeout)??
+            }
+            _ = cancelled => return Err(LifecycleError::Cancelled),
+        };
+        self.register_or_close(owner, pool, tunnel, permit, version, generation)
             .await
+    }
+    fn begin_attempt(
+        &self,
+        owner: OwnerId,
+        attempt: Option<&str>,
+    ) -> Result<(AttemptGuard, oneshot::Receiver<()>), LifecycleError> {
+        let (cancel, cancelled) = oneshot::channel();
+        let mut pending = self.0.pending.lock().expect("pending lock");
+        if attempt.is_some_and(|attempt| {
+            pending
+                .values()
+                .any(|entry| entry.owner == owner && entry.attempt.as_deref() == Some(attempt))
+        }) {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
+        let id = self.0.next_attempt.fetch_add(1, Ordering::SeqCst);
+        pending.insert(
+            id,
+            Pending {
+                owner,
+                attempt: attempt.map(str::to_owned),
+                cancel,
+            },
+        );
+        Ok((AttemptGuard(self.0.clone(), id), cancelled))
+    }
+    /// Cancels an owned in-flight setup. Returns false if it already finished or is unknown.
+    pub fn cancel_connect(&self, owner: OwnerId, attempt: &str) -> bool {
+        let mut pending = self.0.pending.lock().expect("pending lock");
+        let Some(id) = pending
+            .iter()
+            .find(|(_, entry)| entry.owner == owner && entry.attempt.as_deref() == Some(attempt))
+            .map(|(id, _)| *id)
+        else {
+            return false;
+        };
+        let entry = pending.remove(&id).expect("found attempt");
+        entry.cancel.send(()).is_ok()
+    }
+    fn cancel_all_attempts(&self) {
+        for (_, entry) in self.0.pending.lock().expect("pending lock").drain() {
+            let _ = entry.cancel.send(());
+        }
+    }
+    /// Reads the server's SSH host key for explicit enrollment; never trusts it.
+    pub async fn scan_ssh_host_key(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<HostKey, LifecycleError> {
+        if self.0.slots.is_closed() {
+            return Err(LifecycleError::Capacity);
+        }
+        ssh::scan(host, port, self.0.deadline).await
+    }
+    /// Trusted host file-picker result → owner-scoped SSH private-key grant. The key is read
+    /// only at connect time and never returned.
+    pub fn grant_ssh_key_file(
+        &self,
+        owner: OwnerId,
+        path: &Path,
+    ) -> Result<String, LifecycleError> {
+        let canonical = sqlite::authorize(path)?;
+        self.grant(owner, GrantKind::SshKey, canonical)
+    }
+    pub fn ssh_key_file_name(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
+        file_name(&self.granted_path(owner, grant, GrantKind::SshKey)?)
+    }
+    fn read_key_file(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
+        let path = self.granted_path(owner, grant, GrantKind::SshKey)?;
+        let canonical = sqlite::authorize(&path).map_err(|_| LifecycleError::Forbidden)?;
+        let metadata = std::fs::metadata(&canonical).map_err(|_| LifecycleError::Forbidden)?;
+        if metadata.len() > ssh::MAX_KEY_FILE_BYTES {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
+        let bytes = std::fs::read(&canonical).map_err(|_| LifecycleError::Forbidden)?;
+        String::from_utf8(bytes).map_err(|_| LifecycleError::InvalidConfiguration)
     }
     /// Trusted host file-picker result → owner-scoped opaque grant. The renderer never supplies
     /// a path; it can only name a grant previously issued to its own session.
     pub fn grant_sqlite_file(&self, owner: OwnerId, path: &Path) -> Result<String, LifecycleError> {
         let canonical = sqlite::authorize(path)?;
+        self.grant(owner, GrantKind::Sqlite, canonical)
+    }
+    /// Grants are typed: a SQLite grant never authorizes reading a file as an SSH key.
+    fn grant(
+        &self,
+        owner: OwnerId,
+        kind: GrantKind,
+        canonical: PathBuf,
+    ) -> Result<String, LifecycleError> {
         let mut grants = self.0.grants.lock().expect("file grant lock");
         if let Some((id, _)) = grants
             .iter()
-            .find(|(_, (grant_owner, granted))| *grant_owner == owner && *granted == canonical)
+            .find(|(_, (grant_owner, grant_kind, granted))| {
+                *grant_owner == owner && *grant_kind == kind && *granted == canonical
+            })
         {
             return Ok(id.to_string());
         }
@@ -222,27 +418,27 @@ impl Connections {
             return Err(LifecycleError::Capacity);
         }
         let id = Uuid::new_v4();
-        grants.insert(id, (owner, canonical));
+        grants.insert(id, (owner, kind, canonical));
         Ok(id.to_string())
     }
     /// File name of an owned grant, for display only.
     pub fn sqlite_file_name(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
-        let path = self.granted_path(owner, grant)?;
-        Ok(path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-            .to_owned())
+        file_name(&self.granted_path(owner, grant, GrantKind::Sqlite)?)
     }
-    fn granted_path(&self, owner: OwnerId, grant: &str) -> Result<PathBuf, LifecycleError> {
+    fn granted_path(
+        &self,
+        owner: OwnerId,
+        grant: &str,
+        kind: GrantKind,
+    ) -> Result<PathBuf, LifecycleError> {
         let id = Uuid::parse_str(grant).map_err(|_| LifecycleError::Forbidden)?;
         self.0
             .grants
             .lock()
             .expect("file grant lock")
             .get(&id)
-            .filter(|(grant_owner, _)| *grant_owner == owner)
-            .map(|(_, path)| path.clone())
+            .filter(|(grant_owner, grant_kind, _)| *grant_owner == owner && *grant_kind == kind)
+            .map(|(_, _, path)| path.clone())
             .ok_or(LifecycleError::Forbidden)
     }
     /// Opens an owned SQLite grant read-only on SQLx's dedicated worker thread.
@@ -251,12 +447,19 @@ impl Connections {
         owner: OwnerId,
         grant: &str,
     ) -> Result<ConnectionId, LifecycleError> {
-        let path = self.granted_path(owner, grant)?;
+        let path = self.granted_path(owner, grant, GrantKind::Sqlite)?;
         let generation = self.0.generation.load(Ordering::SeqCst);
         let permit = self.permit()?;
         let (pool, version) = sqlite::open(&path, self.0.deadline).await?;
-        self.register_or_close(owner, EnginePool::Sqlite(pool), permit, version, generation)
-            .await
+        self.register_or_close(
+            owner,
+            EnginePool::Sqlite(pool),
+            None,
+            permit,
+            version,
+            generation,
+        )
+        .await
     }
     fn permit(&self) -> Result<OwnedSemaphorePermit, LifecycleError> {
         self.0
@@ -269,22 +472,36 @@ impl Connections {
         &self,
         owner: OwnerId,
         pool: EnginePool,
+        tunnel: Option<ssh::Tunnel>,
         permit: OwnedSemaphorePermit,
         version: String,
         generation: u64,
     ) -> Result<ConnectionId, LifecycleError> {
-        match self.register(owner, pool.clone(), permit, version, generation) {
+        let mut tunnel = tunnel;
+        match self.register(
+            owner,
+            pool.clone(),
+            &mut tunnel,
+            permit,
+            version,
+            generation,
+        ) {
             Ok(id) => Ok(id),
             Err(error) => {
                 pool.close().await;
+                if let Some(tunnel) = tunnel {
+                    tunnel.close().await;
+                }
                 Err(error)
             }
         }
     }
+    /// On success the tunnel moves into the registry entry; on refusal it stays with the caller.
     fn register(
         &self,
         owner: OwnerId,
         pool: EnginePool,
+        tunnel: &mut Option<ssh::Tunnel>,
         permit: OwnedSemaphorePermit,
         engine_version: String,
         generation: u64,
@@ -306,6 +523,7 @@ impl Connections {
                     engine_version,
                     owner,
                     pool,
+                    tunnel: tunnel.take(),
                     expires,
                     _permit: permit,
                     _expiry_cancel: cancel,
@@ -326,7 +544,7 @@ impl Connections {
                     .remove(&id)
             });
             if let Some(entry) = entry {
-                entry.pool.close().await;
+                entry.close().await;
             }
         });
         Ok(id)
@@ -337,9 +555,7 @@ impl Connections {
             .lock()
             .expect("connection registry lock")
             .get(&id)
-            .filter(|entry| {
-                entry.owner == owner && entry.expires > Instant::now() && !entry.pool.is_closed()
-            })
+            .filter(|entry| entry.usable(owner))
             .map(|entry| entry.pool.clone())
     }
     pub fn engine_version(
@@ -352,9 +568,7 @@ impl Connections {
             .lock()
             .expect("connection registry lock")
             .get(&id)
-            .filter(|entry| {
-                entry.owner == owner && entry.expires > Instant::now() && !entry.pool.is_closed()
-            })
+            .filter(|entry| entry.usable(owner))
             .map(|entry| entry.engine_version.clone())
             .ok_or(LifecycleError::Forbidden)
     }
@@ -369,12 +583,12 @@ impl Connections {
             }
             entries.remove(&id).expect("checked entry")
         };
-        entry.pool.close().await;
+        entry.close().await;
         Ok(())
     }
-    /// Trusted host reset revokes all handles, file grants and pending registrations, retaining
-    /// capacity. Closing pools waits for bounded active queries; it does not confirm server
-    /// cancellation.
+    /// Trusted host reset revokes all handles, file grants and pending registrations, cancels
+    /// in-flight setups and closes owned tunnels, retaining capacity. Closing pools waits for
+    /// bounded active queries; it does not confirm server cancellation.
     pub async fn reset(&self) {
         let entries: Vec<_> = {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
@@ -382,8 +596,9 @@ impl Connections {
             self.0.grants.lock().expect("file grant lock").clear();
             entries.drain().map(|(_, entry)| entry).collect()
         };
+        self.cancel_all_attempts();
         for entry in entries {
-            entry.pool.close().await;
+            entry.close().await;
         }
     }
 
@@ -391,6 +606,7 @@ impl Connections {
     pub async fn shutdown(&self) {
         self.0.slots.close();
         self.0.grants.lock().expect("file grant lock").clear();
+        self.cancel_all_attempts();
         let entries: Vec<_> = self
             .0
             .entries
@@ -400,9 +616,30 @@ impl Connections {
             .map(|(_, entry)| entry)
             .collect();
         for entry in entries {
-            entry.pool.close().await;
+            entry.close().await;
         }
     }
+    /// Registered handles still holding an SSH tunnel; for lifecycle evidence only.
+    pub fn open_tunnels(&self) -> usize {
+        self.0
+            .entries
+            .lock()
+            .expect("connection registry lock")
+            .values()
+            .filter(|entry| entry.tunnel.is_some())
+            .count()
+    }
+    /// In-flight setups; for lifecycle evidence only.
+    pub fn pending_setups(&self) -> usize {
+        self.0.pending.lock().expect("pending lock").len()
+    }
+}
+fn file_name(path: &Path) -> Result<String, LifecycleError> {
+    Ok(path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned())
 }
 
 #[cfg(test)]
@@ -427,6 +664,7 @@ mod tests {
             .register(
                 owner,
                 pool,
+                &mut None,
                 permit,
                 "fixture".into(),
                 connections.0.generation.load(Ordering::SeqCst),
@@ -438,7 +676,7 @@ mod tests {
             MySqlPoolOptions::new()
                 .max_connections(1)
                 .min_connections(0)
-                .connect_lazy_with(mysql::options(&config()).unwrap()),
+                .connect_lazy_with(mysql::options(&config(), None).unwrap()),
         )
     }
     #[tokio::test]
@@ -494,7 +732,14 @@ mod tests {
         let pool = lazy_pool();
         connections.shutdown().await;
         assert_eq!(
-            connections.register(OwnerId::new(), pool.clone(), permit, "fixture".into(), 0),
+            connections.register(
+                OwnerId::new(),
+                pool.clone(),
+                &mut None,
+                permit,
+                "fixture".into(),
+                0
+            ),
             Err(LifecycleError::Capacity)
         );
         pool.close().await;
@@ -535,6 +780,7 @@ mod tests {
             connections.register(
                 OwnerId::new(),
                 pool.clone(),
+                &mut None,
                 permit,
                 "fixture".into(),
                 generation
@@ -565,6 +811,89 @@ mod tests {
         assert!(connections.0.entries.lock().unwrap().is_empty());
         server.abort();
     }
+    #[tokio::test]
+    async fn pending_setup_is_cancelled_only_by_its_owner_reset_or_shutdown() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let connections =
+            Connections::new(2, Duration::from_secs(3), Duration::from_secs(60)).unwrap();
+        let owner = OwnerId::new();
+        let start = |attempt: &'static str| {
+            let connections = connections.clone();
+            let mut input = config();
+            input.port = port;
+            tokio::spawn(async move {
+                connections
+                    .connect_with(owner, input, None, Some(attempt))
+                    .await
+            })
+        };
+        let first = start("attempt_a");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(connections.pending_setups(), 1);
+        let mut duplicate = config();
+        duplicate.port = port;
+        assert_eq!(
+            connections
+                .connect_with(owner, duplicate, None, Some("attempt_a"))
+                .await,
+            Err(LifecycleError::InvalidConfiguration)
+        );
+        assert!(!connections.cancel_connect(OwnerId::new(), "attempt_a"));
+        assert!(connections.cancel_connect(owner, "attempt_a"));
+        assert_eq!(first.await.unwrap(), Err(LifecycleError::Cancelled));
+        assert!(!connections.cancel_connect(owner, "attempt_a"));
+        let second = start("attempt_b");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        connections.reset().await;
+        assert_eq!(second.await.unwrap(), Err(LifecycleError::Cancelled));
+        let third = start("attempt_c");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        connections.shutdown().await;
+        assert_eq!(third.await.unwrap(), Err(LifecycleError::Cancelled));
+        assert_eq!(connections.pending_setups(), 0);
+        assert!(connections.0.entries.lock().unwrap().is_empty());
+        server.abort();
+    }
+    #[test]
+    fn file_grants_are_typed_and_owner_scoped() {
+        let path = std::env::temp_dir().join(format!("stoneql-grant-{}", Uuid::new_v4()));
+        std::fs::write(&path, b"synthetic key text").unwrap();
+        let path = std::fs::canonicalize(&path).unwrap();
+        let connections =
+            Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let owner = OwnerId::new();
+        let sqlite = connections.grant_sqlite_file(owner, &path).unwrap();
+        let key = connections.grant_ssh_key_file(owner, &path).unwrap();
+        assert_ne!(sqlite, key);
+        assert!(connections.ssh_key_file_name(owner, &sqlite).is_err());
+        assert!(connections.sqlite_file_name(owner, &key).is_err());
+        assert!(connections.ssh_key_file_name(OwnerId::new(), &key).is_err());
+        assert_eq!(
+            connections.read_key_file(owner, &key).unwrap(),
+            "synthetic key text"
+        );
+        assert_eq!(
+            connections.read_key_file(owner, &sqlite),
+            Err(LifecycleError::Forbidden)
+        );
+        std::fs::write(&path, vec![b'k'; 16_385]).unwrap();
+        assert_eq!(
+            connections.read_key_file(owner, &key),
+            Err(LifecycleError::InvalidConfiguration)
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            connections.read_key_file(owner, &key),
+            Err(LifecycleError::Forbidden)
+        );
+    }
     #[test]
     fn protocol_identifiers_reject_embedded_nuls_instead_of_truncating() {
         for field in ["host", "username", "database"] {
@@ -575,12 +904,12 @@ mod tests {
                 _ => input.database.push('\0'),
             }
             assert!(matches!(
-                mysql::options(&input),
+                mysql::options(&input, None),
                 Err(LifecycleError::InvalidConfiguration)
             ));
             input.engine = Engine::PostgreSql;
             assert!(matches!(
-                postgres::options(&input),
+                postgres::options(&input, None),
                 Err(LifecycleError::InvalidConfiguration)
             ));
         }
@@ -590,17 +919,20 @@ mod tests {
         let mut input = config();
         input.engine = Engine::PostgreSql;
         input.port = 5432;
-        assert!(postgres::options(&input).is_ok());
+        assert!(postgres::options(&input, None).is_ok());
         input.host = "/var/run/postgresql".into();
         assert!(matches!(
-            postgres::options(&input),
+            postgres::options(&input, None),
             Err(LifecycleError::InvalidConfiguration)
         ));
         assert!(matches!(
-            mysql::options(&DirectServer {
-                engine: Engine::PostgreSql,
-                ..config()
-            }),
+            mysql::options(
+                &DirectServer {
+                    engine: Engine::PostgreSql,
+                    ..config()
+                },
+                None
+            ),
             Err(LifecycleError::InvalidConfiguration)
         ));
     }

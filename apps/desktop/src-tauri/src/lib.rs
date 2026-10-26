@@ -1,11 +1,18 @@
 mod database;
+mod secrets;
 mod sqlite_file;
+mod ssh_transport;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
+pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
+use secrets::{delete_secret, store_secret};
 pub use sqlite_file::authorize_sqlite_file;
 use sqlite_file::{connect_sqlite, pick_sqlite_file};
+pub use ssh_transport::authorize_ssh_key_file;
+use ssh_transport::{cancel_connect, pick_ssh_key_file, ssh_host_key};
 use std::{
+    path::PathBuf,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Instant,
@@ -18,7 +25,26 @@ use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
+/// Trusted host services injected at startup: the OS secret store and the SSH agent socket.
+/// Tests substitute a dedicated keychain service and a private agent.
+pub struct HostServices {
+    pub secrets: Arc<dyn SecretStore>,
+    pub agent_socket: Option<PathBuf>,
+}
+impl HostServices {
+    /// Production: the OS credential store and the agent named by `SSH_AUTH_SOCK` at startup.
+    pub fn system() -> Self {
+        Self {
+            secrets: Arc::new(OsSecretStore::new(DEFAULT_SERVICE)),
+            agent_socket: std::env::var_os("SSH_AUTH_SOCK")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute()),
+        }
+    }
+}
 pub struct NativeSession {
+    secrets: Arc<dyn SecretStore>,
+    agent_socket: Option<PathBuf>,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     owner: stoneql_runtime::OwnerId,
@@ -45,8 +71,10 @@ impl NativeSession {
                 .as_ref()
                 .is_some_and(|(_, current)| current == id)
     }
-    fn new(smoke: bool) -> Self {
+    fn new(smoke: bool, services: HostServices) -> Self {
         Self {
+            secrets: services.secrets,
+            agent_socket: services.agent_socket,
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
@@ -289,6 +317,13 @@ async fn resolve_close<R: Runtime>(
     })
 }
 pub fn app_builder<R: Runtime>(builder: tauri::Builder<R>, smoke: bool) -> tauri::Builder<R> {
+    app_builder_with(builder, smoke, HostServices::system())
+}
+pub fn app_builder_with<R: Runtime>(
+    builder: tauri::Builder<R>,
+    smoke: bool,
+    services: HostServices,
+) -> tauri::Builder<R> {
     builder
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
@@ -318,7 +353,7 @@ pub fn app_builder<R: Runtime>(builder: tauri::Builder<R>, smoke: bool) -> tauri
             }
             Ok(())
         })
-        .manage(NativeSession::new(smoke))
+        .manage(NativeSession::new(smoke, services))
         .invoke_handler(tauri::generate_handler![
             host_info,
             contract_probe,
@@ -328,7 +363,12 @@ pub fn app_builder<R: Runtime>(builder: tauri::Builder<R>, smoke: bool) -> tauri
             disconnect_database,
             database_status,
             pick_sqlite_file,
-            connect_sqlite
+            connect_sqlite,
+            ssh_host_key,
+            pick_ssh_key_file,
+            cancel_connect,
+            store_secret,
+            delete_secret
         ])
 }
 pub fn run() {

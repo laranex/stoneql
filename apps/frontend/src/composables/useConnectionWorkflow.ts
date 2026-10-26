@@ -1,10 +1,26 @@
 import { ref, type Ref } from 'vue';
 import { useWorkspace } from '../stores/workspace';
-import { openLive, closeLive, liveSupported, pickSqliteFile } from '../services/liveConnections';
+import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, cancelConnect, storeSecret, deleteSecret } from '../services/liveConnections';
 import { hostState } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
-import type { Connection } from '../types';
+import type { Connection, Transport } from '../types';
+import type { SecretPurpose, SshHostKey } from '../../../../contracts/generated/v1';
+type SshTransport = Extract<Transport, { type: 'ssh' }>;
+/** Opaque OS secret references held by a profile. */
+function secretReferences(connection?: Connection): string[] {
+  const transport = connection?.transport;
+  return [connection?.passwordRef, transport?.type === 'ssh' ? transport.passwordRef : undefined, transport?.type === 'ssh' ? transport.passphraseRef : undefined].filter((value): value is string => !!value);
+}
+/** Session-only secrets leave the draft when the dialog closes or a profile is saved. */
+function clearTransientSecrets(connection: Connection) {
+  connection.password = undefined;
+  if (connection.transport.type === 'ssh') {
+    connection.transport.password = undefined;
+    connection.transport.passphrase = undefined;
+    connection.transport.privateKey = undefined;
+  }
+}
 export interface ConnectionWorkflowOptions {
   manager: Ref<boolean>;
   notify: (message: string, type?: string) => void;
@@ -23,7 +39,11 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     testing = ref(false),
     testMessage = ref(''),
     testOk = ref(false),
-    connectionEditing = ref(false);
+    connectionEditing = ref(false),
+    pendingHostKey = ref<SshHostKey>(),
+    attemptId = ref('');
+  const sshOf = (draft = connectionDraft.value): SshTransport | undefined => draft?.transport.type === 'ssh' ? draft.transport : undefined;
+  const liveSsh = (draft = connectionDraft.value) => draft?.mode === 'live' && draft.engine !== 'SQLite' ? sshOf(draft) : undefined;
   async function disconnectIfLive(id: string) {
     if (store.connections.find((c) => c.id === id)?.mode !== 'live') return true;
     try { await store.disconnectLiveProfile(id); return true; }
@@ -68,6 +88,13 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           transport: { type: 'direct' },
         };
     connectionDraft.value!.mode ||= 'mock';
+    // Remember toggles mirror existing references; they are draft-only and never persisted.
+    if (connectionDraft.value!.mode === 'live') {
+      connectionDraft.value!.rememberPassword = !!connectionDraft.value!.passwordRef;
+      const ssh = sshOf(connectionDraft.value);
+      if (ssh) { ssh.rememberPassword = !!ssh.passwordRef; ssh.rememberPassphrase = !!ssh.passphraseRef; }
+    }
+    pendingHostKey.value = undefined;
     testMessage.value = '';
     connectionError.value = '';
     connectionDraftInitial.value = JSON.stringify(connectionDraft.value);
@@ -81,7 +108,80 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     )
       return;
     connectionDialog.value = false;
-    if(connectionDraft.value?.mode==='live'){connectionDraft.value.password=undefined;connectionDraft.value=undefined;}
+    pendingHostKey.value = undefined;
+    if(connectionDraft.value?.mode==='live'){clearTransientSecrets(connectionDraft.value);connectionDraft.value=undefined;}
+  }
+  /** Shows the server's host key for out-of-band verification. Nothing is trusted here. */
+  async function fetchHostKey() {
+    const draft = connectionDraft.value, ssh = sshOf(draft);
+    if (!draft || !ssh || testing.value) return;
+    connectionError.value = '';
+    if (!ssh.host.trim()) { connectionError.value = 'Enter the SSH host first.'; return; }
+    testing.value = true;
+    try {
+      const key = await scanHostKey(ssh.host.trim(), ssh.port);
+      if (connectionDraft.value === draft) pendingHostKey.value = key;
+    } catch (error) { connectionError.value = (error as Error).message; }
+    finally { testing.value = false; }
+  }
+  /** Explicit enrollment after the user confirmed the displayed fingerprint. */
+  function trustHostKey() {
+    const ssh = sshOf(), key = pendingHostKey.value;
+    if (!ssh || !key) return;
+    ssh.hostKey = key.publicKey;
+    ssh.hostKeyFingerprint = key.fingerprint;
+    pendingHostKey.value = undefined;
+    testMessage.value = '';
+  }
+  function rejectHostKey() { pendingHostKey.value = undefined; }
+  /** Rotation is deliberate: a changed key is refused until the old one is forgotten here. */
+  function forgetHostKey() {
+    const ssh = sshOf();
+    if (!ssh || testing.value) return;
+    ssh.hostKey = undefined;
+    ssh.hostKeyFingerprint = undefined;
+    pendingHostKey.value = undefined;
+  }
+  async function chooseSshKeyFile() {
+    const draft = connectionDraft.value, ssh = sshOf(draft);
+    if (!draft || !ssh || testing.value) return;
+    connectionError.value = '';
+    testing.value = true;
+    try {
+      const selected = await pickSshKeyFile();
+      if (selected.grant && connectionDraft.value === draft) { ssh.keyGrant = selected.grant; ssh.keyFileName = selected.fileName || ''; }
+    } catch (error) { connectionError.value = (error as Error).message; }
+    finally { testing.value = false; }
+  }
+  async function cancelAttempt() {
+    if (!attemptId.value) return;
+    try { await cancelConnect(attemptId.value); } catch (error) { connectionError.value = (error as Error).message; }
+  }
+  /** Stores newly typed secrets the user chose to remember; returns references to forget after a successful save. */
+  async function persistSecrets(draft: Connection, old?: Connection): Promise<string[]> {
+    const created: string[] = [], obsolete: string[] = [];
+    const keep = async (remember: boolean | undefined, value: string | undefined, current: string | undefined, purpose: SecretPurpose) => {
+      if (!remember) { if (current) obsolete.push(current); return undefined; }
+      if (!value) return current;
+      const reference = await storeSecret(purpose, draft, value);
+      created.push(reference);
+      if (current) obsolete.push(current);
+      return reference;
+    };
+    try {
+      draft.passwordRef = await keep(draft.rememberPassword, draft.password, draft.passwordRef, 'database_password');
+      const ssh = sshOf(draft);
+      if (ssh) {
+        ssh.passwordRef = await keep(ssh.auth === 'password' && ssh.rememberPassword, ssh.password, ssh.passwordRef, 'ssh_password');
+        ssh.passphraseRef = await keep(ssh.auth === 'private-key' && ssh.rememberPassphrase, ssh.passphrase, ssh.passphraseRef, 'ssh_passphrase');
+      }
+    } catch (error) {
+      for (const reference of created) await deleteSecret(reference).catch(() => undefined);
+      throw error;
+    }
+    const kept = secretReferences(draft);
+    for (const reference of secretReferences(old)) if (!kept.includes(reference) && !obsolete.includes(reference)) obsolete.push(reference);
+    return obsolete.filter((reference) => !kept.includes(reference));
   }
   function changeTransport(type: string) {
     if (!connectionDraft.value || testing.value) return;
@@ -116,41 +216,52 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   async function testConnection() {
     if (!connectionDraft.value) return;
+    const ssh = liveSsh();
+    if (ssh && !ssh.hostKey) {
+      await fetchHostKey();
+      testMessage.value = 'Verify and trust the SSH host key, then test again.'; testOk.value = false;
+      return;
+    }
     testing.value = true;
     try {
       if(connectionDraft.value.mode==='live') {
-        const info=await openLive(connectionDraft.value);
+        attemptId.value=`attempt_${crypto.randomUUID()}`;
+        const info=await openLive(connectionDraft.value, attemptId.value);
         await closeLive(info.handle);
-        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':'Verified TLS connection successful'} · ${info.engineVersion} · Test session closed.`;
+        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':'Verified TLS connection successful'} · ${info.engineVersion} · Test session closed.`;
         testOk.value=true;
       } else {
         const result=await mockTransport.test(connectionDraft.value);
         testMessage.value=result.message;testOk.value=result.ok;
       }
     }catch(error){testMessage.value=(error as Error).message;testOk.value=false;}
-    finally{testing.value=false;}
+    finally{testing.value=false;attemptId.value='';}
   }
   async function saveLiveConnection(draft: Connection, connectNow: boolean) {
-    if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database||(draft.engine==='SQLite'&&!draft.sqliteGrant)){connectionError.value=draft.engine==='SQLite'?'Live SQLite requires the desktop app and a file chosen with Choose file.':'Live connections require the desktop app, Direct MySQL, MariaDB or PostgreSQL and a database name.';return;}
+    if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database||(draft.engine==='SQLite'&&!draft.sqliteGrant)){connectionError.value=draft.engine==='SQLite'?'Live SQLite requires the desktop app, Direct transport and a file chosen with Choose file.':'Live connections require the desktop app, MySQL, MariaDB or PostgreSQL over Direct or SSH and a database name.';return;}
+    const ssh=liveSsh(draft);
+    if(ssh&&!ssh.hostKey){connectionError.value='Fetch, verify and trust the SSH host key before saving a live SSH profile.';return;}
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
     testing.value=true;
     try {
       if(old?.mode==='live')await store.disconnectLiveProfile(draft.id);
-      const saved={...draft,password:undefined};
+      const obsolete=await persistSecrets(draft, old);
+      const saved:Connection={...draft,password:undefined,rememberPassword:undefined,transport:ssh?{...ssh,password:undefined,passphrase:undefined,privateKey:undefined,rememberPassword:undefined,rememberPassphrase:undefined}:draft.transport};
       const index=store.connections.findIndex(c=>c.id===draft.id);
       if(index<0)store.connections.push(saved);else store.connections[index]=saved;
       if(old?.mode!=='live')delete store.workspaces[draft.id];
       if(connectNow || store.activeId===draft.id)store.connect(draft.id);
       const workspace=store.workspaces[draft.id];
       if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
-      if(connectNow)await store.connectLiveProfile(draft);
-      draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
+      for(const reference of obsolete)await deleteSecret(reference).catch(()=>undefined);
+      if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value);}
+      clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
-      notify(connectNow?(draft.engine==='SQLite'?'Live read-only SQLite file opened.':'Live read-only connection opened over verified TLS.'):'Live profile saved; connect explicitly before executing SQL.');
+      notify(connectNow?(draft.engine==='SQLite'?'Live read-only SQLite file opened.':ssh?'Live read-only connection opened over SSH and verified TLS.':'Live read-only connection opened over verified TLS.'):'Live profile saved; connect explicitly before executing SQL.');
     }catch(error){connectionError.value=(error as Error).message;}
-    finally{testing.value=false;}
+    finally{testing.value=false;attemptId.value='';}
   }
   async function saveConnection(connectNow = true) {
     const draft = connectionDraft.value;
@@ -189,6 +300,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       message: 'The connection and its session data will be removed.',
       action: async () => {
         if (!(await disconnectIfLive(id))) return;
+        // Forget saved credentials with the profile; a failure leaves only an unreachable item.
+        if (nativeHostState.kind === 'desktop') for (const reference of secretReferences(store.connections.find((c) => c.id === id))) await deleteSecret(reference).catch(() => undefined);
         store.connections = store.connections.filter((c) => c.id !== id);
         store.opened = store.opened.filter((c) => c !== id);
         delete store.workspaces[id];
@@ -200,8 +313,9 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-    testing, testMessage, testOk,
+    testing, testMessage, testOk, pendingHostKey, attemptId,
     newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
+    fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
     testConnection, saveConnection, removeConnection, closeConnection,
   };
 }

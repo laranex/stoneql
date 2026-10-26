@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-26",
+  "platform": "macOS ARM (Darwin 27.0.0), Node 26.11.1, Rust 1.99.1, Docker desktop-linux",
+  "checks": {
+    "npm test": "pass: 155 frontend + 19 repository tests",
+    "npm run build": "pass (existing >500 kB chunk advisory)",
+    "npm run test:browser": "pass: 26/26 scenarios, Chromium sandbox enabled (adds Light/Dark live SSH scenario)",
+    "npm run docs:build": "pass (check, build, links/navigation/output)",
+    "rust:fmt": "pass",
+    "rust:build": "pass",
+    "rust:lint": "pass (clippy -D warnings, all targets)",
+    "rust:test": "pass: 57 passed, 4 ignored owning-fixture tests",
+    "rust:boundaries": "pass: core 1 package, contracts 22 packages; russh/ssh-key/security-framework/keyring now forbidden",
+    "contracts:generate + contracts:check": "pass (deterministic regeneration, strict TS consumers incl. negative SSH cases)",
+    "rust:vendor": "pass: 76 files, vendor/sqlx-mysql unmodified",
+    "desktop:test": "pass: 13 passed, 3 ignored fixture tests",
+    "desktop:smoke": "pass: real Wry window, startupMs 602",
+    "test:native-database": "pass: mysql and mariadb real IPC checks",
+    "test:lifecycle": "pass: mysql/mariadb 100 TLS lifecycle samples + expired-certificate rejection",
+    "test:native-postgres": "pass: 100 TLS lifecycle samples",
+    "test:ssh (new)": "pass: mysql full matrix, mariadb and postgresql parity, runtime + native IPC, cleanup verified",
+    "cargo audit (root)": "575 crates; only pre-existing RUSTSEC-2024-0370 and RUSTSEC-2024-0429 Linux GTK warnings; no vulnerabilities, no ignores"
+  },
+  "mutations": {
+    "host-key trust-all": "fixture fails at changed-host-key case; source restored"
+  },
+  "notExecuted": [
+    "Windows/Linux",
+    "graphical WebView-to-tunnel interaction",
+    "real native key picker and Keychain prompts",
+    "approved transport budget"
+  ]
+}

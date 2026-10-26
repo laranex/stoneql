@@ -1,4 +1,8 @@
-use super::{NativeSession, decode, forbidden, guard, invalid};
+use super::{
+    NativeSession, decode, forbidden, guard, invalid,
+    secrets::{blocking, choose, database_scope},
+    ssh_transport::{endpoint, tunnel_config},
+};
 use std::{sync::atomic::Ordering, time::Duration};
 use stoneql_contracts::v1::{
     ConnectionHandleRequest, DirectConnectionRequest, EngineDto, Envelope, ErrorDto,
@@ -42,6 +46,12 @@ pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
         LifecycleError::Forbidden => ErrorCode::Forbidden,
         LifecycleError::Unavailable => ErrorCode::ConnectionUnavailable,
         LifecycleError::Timeout => ErrorCode::DeadlineExceeded,
+        LifecycleError::HostKeyUnknown => ErrorCode::SshHostKeyUnknown,
+        LifecycleError::HostKeyChanged => ErrorCode::SshHostKeyChanged,
+        LifecycleError::SshAuthentication => ErrorCode::SshAuthenticationFailed,
+        LifecycleError::AgentUnavailable => ErrorCode::SshAgentUnavailable,
+        LifecycleError::Unsupported => ErrorCode::UnsupportedCapability,
+        LifecycleError::Cancelled => ErrorCode::Cancelled,
     })
     .into()
 }
@@ -89,23 +99,48 @@ pub async fn connect_direct<R: Runtime>(
         pem.len() > 16_384
             || !pem.contains("-----BEGIN CERTIFICATE-----")
             || pem.contains("PRIVATE KEY")
-    }) {
+    }) || input
+        .attempt_id
+        .as_ref()
+        .is_some_and(|attempt| !stoneql_contracts::v1::is_opaque_id(attempt))
+    {
         return Err(invalid());
     }
+    // References are resolved here, for this exact target and route, off the async workers.
+    let scope = database_scope(
+        &input.engine,
+        &input.host,
+        input.port,
+        &input.username,
+        input.ssh.as_ref().map(endpoint).as_ref(),
+    );
+    let secrets = session.secrets.clone();
+    let agent_socket = session.agent_socket.clone();
+    let (password, password_ref, tunnel) = (input.password, input.password_ref, input.ssh);
+    let (password, tunnel) = blocking(move || {
+        let password = choose(secrets.as_ref(), Some(password), password_ref, || scope)?;
+        let tunnel = tunnel
+            .map(|tunnel| tunnel_config(secrets.as_ref(), tunnel, agent_socket))
+            .transpose()?;
+        Ok((password.unwrap_or_default(), tunnel))
+    })
+    .await?;
     let database = input.database.clone();
     let handle = session
         .connections
-        .connect(
+        .connect_with(
             session.owner,
             DirectServer {
                 engine,
                 host: input.host,
                 port: input.port,
                 username: input.username,
-                password: input.password,
+                password,
                 database: input.database,
                 root_certificate_pem: input.root_certificate_pem.map(String::into_bytes),
             },
+            tunnel,
+            input.attempt_id.as_deref(),
         )
         .await;
     connected(
@@ -229,7 +264,13 @@ mod tests {
     use super::*;
     #[test]
     fn request_slots_are_bounded_and_released_on_drop() {
-        let session = NativeSession::new(false);
+        let session = NativeSession::new(
+            false,
+            crate::HostServices {
+                secrets: std::sync::Arc::new(crate::secrets::tests::MemoryStore::default()),
+                agent_socket: None,
+            },
+        );
         let mut slots = Vec::new();
         for _ in 0..16 {
             slots.push(admit(&session).unwrap());

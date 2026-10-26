@@ -101,12 +101,12 @@ export const useWorkspace = defineStore('workspace', () => {
     liveSessions.value[id]={status:'disconnected'};
     if(handle) { try { await closeLive(handle); } catch(error) { if(!(error instanceof NativeOperationError && error.code==='FORBIDDEN')) {liveSessions.value[id]={status:'error',error:(error as Error).message};throw error;} } }
   }
-  async function connectLiveProfile(profile:Connection) {
+  async function connectLiveProfile(profile:Connection, attemptId?:string) {
     await disconnectLiveProfile(profile.id);
     const generation=liveGenerations.get(profile.id)!;
     liveSessions.value[profile.id]={status:'connecting'};
     try {
-      const info=await openLive(profile);
+      const info=await openLive(profile, attemptId);
       if(liveGenerations.get(profile.id)!==generation){await closeLive(info.handle);throw new Error('Connection configuration changed during startup.');}
       liveSessions.value[profile.id]={status:'connected',info};
     }catch(error){

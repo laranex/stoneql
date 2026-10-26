@@ -10,6 +10,11 @@ fn main() {
             "database_status",
             "pick_sqlite_file",
             "connect_sqlite",
+            "ssh_host_key",
+            "pick_ssh_key_file",
+            "cancel_connect",
+            "store_secret",
+            "delete_secret",
         ]),
     ))
     .expect("validate StoneQL native configuration and command permissions");

@@ -1,4 +1,4 @@
-import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto, SqliteConnectionRequest, SqliteFileGrant } from '../generated/v1.js';
+import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto, SqliteConnectionRequest, SqliteFileGrant, DirectConnectionRequest, SshTunnelRequest, StoreSecretRequest } from '../generated/v1.js';
 const value: CellValue = { kind: 'integer', text: '18446744073709551615' };
 const request: Envelope<QueryRequest> = { version: 1, requestId: 'r', payload: { connectionId: 'c', database: null, sql: "SELECT 'unchanged'", maxRows: 200, maxBytes: 262144 } };
 const result: Envelope<QueryResult> = { version: 1, requestId: 'r', payload: { resultSets: [{ index: 0, columns: [{name: 'n', databaseType: 'BIGINT', nullable: null}], rows: [[value]], affectedRows: '0', truncated: false }] } };
@@ -16,4 +16,12 @@ const sqliteOpen: SqliteConnectionRequest = {sessionId: 's', grant: 'g'};
 // @ts-expect-error SQLite connections name an opaque native grant, never a renderer path
 const sqlitePath: SqliteConnectionRequest = {sessionId: 's', path: '/etc/passwd'};
 const pickerCancelled: SqliteFileGrant = {grant: null, fileName: null};
-void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull, sqliteOpen, sqlitePath, pickerCancelled];
+const tunnel: SshTunnelRequest = {host: 'bastion', port: 22, username: 'deploy', hostKey: 'ssh-ed25519 AAAA', auth: {method: 'key_file', grant: 'g', passphraseRef: 'r'}};
+const overSsh: DirectConnectionRequest = {sessionId: 's', engine: 'mysql', host: 'db.internal', port: 3306, username: 'u', password: '', database: 'd', rootCertificatePem: null, passwordRef: 'r', ssh: tunnel, attemptId: 'a'};
+// @ts-expect-error private key material never crosses IPC; the renderer names a native grant
+const pastedKey: SshTunnelRequest = {...tunnel, auth: {method: 'key_file', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----'}};
+// @ts-expect-error an unenrolled host key is omitted, not null
+const nullHostKey: SshTunnelRequest = {...tunnel, hostKey: null};
+const remember: StoreSecretRequest = {sessionId: 's', purpose: 'database_password', target: {engine: 'mysql', host: 'db', port: 3306, username: 'u'}, secret: 'x'};
+const hostKeyChanged: ErrorDto = {...error, code: 'SSH_HOST_KEY_CHANGED'};
+void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull, sqliteOpen, sqlitePath, pickerCancelled, overSsh, pastedKey, nullHostKey, remember, hostKeyChanged];

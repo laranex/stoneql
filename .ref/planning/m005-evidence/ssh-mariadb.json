@@ -1,0 +1,52 @@
+{
+  "engine": "mariadb",
+  "image": "stoneql-ssh-fixture:m005",
+  "runtime": {
+    "engine": "mariadb",
+    "engineVersion": "11.4.8-MariaDB-ubu2404",
+    "parity": {
+      "changedHostKeyRefused": true,
+      "passwordTunnel": true,
+      "queriesThroughTunnel": 3,
+      "tlsHostnameMismatchRefused": true,
+      "unknownHostKeyRefused": true,
+      "untrustedCaRefused": true,
+      "wrongPasswordRefused": true
+    },
+    "scan": {
+      "algorithm": "ssh-ed25519",
+      "fingerprintPrefix": "SHA256:"
+    },
+    "scope": "parity",
+    "secretsInOutput": 0
+  },
+  "native": {
+    "engine": "mariadb",
+    "ipc": {
+      "agent": true,
+      "changedHostKey": "SSH_HOST_KEY_CHANGED",
+      "keyFileGrant": true,
+      "reloadClosesTunnel": true,
+      "scan": true,
+      "secretsInReplies": 0,
+      "tlsMismatch": "CONNECTION_UNAVAILABLE",
+      "unknownHostKey": "SSH_HOST_KEY_UNKNOWN",
+      "wrongPassword": "SSH_AUTHENTICATION_FAILED"
+    },
+    "keychainItemsDeleted": 3,
+    "secretReferences": true,
+    "secretsInOutput": 0
+  },
+  "keychainItemsRemaining": 0,
+  "server": {
+    "establishedAfter": 0,
+    "directTcpipChannels": 10,
+    "sessionChannels": 0,
+    "agentForwardingRequests": 0,
+    "acceptedPassword": 6,
+    "acceptedPublickey": 2,
+    "failedPassword": 2,
+    "secretsInLogs": 0
+  },
+  "reportSecrets": 0
+}

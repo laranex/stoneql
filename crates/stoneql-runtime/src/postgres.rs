@@ -2,6 +2,7 @@
 use super::{
     DirectServer, LifecycleError, ReadError, connect_error,
     read_only::{QueryLimits, driver_error, finish, float_text, hex},
+    ssh::Endpoint,
 };
 use sqlx::{
     ConnectOptions, PgPool, Row, TypeInfo, ValueRef,
@@ -17,7 +18,12 @@ use stoneql_core::Engine;
 /// StoneQL refuses rather than inheriting unreviewed process configuration.
 const INHERITED_ENVIRONMENT: [&str; 4] = ["PGSSLROOTCERT", "PGSSLCERT", "PGSSLKEY", "PGOPTIONS"];
 
-pub(crate) fn options(config: &DirectServer) -> Result<PgConnectOptions, LifecycleError> {
+/// `endpoint` is an owned SSH tunnel directory holding `.s.PGSQL.<port>`. TLS is still
+/// requested over it and verified against the original host.
+pub(crate) fn options(
+    config: &DirectServer,
+    endpoint: Option<&Endpoint>,
+) -> Result<PgConnectOptions, LifecycleError> {
     config.validate()?;
     // A leading slash selects a Unix socket, which bypasses TLS verification entirely.
     if config.engine != Engine::PostgreSql
@@ -41,14 +47,18 @@ pub(crate) fn options(config: &DirectServer) -> Result<PgConnectOptions, Lifecyc
     if let Some(pem) = &config.root_certificate_pem {
         options = options.ssl_root_cert_from_pem(pem.clone());
     }
+    if let Some(endpoint) = endpoint {
+        options = options.socket(&endpoint.directory);
+    }
     Ok(options)
 }
 
 pub(crate) async fn open(
     config: &DirectServer,
+    endpoint: Option<&Endpoint>,
     deadline: Duration,
 ) -> Result<(PgPool, String), LifecycleError> {
-    let options = options(config)?;
+    let options = options(config, endpoint)?;
     let pool = tokio::time::timeout(
         deadline,
         PgPoolOptions::new()

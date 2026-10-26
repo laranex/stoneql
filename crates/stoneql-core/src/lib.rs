@@ -80,6 +80,11 @@ pub enum ErrorCode {
     ConnectionUnavailable,
     Capacity,
     UnsupportedSql,
+    SshHostKeyUnknown,
+    SshHostKeyChanged,
+    SshAuthenticationFailed,
+    SshAgentUnavailable,
+    SecretUnavailable,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -106,6 +111,17 @@ impl ErrorCode {
             }
             Self::Capacity => "Connection capacity reached.",
             Self::UnsupportedSql => "This read-only SQL form is not supported.",
+            Self::SshHostKeyUnknown => {
+                "The SSH host key is not enrolled. Fetch it, verify the fingerprint and trust it explicitly."
+            }
+            Self::SshHostKeyChanged => {
+                "The SSH host key changed; connection refused. Verify the new key with the server administrator before re-enrolling."
+            }
+            Self::SshAuthenticationFailed => "SSH authentication failed.",
+            Self::SshAgentUnavailable => "The SSH agent is unavailable.",
+            Self::SecretUnavailable => {
+                "The saved credential is unavailable or belongs to a different connection target."
+            }
             Self::Internal => "The operation could not be completed.",
         }
     }

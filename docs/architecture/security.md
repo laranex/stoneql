@@ -8,7 +8,7 @@ Treat the renderer/browser, API clients, SQL text, imported files and database e
 
 ## Credentials
 
-Desktop should store secret references in non-secret profiles and use an OS-backed credential store. Server requires a separately approved encrypted vault/envelope-key approach with restricted key access, rotation and revocation. Do not persist secrets in browser storage, URLs, command arguments, logs or source. SSH agent use must not forward agent authority unexpectedly. Short-lived secret buffers and redaction reduce exposure but do not guarantee memory erasure in every layer.
+Desktop stores opaque secret references in non-secret profiles and the secrets in an OS-backed credential store: the macOS login Keychain is implemented (M005, awaiting review); other operating systems are explicitly unsupported until verified. Each reference is bound to its connection target and route, and no IPC command returns a secret ([details](../development/ssh-credentials.md)). Server requires a separately approved encrypted vault/envelope-key approach with restricted key access, rotation and revocation. Do not persist secrets in browser storage, URLs, command arguments, logs or source. SSH agent use must not forward agent authority unexpectedly; the desktop client uses the agent only to sign authentication and never requests forwarding. Short-lived secret buffers and redaction reduce exposure but do not guarantee memory erasure in every layer.
 
 ## Server identity and authorization
 

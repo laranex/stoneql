@@ -10,7 +10,8 @@ for (const name of ['stoneql-core', 'stoneql-contracts']) {
     if (visited.has(id)) return;
     visited.add(id);
     const dependency = packages.get(id).name;
-    if (/^(tauri|axum|sqlx|tokio)(-|$)/.test(dependency)) throw new Error(`${name} imports host/driver/runtime crate ${dependency}`);
+    // Host frameworks, drivers, async runtime, SSH transport and OS secret providers stay out.
+    if (/^(tauri|axum|sqlx|tokio|russh|ssh-key|security-framework|keyring)(-|$)/.test(dependency)) throw new Error(`${name} imports host/driver/runtime/transport/secret crate ${dependency}`);
     for (const dep of nodes.get(id).dependencies) visit(dep);
   }
   visit(root.id);

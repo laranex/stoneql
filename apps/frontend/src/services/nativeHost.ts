@@ -59,11 +59,20 @@ const nativeMessages: Record<string,string> = {
   CONNECTION_UNAVAILABLE: 'Connection failed. Check authentication, TLS and availability.',
   CAPACITY: 'Connection limit reached. Disconnect another live workspace.',
   UNSUPPORTED_SQL: 'This read-only SQL form is not supported.',
+  CANCELLED: 'Connection setup cancelled; no connection was opened.',
+  SSH_HOST_KEY_UNKNOWN: 'The SSH host key is not enrolled. Fetch it, verify the fingerprint and trust it explicitly.',
+  SSH_HOST_KEY_CHANGED: 'SSH host key changed — connection refused. Verify the new key with the server administrator; forget the stored key only after verification.',
+  SSH_AUTHENTICATION_FAILED: 'SSH authentication failed. Check the SSH username, password, key file or passphrase.',
+  SSH_AGENT_UNAVAILABLE: 'The SSH agent is unavailable. Start an agent with your key loaded, or choose another method.',
+  SECRET_UNAVAILABLE: 'The saved credential is unavailable or belongs to a different target. Enter it again.',
 };
-export async function nativeDatabase<T>(command: 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status', payload: Record<string,unknown>): Promise<T> {
+export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret';
+export async function nativeDatabase<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
   try {
-    return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, 8000);
+    // Native pickers and the OS credential store may wait for the user; database work is bounded.
+    const interactive = ['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret'].includes(command);
+    return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, interactive ? 120_000 : 8000);
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : error instanceof Error && error.message === 'Native host timeout' ? 'DEADLINE_EXCEEDED' : 'INTERNAL';
     throw new NativeOperationError(code, nativeMessages[code] || 'Native operation failed. No mock fallback was used.');

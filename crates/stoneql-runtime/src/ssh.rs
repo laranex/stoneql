@@ -1,0 +1,511 @@
+//! SSH tunnel transport. One SSH session per logical connection handle, a verified enrolled
+//! host key, agent/password/key-file authentication and a private Unix-socket endpoint.
+//!
+//! The database adapter dials the endpoint but keeps its own protocol, TLS mode and the
+//! original database hostname for certificate verification. The SSH server resolves and
+//! reaches that hostname; StoneQL never rewrites it to the local endpoint. Agent forwarding,
+//! sessions, shells and remote forwards are never requested.
+//!
+//! Unix-socket endpoints exist only on Unix hosts; elsewhere tunnels are explicitly unsupported.
+#![cfg_attr(not(unix), allow(dead_code))]
+use super::LifecycleError;
+use russh::{
+    client,
+    keys::{PrivateKeyWithHashAlg, PublicKey, PublicKeyOrCertificate, agent::client::AgentClient},
+};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+/// Bounded agent identity attempts; servers commonly disconnect after six failures.
+const MAX_AGENT_IDENTITIES: usize = 5;
+/// Private keys are small text files; anything larger is refused before parsing.
+pub(crate) const MAX_KEY_FILE_BYTES: u64 = 16_384;
+/// Concurrent forwarded streams per tunnel. The pool uses one; the rest absorb reconnects.
+const MAX_FORWARDS: usize = 4;
+
+/// Trusted SSH tunnel configuration. Never derives Debug/Serialize: it may carry secrets.
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    /// Enrolled OpenSSH public key (`<algorithm> <base64>`). `None` is an unknown host.
+    pub host_key: Option<String>,
+    pub auth: SshAuth,
+}
+
+/// Authentication material resolved by the trusted host. The renderer supplies at most a
+/// session-only secret or an opaque reference; the host resolves references before this point.
+pub enum SshAuth {
+    /// Agent socket chosen by the trusted host (normally `SSH_AUTH_SOCK`); `None` = unavailable.
+    Agent(Option<PathBuf>),
+    Password(String),
+    /// Owner-scoped key-file grant issued after the native file picker.
+    KeyFile {
+        grant: String,
+        passphrase: Option<String>,
+    },
+}
+
+/// Public host key presented by a server, for explicit user verification and enrollment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostKey {
+    pub algorithm: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+fn text_field(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && !value
+            .chars()
+            .any(|character| character.is_whitespace() || character.is_control())
+}
+
+pub(crate) fn validate_endpoint(host: &str, port: u16) -> Result<(), LifecycleError> {
+    if !text_field(host, 253) || port == 0 {
+        return Err(LifecycleError::InvalidConfiguration);
+    }
+    Ok(())
+}
+
+impl SshConfig {
+    pub(crate) fn validate(&self) -> Result<(), LifecycleError> {
+        validate_endpoint(&self.host, self.port)?;
+        let secret_ok = |secret: &str| secret.len() <= 16_384 && !secret.contains('\0');
+        if !text_field(&self.username, 256)
+            || self.host_key.as_ref().is_some_and(|key| key.len() > 8192)
+            || match &self.auth {
+                SshAuth::Agent(_) => false,
+                SshAuth::Password(password) => password.is_empty() || !secret_ok(password),
+                SshAuth::KeyFile { passphrase, .. } => {
+                    passphrase.as_deref().is_some_and(|value| !secret_ok(value))
+                }
+            }
+        {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
+        Ok(())
+    }
+}
+
+/// Parses an enrolled key. Certificates and malformed keys are configuration errors.
+pub(crate) fn parse_host_key(key: &str) -> Result<PublicKey, LifecycleError> {
+    PublicKey::from_openssh(key.trim()).map_err(|_| LifecycleError::InvalidConfiguration)
+}
+
+pub(crate) fn describe(key: &PublicKey) -> Result<HostKey, LifecycleError> {
+    let mut public_key = key.clone();
+    public_key.set_comment("");
+    Ok(HostKey {
+        algorithm: key.algorithm().as_str().to_owned(),
+        public_key: public_key
+            .to_openssh()
+            .map_err(|_| LifecycleError::Unavailable)?
+            .trim()
+            .to_owned(),
+        fingerprint: key.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
+    })
+}
+
+enum KeyCheck {
+    Matched,
+    Unknown(PublicKey),
+    Changed,
+    Certificate,
+}
+
+/// Accepts exactly the enrolled key. Unknown, changed and certificate host keys abort the
+/// key exchange before any authentication material is sent.
+struct Verifier {
+    expected: Option<PublicKey>,
+    outcome: Arc<Mutex<Option<KeyCheck>>>,
+}
+impl client::Handler for Verifier {
+    type Error = russh::Error;
+    async fn check_server_key(
+        &mut self,
+        presented: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        let check = match presented {
+            PublicKeyOrCertificate::Certificate(_) => KeyCheck::Certificate,
+            PublicKeyOrCertificate::PublicKey { key, .. } => match &self.expected {
+                Some(expected) if expected.key_data() == key.key_data() => KeyCheck::Matched,
+                Some(_) => KeyCheck::Changed,
+                None => KeyCheck::Unknown(key.clone()),
+            },
+        };
+        let accepted = matches!(check, KeyCheck::Matched);
+        *self.outcome.lock().expect("host key outcome lock") = Some(check);
+        Ok(accepted)
+    }
+}
+
+fn client_config() -> Arc<client::Config> {
+    Arc::new(client::Config {
+        // Detects a dead server or path; the tunnel then reports itself closed.
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 3,
+        nodelay: true,
+        ..Default::default()
+    })
+}
+
+type Session = client::Handle<Verifier>;
+
+async fn handshake(
+    host: &str,
+    port: u16,
+    expected: Option<PublicKey>,
+) -> Result<(Session, Arc<Mutex<Option<KeyCheck>>>), LifecycleError> {
+    let socket = tokio::net::TcpStream::connect((host, port))
+        .await
+        .map_err(|_| LifecycleError::Unavailable)?;
+    let _ = socket.set_nodelay(true);
+    let outcome = Arc::new(Mutex::new(None));
+    let verifier = Verifier {
+        expected,
+        outcome: outcome.clone(),
+    };
+    match client::connect_stream(client_config(), socket, verifier).await {
+        Ok(session) => Ok((session, outcome)),
+        Err(_) => Err(
+            match outcome.lock().expect("host key outcome lock").take() {
+                Some(KeyCheck::Unknown(_) | KeyCheck::Certificate) => {
+                    LifecycleError::HostKeyUnknown
+                }
+                Some(KeyCheck::Changed) => LifecycleError::HostKeyChanged,
+                _ => LifecycleError::Unavailable,
+            },
+        ),
+    }
+}
+
+/// Reads the server's host key and disconnects before authentication. Used only to show the
+/// fingerprint for explicit enrollment; it never marks a key as trusted.
+pub(crate) async fn scan(
+    host: &str,
+    port: u16,
+    deadline: Duration,
+) -> Result<HostKey, LifecycleError> {
+    validate_endpoint(host, port)?;
+    let socket = tokio::time::timeout(deadline, tokio::net::TcpStream::connect((host, port)))
+        .await
+        .map_err(|_| LifecycleError::Timeout)?
+        .map_err(|_| LifecycleError::Unavailable)?;
+    let outcome = Arc::new(Mutex::new(None));
+    let verifier = Verifier {
+        expected: None,
+        outcome: outcome.clone(),
+    };
+    let _ = tokio::time::timeout(
+        deadline,
+        client::connect_stream(client_config(), socket, verifier),
+    )
+    .await
+    .map_err(|_| LifecycleError::Timeout)?;
+    let check = outcome.lock().expect("host key outcome lock").take();
+    match check {
+        Some(KeyCheck::Unknown(key)) => describe(&key),
+        // Host certificates need a separate CA trust policy; not supported.
+        Some(KeyCheck::Certificate) => Err(LifecycleError::Unsupported),
+        _ => Err(LifecycleError::Unavailable),
+    }
+}
+
+async fn authenticate(
+    session: &mut Session,
+    username: &str,
+    auth: SshAuth,
+    key_text: Option<String>,
+) -> Result<(), LifecycleError> {
+    let accepted = |result: Result<client::AuthResult, russh::Error>| {
+        result
+            .map_err(|_| LifecycleError::Unavailable)
+            .map(|result| result.success())
+    };
+    let success = match auth {
+        SshAuth::Password(password) => {
+            accepted(session.authenticate_password(username, password).await)?
+        }
+        SshAuth::KeyFile { passphrase, .. } => {
+            let text = key_text.ok_or(LifecycleError::Forbidden)?;
+            // Encrypted keys without (or with a wrong) passphrase fail like any other
+            // credential; RSA keys are unsupported in this build (see D016).
+            let key = russh::keys::decode_secret_key(&text, passphrase.as_deref())
+                .map_err(|_| LifecycleError::SshAuthentication)?;
+            if key.algorithm().is_rsa() {
+                return Err(LifecycleError::Unsupported);
+            }
+            accepted(
+                session
+                    .authenticate_publickey(
+                        username,
+                        PrivateKeyWithHashAlg::new(Arc::new(key), None),
+                    )
+                    .await,
+            )?
+        }
+        SshAuth::Agent(socket) => {
+            let socket = socket.ok_or(LifecycleError::AgentUnavailable)?;
+            let mut agent = AgentClient::connect_uds(&socket)
+                .await
+                .map_err(|_| LifecycleError::AgentUnavailable)?;
+            let identities = agent
+                .request_identities()
+                .await
+                .map_err(|_| LifecycleError::AgentUnavailable)?;
+            let mut success = false;
+            for identity in identities
+                .iter()
+                .filter_map(|identity| match identity {
+                    russh::keys::agent::AgentIdentity::PublicKey { key, .. } => Some(key),
+                    _ => None,
+                })
+                .filter(|key| !key.algorithm().is_rsa())
+                .take(MAX_AGENT_IDENTITIES)
+            {
+                match session
+                    .authenticate_publickey_with(username, identity.clone(), None, &mut agent)
+                    .await
+                {
+                    Ok(result) if result.success() => {
+                        success = true;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(_) => return Err(LifecycleError::AgentUnavailable),
+                }
+            }
+            // The agent connection is dropped here: it is used only to sign authentication
+            // challenges and is never exposed to the server.
+            success
+        }
+    };
+    if success {
+        Ok(())
+    } else {
+        Err(LifecycleError::SshAuthentication)
+    }
+}
+
+/// A live tunnel: SSH session, private endpoint directory and the accept/forward task.
+/// Dropping it (setup cancellation, failure, close) aborts forwarding, ends the SSH session
+/// and removes the endpoint directory.
+pub(crate) struct Tunnel {
+    session: Arc<Session>,
+    endpoint: Endpoint,
+    accept: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Private per-tunnel directory (mode 0700) holding exactly one listening socket.
+pub(crate) struct Endpoint {
+    pub(crate) directory: PathBuf,
+    pub(crate) socket: PathBuf,
+}
+impl Drop for Endpoint {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.socket);
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+}
+
+impl Tunnel {
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+    pub(crate) fn is_closed(&self) -> bool {
+        self.session.is_closed() || self.accept.as_ref().is_none_or(|task| task.is_finished())
+    }
+    /// Graceful close: stop accepting/forwarding, then send an SSH disconnect.
+    pub(crate) async fn close(mut self) {
+        if let Some(task) = self.accept.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        let _ = self
+            .session
+            .disconnect(russh::Disconnect::ByApplication, "", "")
+            .await;
+    }
+}
+impl Drop for Tunnel {
+    fn drop(&mut self) {
+        if let Some(task) = self.accept.take() {
+            task.abort();
+        }
+    }
+}
+
+/// Root for private endpoint directories. Kept short: Unix socket paths are limited to about
+/// 104 bytes on macOS.
+pub fn endpoint_root() -> PathBuf {
+    std::env::temp_dir()
+}
+pub const ENDPOINT_PREFIX: &str = "stoneql-ssh-";
+
+#[cfg(unix)]
+fn bind(socket_name: &str) -> Result<(Endpoint, tokio::net::UnixListener), LifecycleError> {
+    use std::os::unix::fs::DirBuilderExt;
+    let name = uuid::Uuid::new_v4().simple().to_string();
+    let directory = endpoint_root().join(format!("{ENDPOINT_PREFIX}{}", &name[..16]));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|_| LifecycleError::Unavailable)?;
+    let socket = directory.join(socket_name);
+    let endpoint = Endpoint {
+        directory,
+        socket: socket.clone(),
+    };
+    if socket.as_os_str().len() > 100 {
+        return Err(LifecycleError::Unsupported);
+    }
+    let listener =
+        tokio::net::UnixListener::bind(&socket).map_err(|_| LifecycleError::Unavailable)?;
+    Ok((endpoint, listener))
+}
+
+#[cfg(unix)]
+async fn forward(
+    session: Arc<Session>,
+    mut local: tokio::net::UnixStream,
+    host: String,
+    port: u16,
+) {
+    let Ok(channel) = session
+        .channel_open_direct_tcpip(host, u32::from(port), "127.0.0.1", 0)
+        .await
+    else {
+        return;
+    };
+    let mut remote = channel.into_stream();
+    let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+}
+
+#[cfg(unix)]
+fn serve(
+    session: Arc<Session>,
+    listener: tokio::net::UnixListener,
+    host: String,
+    port: u16,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Owned by this task: aborting it drops every forward and its SSH channel.
+        let mut forwards = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((stream, _)) = accepted else { break };
+                    if forwards.len() >= MAX_FORWARDS || session.is_closed() {
+                        continue;
+                    }
+                    forwards.spawn(forward(session.clone(), stream, host.clone(), port));
+                }
+                Some(_) = forwards.join_next(), if !forwards.is_empty() => {}
+            }
+        }
+    })
+}
+
+/// Opens a verified, authenticated tunnel to `target_host:target_port` as resolved by the SSH
+/// server. Every await happens inside the caller's deadline/cancellation scope; partial state
+/// is released by drop.
+pub(crate) async fn open(
+    config: SshConfig,
+    key_text: Option<String>,
+    target_host: &str,
+    target_port: u16,
+    socket_name: &str,
+) -> Result<Tunnel, LifecycleError> {
+    config.validate()?;
+    let expected = parse_host_key(
+        config
+            .host_key
+            .as_deref()
+            .ok_or(LifecycleError::HostKeyUnknown)?,
+    )?;
+    #[cfg(not(unix))]
+    {
+        let _ = (expected, key_text, target_host, target_port, socket_name);
+        Err(LifecycleError::Unsupported)
+    }
+    #[cfg(unix)]
+    {
+        let (mut session, _) = handshake(&config.host, config.port, Some(expected)).await?;
+        authenticate(&mut session, &config.username, config.auth, key_text).await?;
+        let session = Arc::new(session);
+        let (endpoint, listener) = bind(socket_name)?;
+        let accept = serve(
+            session.clone(),
+            listener,
+            target_host.to_owned(),
+            target_port,
+        );
+        Ok(Tunnel {
+            session,
+            endpoint,
+            accept: Some(accept),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const ED25519: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
+    fn config(auth: SshAuth) -> SshConfig {
+        SshConfig {
+            host: "bastion.example".into(),
+            port: 22,
+            username: "deploy".into(),
+            host_key: Some(ED25519.into()),
+            auth,
+        }
+    }
+    #[test]
+    fn host_keys_parse_and_describe_without_comments() {
+        let key = parse_host_key(&format!("{ED25519} user@laptop")).unwrap();
+        let described = describe(&key).unwrap();
+        assert_eq!(described.algorithm, "ssh-ed25519");
+        assert_eq!(described.public_key, ED25519);
+        assert!(described.fingerprint.starts_with("SHA256:"));
+        assert!(parse_host_key("ssh-ed25519 not-base64").is_err());
+        assert!(parse_host_key("").is_err());
+    }
+    #[test]
+    fn configuration_rejects_ambiguous_or_oversized_values() {
+        assert!(config(SshAuth::Agent(None)).validate().is_ok());
+        let mut bad = config(SshAuth::Password(String::new()));
+        assert!(bad.validate().is_err());
+        bad.auth = SshAuth::Password("secret\0".into());
+        assert!(bad.validate().is_err());
+        for host in ["", "two words", "line\nbreak"] {
+            let mut input = config(SshAuth::Agent(None));
+            input.host = host.into();
+            assert!(input.validate().is_err());
+        }
+        let mut input = config(SshAuth::Agent(None));
+        input.port = 0;
+        assert!(input.validate().is_err());
+        input = config(SshAuth::Agent(None));
+        input.username = "a b".into();
+        assert!(input.validate().is_err());
+    }
+    #[tokio::test]
+    async fn unknown_host_key_is_refused_before_any_network_access() {
+        let mut input = config(SshAuth::Password("never-sent".into()));
+        input.host_key = None;
+        // Port 9 on an unroutable documentation address would hang if dialled.
+        input.host = "192.0.2.1".into();
+        input.port = 9;
+        assert!(matches!(
+            open(input, None, "db", 3306, "s").await,
+            Err(LifecycleError::HostKeyUnknown)
+        ));
+    }
+}

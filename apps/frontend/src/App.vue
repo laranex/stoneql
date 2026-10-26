@@ -661,8 +661,9 @@ const columnDraftInitial = ref('');
 const manager = ref(false);
 const {
   connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-  testing, testMessage, testOk,
+  testing, testMessage, testOk, pendingHostKey, attemptId,
   newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
+  fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
   testConnection, saveConnection, removeConnection, closeConnection,
 } = useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm: (request) => { confirmation.value = request; } });
 async function closeColumnDialog() {
@@ -1654,7 +1655,7 @@ onBeforeUnmount(() => {
           >
           <template v-else-if="w.view === 'SQL'">
             <div v-if="isLive" class="editor-toolbar">
-              <span>Live · Direct · Read-only · TLS verification required</span>
+              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file · Read-only' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · Read-only · TLS verification required` }}</span>
               <span class="toolbar-end">{{ liveSession?.status || 'disconnected' }}</span>
               <button v-if="liveSession?.status!=='connected'" class="button" :disabled="liveSession?.status==='connecting'" @click="newConnection(store.connection)">Connect</button>
               <button v-else class="button" @click="store.disconnectLiveProfile(store.activeId).catch(error=>notify(error.message,'error'))">Disconnect</button>
@@ -2310,7 +2311,7 @@ onBeforeUnmount(() => {
         </header>
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
-            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · Direct server or SQLite file)</option></select></label>
+            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · Direct/SSH server or SQLite file)</option></select></label>
             <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">
               <label class="form-label"
@@ -2328,7 +2329,8 @@ onBeforeUnmount(() => {
                         ? 5432
                         : connectionDraft.engine === 'SQLite'
                           ? 0
-                          : 3306
+                          : 3306;
+                    if (connectionDraft.mode === 'live' && connectionDraft.engine === 'SQLite') changeTransport('direct')
                   "
                 >
                   <option>MySQL</option>
@@ -2390,7 +2392,8 @@ onBeforeUnmount(() => {
               ><button
                 type="button"
                 :class="{ active: connectionDraft.transport.type === 'ssh' }"
-                :disabled="connectionDraft.mode==='live'"
+                :disabled="testing || (connectionDraft.mode==='live' && connectionDraft.engine==='SQLite')"
+                :title="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite' ? 'SQLite files have no network tunnel' : undefined"
                 @click="changeTransport('ssh')"
               >
                 <KeyRound :size="13" /> SSH Tunnel</button
@@ -2420,8 +2423,11 @@ onBeforeUnmount(() => {
                     v-model="connectionDraft.password"
                     type="password"
                     autocomplete="new-password"
-                    placeholder="Optional"
-                /></label></div></template
+                    :placeholder="connectionDraft.mode==='live' && connectionDraft.passwordRef ? 'Saved in Keychain' : 'Optional'"
+                /></label></div>
+              <label v-if="connectionDraft.mode==='live'" class="checkbox-label"
+                ><input :disabled="testing" type="checkbox" v-model="connectionDraft.rememberPassword" /> Remember database password in the system keychain</label
+              ></template
             ><label v-if="connectionDraft.mode!=='live' || connectionDraft.engine!=='SQLite'" class="form-label"
               >{{
                 connectionDraft.engine === 'SQLite'
@@ -2455,13 +2461,47 @@ onBeforeUnmount(() => {
                 <label class="form-label"
                   >SSH username<input :disabled="testing" v-model="connectionDraft.transport.user" required /></label
                 ><label class="form-label"
-                  >Authentication<select :disabled="testing" v-model="connectionDraft.transport.auth">
+                  >Authentication<select :disabled="testing" v-model="connectionDraft.transport.auth" aria-label="SSH authentication">
                     <option value="agent">SSH agent</option>
                     <option value="private-key">Private key</option>
                     <option value="password">Password</option>
                   </select></label
                 >
               </div>
+              <template v-if="connectionDraft.mode === 'live'">
+                <label v-if="connectionDraft.transport.auth === 'password'" class="form-label"
+                  >SSH password<input :disabled="testing"
+                    v-model="connectionDraft.transport.password"
+                    type="password"
+                    autocomplete="new-password"
+                    :placeholder="connectionDraft.transport.passwordRef ? 'Saved in Keychain' : ''" /></label
+                ><label v-if="connectionDraft.transport.auth === 'password'" class="checkbox-label"
+                  ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassword" /> Remember SSH password in the system keychain</label
+                ><template v-if="connectionDraft.transport.auth === 'private-key'"
+                  ><div class="form-label">Private key file<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSshKeyFile">Choose key file…</button><span :class="{ muted: !connectionDraft.transport.keyGrant }">{{ connectionDraft.transport.keyGrant ? connectionDraft.transport.keyFileName : connectionDraft.transport.keyFileName ? `${connectionDraft.transport.keyFileName} · choose again this session` : 'No key file chosen for this app session' }}</span></div><span class="muted">The key is read natively at connect time and never enters this window. Ed25519/ECDSA keys; RSA is not supported yet.</span></div
+                  ><label class="form-label"
+                    >Key passphrase<input :disabled="testing"
+                      v-model="connectionDraft.transport.passphrase"
+                      type="password"
+                      autocomplete="new-password"
+                      :placeholder="connectionDraft.transport.passphraseRef ? 'Saved in Keychain' : 'If the key is encrypted'" /></label
+                  ><label class="checkbox-label"
+                    ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassphrase" /> Remember key passphrase in the system keychain</label
+                ></template>
+                <p v-if="connectionDraft.transport.auth === 'agent'" class="muted">
+                  Uses the SSH agent available to StoneQL (SSH_AUTH_SOCK). Agent forwarding is never requested.
+                </p>
+                <div class="form-label">Host key<div class="sqlite-file"><button v-if="!connectionDraft.transport.hostKey" type="button" class="button" :disabled="testing" @click="fetchHostKey">Fetch host key</button><button v-else type="button" class="button" :disabled="testing" @click="forgetHostKey">Forget host key</button><span :class="{ muted: !connectionDraft.transport.hostKey }">{{ connectionDraft.transport.hostKey ? `Trusted · ${connectionDraft.transport.hostKeyFingerprint || connectionDraft.transport.hostKey.split(' ')[0]}` : 'Not enrolled · connections are refused until you verify and trust the key' }}</span></div></div>
+                <div v-if="pendingHostKey" class="notice host-key-check" role="group" aria-label="Verify SSH host key">
+                  <div>
+                    <strong>Verify this host key before trusting it</strong>
+                    <span>{{ pendingHostKey.algorithm }} · <code>{{ pendingHostKey.fingerprint }}</code></span>
+                    <span class="muted">Compare it with the fingerprint from the server administrator (for example <code>ssh-keygen -lf</code> on the server). Never trust a key you cannot verify.</span>
+                  </div>
+                  <div class="host-key-actions"><button type="button" class="button" @click="rejectHostKey">Do not trust</button><button type="button" class="button primary" @click="trustHostKey">Trust this host key</button></div>
+                </div>
+              </template>
+              <template v-else>
               <label v-if="connectionDraft.transport.auth === 'password'" class="form-label"
                 >SSH password<input :disabled="testing"
                   v-model="connectionDraft.transport.password"
@@ -2481,6 +2521,7 @@ onBeforeUnmount(() => {
               <p v-if="connectionDraft.transport.auth === 'agent'" class="muted">
                 Simulates using the local SSH agent. No agent or tunnel is accessed.
               </p>
+              </template>
             </div>
             <div v-if="testMessage" class="notice" :class="testOk ? 'success' : 'error'">
               <CheckCircle2 v-if="testOk" :size="14" /><AlertCircle v-else :size="14" />{{
@@ -2498,7 +2539,7 @@ onBeforeUnmount(() => {
               Test connection
             </button>
             <div>
-              <button type="button" class="button" :disabled="testing" @click="closeConnectionDialog()">Cancel</button
+              <button type="button" class="button" :disabled="testing && !attemptId" @click="attemptId ? cancelAttempt() : closeConnectionDialog()">{{ attemptId ? 'Cancel connecting' : 'Cancel' }}</button
               ><button type="button" class="button" :disabled="testing" @click="saveConnection(false)">Save</button><button class="button primary" :disabled="testing">Save & connect</button>
             </div>
           </footer>

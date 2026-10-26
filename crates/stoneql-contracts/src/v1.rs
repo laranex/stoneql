@@ -181,6 +181,11 @@ pub enum ErrorCodeDto {
     ConnectionUnavailable,
     Capacity,
     UnsupportedSql,
+    SshHostKeyUnknown,
+    SshHostKeyChanged,
+    SshAuthenticationFailed,
+    SshAgentUnavailable,
+    SecretUnavailable,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -214,6 +219,11 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::ConnectionUnavailable => ErrorCodeDto::ConnectionUnavailable,
             ErrorCode::Capacity => ErrorCodeDto::Capacity,
             ErrorCode::UnsupportedSql => ErrorCodeDto::UnsupportedSql,
+            ErrorCode::SshHostKeyUnknown => ErrorCodeDto::SshHostKeyUnknown,
+            ErrorCode::SshHostKeyChanged => ErrorCodeDto::SshHostKeyChanged,
+            ErrorCode::SshAuthenticationFailed => ErrorCodeDto::SshAuthenticationFailed,
+            ErrorCode::SshAgentUnavailable => ErrorCodeDto::SshAgentUnavailable,
+            ErrorCode::SecretUnavailable => ErrorCodeDto::SecretUnavailable,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -323,6 +333,153 @@ pub struct DirectConnectionRequest {
     pub password: String,
     pub database: String,
     pub root_certificate_pem: Option<String>,
+    /// Opaque OS secret reference used when `password` is empty. Resolved only by the host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub password_ref: Option<String>,
+    /// Optional SSH tunnel. The database host/port stay the TLS identity and are resolved by
+    /// the SSH server; SQLite never accepts a tunnel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ssh: Option<SshTunnelRequest>,
+    /// Renderer-chosen opaque id that `cancel_connect` can name while setup is in flight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attempt_id: Option<String>,
+}
+/// SSH endpoint plus an enrolled OpenSSH public host key. Deliberately does not implement
+/// Debug: authentication may carry a session-only secret.
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTunnelRequest {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    /// Absent means not enrolled; the host refuses before contacting the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub host_key: Option<String>,
+    pub auth: SshAuthRequest,
+}
+/// Agent auth uses the host's own agent socket; agent forwarding is never requested.
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum SshAuthRequest {
+    Agent,
+    Password {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        password: Option<String>,
+        #[serde(
+            rename = "passwordRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[ts(optional)]
+        password_ref: Option<String>,
+    },
+    /// `grant` names a key file chosen in the native picker; key bytes never cross IPC.
+    KeyFile {
+        grant: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        passphrase: Option<String>,
+        #[serde(
+            rename = "passphraseRef",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[ts(optional)]
+        passphrase_ref: Option<String>,
+    },
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshEndpoint {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretPurpose {
+    DatabasePassword,
+    SshPassword,
+    SshPassphrase,
+}
+/// The connection target a stored secret is bound to. The host refuses to use a reference
+/// for any other target, so a stored password cannot be redirected to another server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretTarget {
+    pub engine: EngineDto,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ssh: Option<SshEndpoint>,
+}
+/// Moves one secret into the OS store. Deliberately does not implement Debug; the reply
+/// carries only the new opaque reference, never the secret.
+#[derive(Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreSecretRequest {
+    pub session_id: String,
+    pub purpose: SecretPurpose,
+    pub target: SecretTarget,
+    pub secret: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretReference {
+    pub reference: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretReferenceRequest {
+    pub session_id: String,
+    pub reference: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyRequest {
+    pub session_id: String,
+    pub host: String,
+    pub port: u16,
+}
+/// Presented, not trusted: the renderer shows the fingerprint and enrolls only on explicit
+/// user confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKey {
+    pub algorithm: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+/// Asks the trusted host to show its native SSH private-key picker. Carries no path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyFileRequest {
+    pub session_id: String,
+}
+/// Opaque session-scoped key-file grant; `fileName` is display-only. `None` = cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshKeyFileGrant {
+    pub grant: Option<String>,
+    pub file_name: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelConnectRequest {
+    pub session_id: String,
+    pub attempt_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelConnectResult {
+    pub cancelled: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -382,6 +539,20 @@ pub fn typescript() -> String {
     let config = ts_rs::Config::default();
     let declarations = [
         DirectConnectionRequest::decl(&config),
+        SshTunnelRequest::decl(&config),
+        SshAuthRequest::decl(&config),
+        SshEndpoint::decl(&config),
+        SecretPurpose::decl(&config),
+        SecretTarget::decl(&config),
+        StoreSecretRequest::decl(&config),
+        SecretReference::decl(&config),
+        SecretReferenceRequest::decl(&config),
+        SshHostKeyRequest::decl(&config),
+        SshHostKey::decl(&config),
+        SshKeyFileRequest::decl(&config),
+        SshKeyFileGrant::decl(&config),
+        CancelConnectRequest::decl(&config),
+        CancelConnectResult::decl(&config),
         LiveConnection::decl(&config),
         ConnectionHandleRequest::decl(&config),
         LiveQueryRequest::decl(&config),

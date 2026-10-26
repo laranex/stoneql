@@ -1,0 +1,5 @@
+Mutation (2026-10-26): crates/stoneql-runtime/src/ssh.rs Verifier::check_server_key changed to accept any non-certificate host key.
+Command: node tools/test-ssh-fixture.mjs mysql
+Result: exit 1. ssh_tunnel_uses_owned_fixture panicked at tests/ssh_tunnel.rs:171 "connection must fail: ConnectionId(..)" on the rotated-server (changed host key) case.
+Cleanup after the failing run: 0 containers, 0 networks, agent stopped, 0 endpoint directories, 0 Keychain items purged, temporary directory removed.
+Source restored byte-for-byte from a saved copy (diff empty) before all subsequent checks.

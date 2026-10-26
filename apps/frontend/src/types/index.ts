@@ -9,9 +9,22 @@ export type Transport =
       port: number;
       user: string;
       auth: 'agent' | 'password' | 'private-key';
+      /** Session-only secrets; never persisted. */
       password?: string;
       privateKey?: string;
       passphrase?: string;
+      /** Enrolled OpenSSH public host key and its SHA256 fingerprint (non-secret, persisted). */
+      hostKey?: string;
+      hostKeyFingerprint?: string;
+      /** Opaque OS secret references (desktop live only, persisted). */
+      passwordRef?: string;
+      passphraseRef?: string;
+      /** Opaque native key-file grant (session-only) and its display name (persisted). */
+      keyGrant?: string;
+      keyFileName?: string;
+      /** Draft-only choices to save secrets in the OS store; never persisted. */
+      rememberPassword?: boolean;
+      rememberPassphrase?: boolean;
     }
   | { type: 'teleport'; cluster: string }
   | { type: 'aws-ssm'; instanceId: string };
@@ -34,6 +47,10 @@ export interface Connection {
   user: string;
   database: string;
   password?: string;
+  /** Opaque OS secret reference for the database password (desktop live only). */
+  passwordRef?: string;
+  /** Draft-only: save the typed password in the OS store on save. */
+  rememberPassword?: boolean;
   transport: Transport;
   color: string;
   environment?: EnvironmentTag;

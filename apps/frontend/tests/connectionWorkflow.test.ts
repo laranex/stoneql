@@ -13,12 +13,20 @@ Object.assign(globalThis, {
 const { useConnectionWorkflow } = await loadModule('../../src/composables/useConnectionWorkflow.ts');
 const { useWorkspace } = await loadModule('../../src/stores/workspace.ts');
 const { bootstrapNativeHost } = await loadModule('../../src/services/nativeHost.ts');
-function nativeFixture(failConnect = false, pickerCancelled = false) {
+const HOST_KEY = { algorithm: 'ssh-ed25519', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl', fingerprint: 'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M' };
+function nativeFixture(failConnect: boolean | string = false, pickerCancelled = false) {
   const calls: Array<{ command: string; payload: any }> = [];
+  let references = 0, cancel: (() => void) | undefined;
   const global = { __TAURI__: { core: { async invoke(command: string, args: { message: string }) {
     const request = JSON.parse(args.message);
     calls.push({ command, payload: request.payload });
-    if (command === 'connect_direct' && failConnect) throw { code: 'CONNECTION_UNAVAILABLE', message: 'synthetic-password leaked' };
+    if (command === 'connect_direct' && failConnect === 'hang') await new Promise<void>((resolve) => { cancel = resolve; });
+    if (command === 'connect_direct' && failConnect) throw { code: typeof failConnect === 'string' ? (failConnect === 'hang' ? 'CANCELLED' : failConnect) : 'CONNECTION_UNAVAILABLE', message: 'synthetic-password leaked' };
+    if (command === 'cancel_connect') { cancel?.(); return { version: 1, requestId: request.requestId, payload: { cancelled: !!cancel } }; }
+    if (command === 'store_secret') return { version: 1, requestId: request.requestId, payload: { reference: `00000000-0000-4000-8000-${String(++references).padStart(12, '0')}` } };
+    if (command === 'delete_secret') return { version: 1, requestId: request.requestId, payload: { reference: request.payload.reference } };
+    if (command === 'ssh_host_key') return { version: 1, requestId: request.requestId, payload: HOST_KEY };
+    if (command === 'pick_ssh_key_file') return { version: 1, requestId: request.requestId, payload: { grant: 'opaque_key_grant', fileName: 'id_ed25519' } };
     const payload = command === 'host_info' ? { runtime: 'desktop', appVersion: '0.1.0', sessionId: 'test_session', nonce: request.payload.nonce, simulated: true }
       : command === 'contract_probe' ? { values: request.payload.values, simulated: true }
       : command === 'connect_direct' ? { handle: 'owned_handle', engineVersion: 'fixture-version', database: request.payload.database, expiresAfterSeconds: 3600 }
@@ -28,6 +36,12 @@ function nativeFixture(failConnect = false, pickerCancelled = false) {
     return { version: 1, requestId: request.requestId, payload };
   } } } };
   return { calls, global };
+}
+let lastConfirmation: any;
+/** Starts removal and returns its confirmed action. */
+async function setupRemoval(flow: any, id: string) {
+  flow.removeConnection(id);
+  return lastConfirmation.action;
 }
 async function setup(host: unknown = {}, options: { discard?: boolean } = {}) {
   preferences.clear();
@@ -41,7 +55,7 @@ async function setup(host: unknown = {}, options: { discard?: boolean } = {}) {
     notify: (message: string, type = 'success') => notices.push(`${type}:${message}`),
     discard: async () => options.discard ?? true,
     askDiscard: async (message: string) => { asked.push(message); return options.discard ?? true; },
-    confirm: (request: any) => { confirmation = request; },
+    confirm: (request: any) => { confirmation = request; lastConfirmation = request; },
   });
   return { store, flow, manager, notices, asked, confirmation: () => confirmation };
 }
@@ -82,7 +96,7 @@ test('live profiles are refused outside the desktop host before any state change
   const before = JSON.stringify(store.connections);
   liveDraft(flow);
   await flow.saveConnection();
-  assert.equal(flow.connectionError.value, 'Live connections require the desktop app, Direct MySQL, MariaDB or PostgreSQL and a database name.');
+  assert.equal(flow.connectionError.value, 'Live connections require the desktop app, MySQL, MariaDB or PostgreSQL over Direct or SSH and a database name.');
   assert.equal(JSON.stringify(store.connections), before);
   await flow.testConnection();
   assert.equal(flow.testOk.value, false);
@@ -178,7 +192,7 @@ test('live SQLite uses a native file grant, sends no path and never persists the
   await first.flow.chooseSqliteFile();
   assert.equal(first.flow.connectionDraft.value.sqliteGrant, undefined, 'a cancelled picker grants nothing');
   await first.flow.saveConnection();
-  assert.equal(first.flow.connectionError.value, 'Live SQLite requires the desktop app and a file chosen with Choose file.');
+  assert.equal(first.flow.connectionError.value, 'Live SQLite requires the desktop app, Direct transport and a file chosen with Choose file.');
   assert.ok(!cancelled.calls.some(c => c.command === 'connect_sqlite'));
   const native = nativeFixture();
   const { store, flow, notices } = await setup(native.global);
@@ -196,4 +210,106 @@ test('live SQLite uses a native file grant, sends no path and never persists the
   assert.ok(!JSON.stringify(native.calls).includes('/renderer/typed/path.sqlite'));
   const persisted = preferences.get('stoneql-connections') || '';
   assert.ok(persisted.includes('chosen.sqlite') && !persisted.includes('opaque_grant'));
+});
+
+function sshDraft(flow: any, auth: 'agent' | 'password' | 'private-key' = 'password') {
+  liveDraft(flow);
+  flow.changeTransport('ssh');
+  Object.assign(flow.connectionDraft.value.transport, { host: 'bastion.internal', user: 'deploy', auth });
+}
+test('live SSH requires explicit host-key enrollment before any connection attempt', async () => {
+  const native = nativeFixture();
+  const { store, flow } = await setup(native.global);
+  sshDraft(flow);
+  await flow.testConnection();
+  assert.ok(!native.calls.some((c) => c.command === 'connect_direct'), 'no connect without an enrolled key');
+  assert.deepEqual(flow.pendingHostKey.value, HOST_KEY);
+  assert.match(flow.testMessage.value, /Verify and trust the SSH host key/);
+  flow.rejectHostKey();
+  assert.equal(flow.pendingHostKey.value, undefined);
+  assert.equal(flow.connectionDraft.value.transport.hostKey, undefined);
+  const before = store.connections.length;
+  await flow.saveConnection();
+  assert.equal(flow.connectionError.value, 'Fetch, verify and trust the SSH host key before saving a live SSH profile.');
+  assert.equal(store.connections.length, before);
+  await flow.fetchHostKey();
+  flow.trustHostKey();
+  assert.equal(flow.connectionDraft.value.transport.hostKey, HOST_KEY.publicKey);
+  assert.equal(flow.connectionDraft.value.transport.hostKeyFingerprint, HOST_KEY.fingerprint);
+  await flow.testConnection();
+  assert.equal(flow.testOk.value, true);
+  assert.match(flow.testMessage.value, /Verified SSH host key and TLS/);
+  const connect = native.calls.find((c) => c.command === 'connect_direct')!.payload;
+  assert.deepEqual(connect.ssh, { host: 'bastion.internal', port: 22, username: 'deploy', hostKey: HOST_KEY.publicKey, auth: { method: 'password' } });
+  assert.match(connect.attemptId, /^attempt_[0-9a-f-]+$/);
+  flow.forgetHostKey();
+  assert.equal(flow.connectionDraft.value.transport.hostKey, undefined);
+});
+test('a changed SSH host key is a hard failure without a trust prompt', async () => {
+  const native = nativeFixture('SSH_HOST_KEY_CHANGED');
+  const { flow } = await setup(native.global);
+  sshDraft(flow, 'agent');
+  Object.assign(flow.connectionDraft.value.transport, { hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  await flow.testConnection();
+  assert.equal(flow.testOk.value, false);
+  assert.match(flow.testMessage.value, /host key changed — connection refused/);
+  assert.equal(flow.pendingHostKey.value, undefined);
+  assert.equal(flow.connectionDraft.value.transport.hostKey, HOST_KEY.publicKey, 'the enrolled key is never replaced automatically');
+  assert.deepEqual(native.calls.find((c) => c.command === 'connect_direct')!.payload.ssh.auth, { method: 'agent' });
+});
+test('connection setup can be cancelled while the native host is connecting', async () => {
+  const native = nativeFixture('hang');
+  const { flow } = await setup(native.global);
+  liveDraft(flow);
+  const pending = flow.testConnection();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(flow.attemptId.value, /^attempt_/);
+  assert.equal(flow.testing.value, true);
+  await flow.cancelAttempt();
+  await pending;
+  assert.equal(native.calls.find((c) => c.command === 'cancel_connect')!.payload.attemptId, native.calls.find((c) => c.command === 'connect_direct')!.payload.attemptId);
+  assert.equal(flow.testMessage.value, 'Connection setup cancelled; no connection was opened.');
+  assert.equal(flow.attemptId.value, '');
+  assert.equal(flow.testing.value, false);
+});
+test('remembered secrets become bound OS references; profiles persist references, never secrets or grants', async () => {
+  const native = nativeFixture();
+  const { store, flow } = await setup(native.global);
+  const { connectionSnapshot } = await loadModule('../../src/services/connectionPreferences.ts');
+  sshDraft(flow, 'private-key');
+  Object.assign(flow.connectionDraft.value, { rememberPassword: true });
+  await flow.chooseSshKeyFile();
+  Object.assign(flow.connectionDraft.value.transport, { passphrase: 'synthetic-passphrase', rememberPassphrase: true, hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  assert.equal(flow.connectionDraft.value.transport.keyGrant, 'opaque_key_grant');
+  await flow.saveConnection();
+  assert.equal(flow.connectionError.value, '');
+  const stored = native.calls.filter((c) => c.command === 'store_secret').map((c) => c.payload);
+  assert.deepEqual(stored.map((p) => p.purpose), ['database_password', 'ssh_passphrase']);
+  assert.deepEqual(stored[0].target, { engine: 'mysql', host: '127.0.0.1', port: 3306, username: 'root', ssh: { host: 'bastion.internal', port: 22, username: 'deploy' } });
+  const connect = native.calls.find((c) => c.command === 'connect_direct')!.payload;
+  assert.equal(connect.password, 'synthetic-password', 'the typed secret is used for this connection');
+  assert.deepEqual(connect.ssh.auth, { method: 'key_file', grant: 'opaque_key_grant', passphrase: 'synthetic-passphrase' });
+  const id = flow.connectionDraft.value.id;
+  const saved = store.connections.find((c: any) => c.id === id);
+  const serialized = JSON.stringify(connectionSnapshot(store.connections, store.groups));
+  for (const secret of ['synthetic-password', 'synthetic-passphrase', 'opaque_key_grant', 'remember']) assert.ok(!serialized.includes(secret), secret);
+  for (const kept of [saved.passwordRef, saved.transport.passphraseRef, HOST_KEY.publicKey, HOST_KEY.fingerprint, 'id_ed25519']) assert.ok(serialized.includes(kept), kept);
+  // A later connect uses references only.
+  flow.newConnection(saved);
+  assert.equal(flow.connectionDraft.value.rememberPassword, true);
+  assert.equal(flow.connectionDraft.value.transport.rememberPassphrase, true);
+  await flow.testConnection();
+  const second = native.calls.filter((c) => c.command === 'connect_direct').at(-1)!.payload;
+  assert.equal(second.password, '');
+  assert.equal(second.passwordRef, saved.passwordRef);
+  assert.deepEqual(second.ssh.auth, { method: 'key_file', grant: 'opaque_key_grant', passphraseRef: saved.transport.passphraseRef });
+  // Turning remembering off forgets the old reference after a successful save.
+  flow.connectionDraft.value.rememberPassword = false;
+  await flow.saveConnection(false);
+  assert.deepEqual(native.calls.filter((c) => c.command === 'delete_secret').map((c) => c.payload.reference), [saved.passwordRef]);
+  assert.equal(store.connections.find((c: any) => c.id === id).passwordRef, undefined);
+  // Removing the profile forgets its remaining references.
+  const remove = await setupRemoval(flow, id);
+  await remove();
+  assert.deepEqual(native.calls.filter((c) => c.command === 'delete_secret').map((c) => c.payload.reference), [saved.passwordRef, saved.transport.passphraseRef]);
 });

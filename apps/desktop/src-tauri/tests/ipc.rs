@@ -6,10 +6,12 @@ use tauri::{
     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+/// The only `generate_context!` expansion in this test binary (it embeds Info.plist once).
+fn build(builder: tauri::Builder<MockRuntime>) -> tauri::App<MockRuntime> {
+    builder.build(tauri::generate_context!()).unwrap()
+}
 fn app() -> tauri::App<MockRuntime> {
-    stoneql_desktop::app_builder(mock_builder(), false)
-        .build(tauri::generate_context!())
-        .unwrap()
+    build(stoneql_desktop::app_builder(mock_builder(), false))
 }
 fn window(app: &tauri::App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
     // Configured windows are created only by the real event loop; mock tests create theirs explicitly.
@@ -286,4 +288,139 @@ fn renderer_bootstrap_rotates_session_and_rejects_stale_probes() {
         invoke(&webview, "contract_probe", stale, "tauri://localhost").unwrap_err()["code"],
         "FORBIDDEN"
     );
+}
+/// In-memory stand-in for the OS store: default tests never touch the user's keychain.
+#[derive(Default)]
+struct MemoryStore(std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>);
+impl stoneql_desktop::SecretStore for MemoryStore {
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), stoneql_desktop::SecretError> {
+        self.0.lock().unwrap().insert(account.into(), value.into());
+        Ok(())
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, stoneql_desktop::SecretError> {
+        self.0
+            .lock()
+            .unwrap()
+            .get(account)
+            .cloned()
+            .ok_or(stoneql_desktop::SecretError::NotFound)
+    }
+    fn delete(&self, account: &str) -> Result<(), stoneql_desktop::SecretError> {
+        self.0
+            .lock()
+            .unwrap()
+            .remove(account)
+            .map(|_| ())
+            .ok_or(stoneql_desktop::SecretError::NotFound)
+    }
+}
+#[test]
+fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
+    let store = std::sync::Arc::new(MemoryStore::default());
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            secrets: store.clone(),
+            agent_socket: None,
+        },
+    ));
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let call = |command: &str, payload: Value| {
+        let mut payload = payload;
+        payload["sessionId"] = json!(session);
+        let reply = invoke(
+            &webview,
+            command,
+            json!({"version":1,"requestId":"ssh_case","payload":payload}),
+            "tauri://localhost",
+        );
+        let text = format!("{reply:?}");
+        assert!(
+            !text.contains("synthetic-secret"),
+            "{command} echoed a secret"
+        );
+        reply
+    };
+    let code = |reply: Result<Value, Value>| reply.unwrap_err()["code"].clone();
+    let target = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader"});
+    let reference = call(
+        "store_secret",
+        json!({"purpose":"database_password","target":target,"secret":"synthetic-secret"}),
+    )
+    .unwrap()["payload"]["reference"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(uuid::Uuid::parse_str(&reference).is_ok());
+    assert_eq!(store.0.lock().unwrap().len(), 1);
+    // Purpose/target mismatches are refused without storing anything.
+    for payload in [
+        json!({"purpose":"ssh_password","target":target,"secret":"synthetic-secret"}),
+        json!({"purpose":"database_password","target":{"engine":"sqlite","host":"h","port":1,"username":"u"},"secret":"synthetic-secret"}),
+        json!({"purpose":"database_password","target":target,"secret":""}),
+    ] {
+        assert_eq!(code(call("store_secret", payload)), "INVALID_REQUEST");
+    }
+    assert_eq!(store.0.lock().unwrap().len(), 1);
+    let connect = |extra: Value| {
+        let mut payload = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader","password":"","database":"app","rootCertificatePem":null});
+        for (key, value) in extra.as_object().unwrap() {
+            payload[key] = value.clone();
+        }
+        call("connect_direct", payload)
+    };
+    let ssh =
+        json!({"host":"bastion.internal","port":22,"username":"deploy","auth":{"method":"agent"}});
+    // A saved password is bound to its target and route: via SSH it is a different target.
+    assert_eq!(
+        code(connect(json!({"passwordRef":reference,"ssh":ssh}))),
+        "SECRET_UNAVAILABLE"
+    );
+    assert_eq!(
+        code(connect(
+            json!({"password":"synthetic-secret","passwordRef":reference})
+        )),
+        "INVALID_REQUEST"
+    );
+    // An unenrolled SSH host key is refused before any network access.
+    assert_eq!(
+        code(connect(json!({"password":"synthetic-secret","ssh":ssh}))),
+        "SSH_HOST_KEY_UNKNOWN"
+    );
+    let mut keyed = ssh.clone();
+    keyed["hostKey"] = json!("not an openssh key");
+    assert_eq!(code(connect(json!({"ssh":keyed}))), "INVALID_REQUEST");
+    let mut sqlite = json!({"engine":"sqlite","ssh":ssh});
+    sqlite["password"] = json!("");
+    assert_eq!(code(connect(sqlite)), "UNSUPPORTED_CAPABILITY");
+    assert_eq!(
+        code(connect(json!({"attemptId":"not opaque!","ssh":ssh}))),
+        "INVALID_REQUEST"
+    );
+    assert_eq!(
+        call("cancel_connect", json!({"attemptId":"attempt_1"})).unwrap()["payload"],
+        json!({"cancelled":false})
+    );
+    assert_eq!(
+        code(call("ssh_host_key", json!({"host":"two words","port":22}))),
+        "INVALID_REQUEST"
+    );
+    assert_eq!(
+        code(call("delete_secret", json!({"reference":"../escape"}))),
+        "INVALID_REQUEST"
+    );
+    for _ in 0..2 {
+        call("delete_secret", json!({"reference":reference})).unwrap();
+    }
+    assert!(store.0.lock().unwrap().is_empty());
+    // A stale renderer session cannot store, resolve or scan.
+    let stale = invoke(
+        &webview,
+        "store_secret",
+        json!({"version":1,"requestId":"stale","payload":{"sessionId":"stale","purpose":"database_password","target":target,"secret":"synthetic-secret"}}),
+        "tauri://localhost",
+    );
+    assert_eq!(stale.unwrap_err()["code"], "FORBIDDEN");
 }

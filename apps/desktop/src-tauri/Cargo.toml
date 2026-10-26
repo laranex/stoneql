@@ -21,6 +21,10 @@ serde_json.workspace = true
 serde.workspace = true
 uuid.workspace = true
 
+# D005 desktop secret provider: macOS Keychain only; other OSes are explicitly unsupported.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "=3.7.0", default-features = false }
+
 [dev-dependencies]
 sqlx.workspace = true
 tauri = { version = "=2.12.5", features = ["test"] }

@@ -1,6 +1,6 @@
 # Connection management
 
-**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB/PostgreSQL and SQLite-file read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped pools, TLS, expiry and shutdown tests; [M004](../development/postgres-sqlite.md) adds PostgreSQL VerifyFull TLS and owner-scoped SQLite file grants. Native live binding and renderer-bootstrap cleanup are implemented; credential storage and tunnels remain unimplemented.
+**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB/PostgreSQL and SQLite-file read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped pools, TLS, expiry and shutdown tests; [M004](../development/postgres-sqlite.md) adds PostgreSQL VerifyFull TLS and owner-scoped SQLite file grants. Native live binding and renderer-bootstrap cleanup are implemented. [M005](../development/ssh-credentials.md) adds desktop SSH tunnels (verified enrolled host keys, agent/password/key file) and macOS Keychain secret references; other operating systems, Teleport/SSM and a server vault remain unimplemented.
 
 ## Identity and ownership
 
@@ -28,7 +28,7 @@ M003-L accepts the Direct connection ownership, pool bounds, verified TLS and fa
 
 ## Transports
 
-Direct and SSH are first-stage proposals. Validate TLS certificates and SSH host keys; do not introduce trust-all fallbacks. SSH agent, key and password flows need OS-specific tests, passphrase secrecy, cancellation and tunnel lifetime ownership. Preserve the original database hostname for certificate verification through a local forwarded endpoint. SQLite path authorization is host-specific and has no SSH option by default.
+Direct and SSH are implemented for desktop live MySQL, MariaDB and PostgreSQL profiles (macOS verified). TLS certificates and SSH host keys are always verified; there is no trust-all fallback or trust-on-first-use. A host key must be explicitly enrolled after the user verifies its fingerprint; a changed key is a hard failure until the user deliberately forgets the old key. Agent, key-file and password flows are covered by owned fixtures, including passphrases, cancellation and tunnel ownership. Each logical handle owns one SSH session and a private Unix-socket endpoint; the database adapter keeps its own TLS mode and the original hostname for certificate verification. SQLite path authorization is host-specific and has no SSH option. See [SSH transport and secret references](../development/ssh-credentials.md).
 
 Teleport (`tsh`) and AWS SSM are deferred. Their CLI processes, expiry, identity renewal and endpoint cleanup need separate threat/design reviews; do not shell-interpolate user input or assume they are drop-in SSH equivalents.
 

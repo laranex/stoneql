@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixtureEnvironment, assertLocalFixtureDocker } from '../tools/fixture-environment.mjs';
 
-test('driver fixtures do not inherit database credentials, targets or TLS key paths', () => {
+test('driver fixtures do not inherit database credentials, targets, TLS key paths or the user SSH agent', () => {
   const filtered = fixtureEnvironment({
+    SSH_AUTH_SOCK: '/never/the/user/agent', SSH_AGENT_PID: '1', SSH_ASKPASS: '/never/run', STONEQL_SSH_PASSWORD: 'synthetic',
     PGHOST: 'production.invalid', PGPASSWORD: 'synthetic', PGSSLCERT: '/never/read',
     MYSQL_PWD: 'synthetic', MARIADB_HOST: 'production.invalid', DATABASE_URL: 'synthetic',
     DBADMIN_SPIKE_URL: 'legacy-synthetic', DBADMIN_FIXTURE_PASSWORD: 'legacy-secret', STONEQL_SPIKE_URL: 'synthetic', STONEQL_LIFECYCLE_CA: '/never/read', STONEQL_FIXTURE_PASSWORD: 'synthetic', PATH: '/bin', CARGO_HOME: '/temporary',
