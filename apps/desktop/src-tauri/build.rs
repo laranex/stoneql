@@ -20,6 +20,8 @@ fn main() {
             "cancel_job",
             "begin_transaction",
             "end_transaction",
+            "list_unresolved_outcomes",
+            "acknowledge_outcome",
         ]),
     ))
     .expect("validate StoneQL native configuration and command permissions");

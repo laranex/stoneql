@@ -7,8 +7,8 @@ mod script;
 mod sqlite;
 mod ssh;
 pub use execution::{
-    Access, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, TransactionEnd,
-    mysql_state_matches, postgres_commit, postgres_state_matches,
+    Access, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, OutcomeId,
+    TransactionEnd, mysql_state_matches, postgres_commit, postgres_state_matches,
 };
 pub use read_only::{QueryLimits, ReadError};
 pub use script::ScriptError;
@@ -302,9 +302,9 @@ impl Connections {
         access: Access,
     ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
-        // Gate: read-write over SSH stays unavailable until best-effort cancellation through a
-        // tunnel with exhausted forwarding slots is implemented and fixture-tested. Refused
-        // before any network access.
+        // Gate (D025-9): read-write over SSH stays unavailable until the user enables it
+        // separately; tunnelled cancellation under forwarding-slot exhaustion is fixture-tested
+        // (`execution::ssh_fixture`). Refused before any network access.
         if tunnel.is_some() && access == Access::ReadWrite {
             return Err(LifecycleError::Unsupported);
         }
@@ -680,7 +680,8 @@ impl Connections {
     }
     /// Trusted host reset revokes all handles, file grants and pending registrations, cancels
     /// in-flight setups and closes owned tunnels, retaining capacity. Closing pools waits for
-    /// bounded active queries; it does not confirm server cancellation.
+    /// bounded active queries; it does not confirm server cancellation. Job records are
+    /// released (their renderer is gone); unknown outcomes stay listable until acknowledged.
     pub async fn reset(&self) {
         let entries: Vec<_> = {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
@@ -690,6 +691,7 @@ impl Connections {
         };
         self.cancel_all_attempts();
         execution::release(&self.0, None).await;
+        self.0.execution.forget_jobs();
         for entry in entries {
             entry.close().await;
         }

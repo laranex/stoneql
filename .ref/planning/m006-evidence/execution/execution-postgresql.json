@@ -7,21 +7,21 @@
   },
   "bulkCancel": [
     {
-      "cancelToTerminalMs": 82.126709,
+      "cancelToTerminalMs": 31.647041,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
       "serverCancelSent": true
     },
     {
-      "cancelToTerminalMs": 80.18325,
+      "cancelToTerminalMs": 39.90225,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
       "serverCancelSent": true
     },
     {
-      "cancelToTerminalMs": 71.36575,
+      "cancelToTerminalMs": 42.715708,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
@@ -31,11 +31,11 @@
   "busyNotQueued": true,
   "cancel": {
     "confirmed": 100,
-    "deadlinePathConfirmed": true,
+    "deadlinePath": "server statement_timeout (failed, 57014)",
     "graceMs": 1500,
-    "maxMs": 70.11004199999999,
-    "p50Ms": 60.521166,
-    "p95Ms": 68.625291,
+    "maxMs": 59.610083,
+    "p50Ms": 45.902416,
+    "p95Ms": 57.507667,
     "samples": 100,
     "serverSignalsSent": 100
   },
@@ -57,16 +57,17 @@
   },
   "killFailure": {
     "boundMs": 2500,
-    "cancelToTerminalMs": 1502.418167,
+    "cancelToTerminalMs": 1500.959917,
     "cancellation": "requested",
     "executions": 1,
     "killedByObserver": false,
     "outcome": "unknown",
     "rowApplied": false,
     "serverBackstop": {
-      "endedAfterSubmitMs": 5066.046042,
+      "endedAfterSubmitMs": 4061.0947499999997,
       "endedByServer": true,
-      "statementTimeoutMs": 5000
+      "statementDeadlineMs": 5000,
+      "statementTimeoutMs": 4000
     },
     "serverCancelSent": false,
     "statementStillRunningAfterAbandon": true
@@ -78,8 +79,8 @@
   "lostEndReplies": {
     "commit_drop_s2c": {
       "commitSent": true,
-      "endMsMax": 10008.139834,
-      "endMsP50": 10007.705542,
+      "endMsMax": 10007.319000000001,
+      "endMsP50": 10006.558917,
       "endStatementReachedServer": "3/3",
       "n": 3,
       "repeatEndSameOutcome": "3/3",
@@ -89,8 +90,8 @@
     },
     "commit_sever": {
       "commitSent": true,
-      "endMsMax": 0.204208,
-      "endMsP50": 0.101709,
+      "endMsMax": 0.19304200000000002,
+      "endMsP50": 0.104,
       "endStatementReachedServer": "0/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -100,8 +101,8 @@
     },
     "commit_sever_on_reply": {
       "commitSent": true,
-      "endMsMax": 0.944166,
-      "endMsP50": 0.493667,
+      "endMsMax": 0.944917,
+      "endMsP50": 0.507958,
       "endStatementReachedServer": "50/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -111,8 +112,8 @@
     },
     "rollback_drop_s2c": {
       "commitSent": false,
-      "endMsMax": 2008.6334579999998,
-      "endMsP50": 2007.2255420000001,
+      "endMsMax": 2007.644042,
+      "endMsP50": 2007.4968750000003,
       "endStatementReachedServer": "3/3",
       "n": 3,
       "repeatEndSameOutcome": "3/3",
@@ -122,8 +123,8 @@
     },
     "rollback_sever": {
       "commitSent": false,
-      "endMsMax": 0.171667,
-      "endMsP50": 0.08604200000000001,
+      "endMsMax": 0.205167,
+      "endMsP50": 0.105041,
       "endStatementReachedServer": "0/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -133,8 +134,8 @@
     },
     "rollback_sever_on_reply": {
       "commitSent": false,
-      "endMsMax": 0.885541,
-      "endMsP50": 0.486375,
+      "endMsMax": 0.642333,
+      "endMsP50": 0.483791,
       "endStatementReachedServer": "50/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -149,6 +150,49 @@
     "writeCancelExecutedOnce": "30/30"
   },
   "ownerIsolation": true,
+  "postgresServerTimeout": {
+    "autocommit": {
+      "cancellation": "none",
+      "deadlineExceeded": true,
+      "executedOnce": "10/10",
+      "n": 10,
+      "outcome": "failed",
+      "rowApplied": false,
+      "serverLogTimeoutErrors": 10,
+      "sqlState": "57014",
+      "submitToTerminalMsMax": 2061.558,
+      "submitToTerminalMsMin": 2035.159667,
+      "submitToTerminalMsP50": 2055.079542
+    },
+    "cancelBeforeServerTimeout": {
+      "cancelToTerminalMs": 40.638792,
+      "cancellation": "confirmed"
+    },
+    "clientDeadlineBackstop": {
+      "deadlineExceeded": true,
+      "outcome": "unknown",
+      "submitToTerminalMs": 3087.5695840000003
+    },
+    "externalCancelAfterServerTimeoutNotDeadline": {
+      "deadlineExceeded": false,
+      "outcome": "failed",
+      "sqlState": "57014",
+      "submitToTerminalMs": 2306.410292
+    },
+    "lease": {
+      "leaseState": "rollback_only",
+      "leaseWorkVisibleAfter": false,
+      "rollbackConfirmed": true,
+      "serverStateAbortedBlock": true,
+      "submitToTerminalMs": 2008.45975
+    },
+    "marginMs": 1000,
+    "statementDeadlineMs": 3000,
+    "statementTimeoutMs": 2000,
+    "writerSessionsAfter": 2,
+    "writerSessionsBaseline": 2,
+    "writerSessionsInTransactionAfter": 0
+  },
   "postgresSessionState": {
     "probe": {
       "abortedBlockMismatchAfterSuccess": true,
@@ -170,17 +214,30 @@
     "rollback",
     "rollback_only"
   ],
+  "unknownOutcomeRetention": {
+    "acknowledgementChangesOutcome": false,
+    "churnMs": 6356.885625,
+    "confirmedEndsChurned": 288,
+    "lostCommit": {
+      "commitSent": true,
+      "outcome": "unknown",
+      "rowCommittedObserved": 1
+    },
+    "oldestConfirmedEvicted": true,
+    "unknownListedAfterChurn": true,
+    "unknownQueryableAfterChurn": true
+  },
   "writeCancel": {
     "cancellation": "confirmed",
     "connectionDiscarded": "30/30",
     "executedOnce": "30/30",
     "interruptDelivered": "30/30",
-    "maxMs": 40.343042000000004,
+    "maxMs": 39.629916,
     "n": 30,
     "note": "rowUnchanged is the observed data state after the lock holder rolled back (statement never acquired the lock); not a claimed rollback",
     "outcome": "unknown",
-    "p50Ms": 24.691292,
-    "p95Ms": 30.904958,
+    "p50Ms": 25.118667000000002,
+    "p95Ms": 28.488708000000003,
     "rowUnchanged": "30/30",
     "serverInterrupt": "pg_cancel_backend",
     "sessionsBaseline": 2

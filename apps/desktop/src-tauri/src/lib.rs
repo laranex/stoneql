@@ -4,7 +4,10 @@ mod secrets;
 mod sqlite_file;
 mod ssh_transport;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
-use execution::{begin_transaction, cancel_job, end_transaction, fetch_job, submit_job};
+use execution::{
+    acknowledge_outcome, begin_transaction, cancel_job, end_transaction, fetch_job,
+    list_unresolved_outcomes, submit_job,
+};
 pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
 use secrets::{delete_secret, store_secret};
 pub use sqlite_file::authorize_sqlite_file;
@@ -60,6 +63,8 @@ pub struct NativeSession {
     read_write_sql: bool,
     closing: AtomicBool,
     active_requests: AtomicUsize,
+    /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
+    /// before a reload stay listable (owner-scoped) by the next renderer until acknowledged.
     owner: stoneql_runtime::OwnerId,
     connections: stoneql_runtime::Connections,
     renderer: Mutex<Option<(String, String)>>,
@@ -83,6 +88,17 @@ impl NativeSession {
                 .expect("renderer session lock")
                 .as_ref()
                 .is_some_and(|(_, current)| current == id)
+    }
+    /// Ends the current renderer session: its id is revoked and the registry reset (leases
+    /// rolled back with recorded outcomes, jobs interrupted and their records released). Unknown
+    /// outcomes stay listable by the next renderer. Callers hold `bootstrap`.
+    async fn end_renderer(&self) {
+        *self.renderer.lock().expect("renderer session lock") = None;
+        self.echoed.store(false, Ordering::SeqCst);
+        self.close_pending.store(false, Ordering::SeqCst);
+        self.close_prompted.store(false, Ordering::SeqCst);
+        self.close_generation.fetch_add(1, Ordering::SeqCst);
+        self.connections.reset().await;
     }
     fn new(smoke: bool, services: HostServices) -> Self {
         Self {
@@ -164,12 +180,7 @@ async fn host_info<R: Runtime>(
     let id = if let Some((_, id)) = previous.filter(|(nonce, _)| nonce == &request.payload.nonce) {
         id
     } else {
-        *session.renderer.lock().expect("renderer session lock") = None;
-        session.echoed.store(false, Ordering::SeqCst);
-        session.close_pending.store(false, Ordering::SeqCst);
-        session.close_prompted.store(false, Ordering::SeqCst);
-        session.close_generation.fetch_add(1, Ordering::SeqCst);
-        session.connections.reset().await;
+        session.end_renderer().await;
         if session.closing.load(Ordering::SeqCst) {
             return Err(forbidden());
         }
@@ -297,6 +308,46 @@ pub fn request_close<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<(), ErrorD
     });
     Ok(())
 }
+/// Native reload guard (M006 blocker 2): whether the main webview may navigate now. Reload by
+/// any path (devtools, the WKWebView context menu, `location.reload()`, `Webview::reload`) or any
+/// other navigation would replace the renderer that owns the session's leases and jobs. While the
+/// runtime registry holds an open lease or a job record (running, or finished with unread
+/// results), navigation is refused and the renderer is asked to confirm. On confirmation the
+/// renderer rotates the session through `host_info` (resetting the registry: leases rolled back
+/// with recorded outcomes, jobs interrupted and their records released) and only then reloads.
+/// Renderer state is never consulted. Unknown outcomes stay listable by the next renderer.
+pub fn navigation_allowed<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let session = app.state::<NativeSession>();
+    !session.connections.has_active_work(session.owner)
+}
+/// The renderer is gone without confirming anything (its web content process terminated, F-2).
+/// The host ends its session itself, exactly as a confirmed reload's rotation does, so the
+/// reload that follows is not refused by [`navigation_allowed`] and the next renderer lists the
+/// unknown outcomes. Returns whether the app may reload (false while it is closing).
+pub async fn renderer_lost<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let session = app.state::<NativeSession>();
+    let _bootstrap = session.bootstrap.lock().await;
+    if session.closing.load(Ordering::SeqCst) || session.allow_exit.load(Ordering::SeqCst) {
+        return false;
+    }
+    session.end_renderer().await;
+    true
+}
+fn navigation_guard<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("stoneql-navigation-guard")
+        .on_navigation(|webview, _url| {
+            if webview.label() != "main" || navigation_allowed(webview.app_handle()) {
+                return true;
+            }
+            let webview = webview.clone();
+            // Off the WebKit policy callback. Fixed application code; no user data is evaluated.
+            std::thread::spawn(move || {
+                let _ = webview.eval("window.dispatchEvent(new Event('stoneql-reload-requested'))");
+            });
+            false
+        })
+        .build()
+}
 #[tauri::command]
 async fn resolve_close<R: Runtime>(
     window: WebviewWindow<R>,
@@ -339,8 +390,23 @@ pub fn app_builder_with<R: Runtime>(
     smoke: bool,
     services: HostServices,
 ) -> tauri::Builder<R> {
+    // Replaces Tauri's default terminate handler, which reloads at once: while work is active
+    // the navigation guard refuses that reload and the window stays blank (F-2).
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(|webview| {
+        if webview.label() != "main" {
+            return;
+        }
+        let webview = webview.clone();
+        tauri::async_runtime::spawn(async move {
+            if renderer_lost(webview.app_handle()).await {
+                let _ = webview.reload();
+            }
+        });
+    });
     builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(navigation_guard())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
                 && window.label() == "main"
@@ -388,7 +454,9 @@ pub fn app_builder_with<R: Runtime>(
             fetch_job,
             cancel_job,
             begin_transaction,
-            end_transaction
+            end_transaction,
+            list_unresolved_outcomes,
+            acknowledge_outcome
         ])
 }
 pub fn run() {

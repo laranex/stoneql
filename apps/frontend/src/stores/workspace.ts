@@ -1,6 +1,6 @@
-import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd } from '../services/liveConnections';
-import {NativeOperationError} from '../services/nativeHost';
-import type {AccessModeDto, LiveConnection, TransactionActionDto, TransactionEnd} from '../../../../contracts/generated/v1';
+import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd, listUnresolvedOutcomes, acknowledgeOutcome } from '../services/liveConnections';
+import {NativeOperationError, hostState} from '../services/nativeHost';
+import type {AccessModeDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
@@ -97,6 +97,40 @@ export const useWorkspace = defineStore('workspace', () => {
   const liveSessions = ref<Record<string,{status:'connecting'|'connected'|'disconnected'|'error';info?:LiveConnection;error?:string;lease?:{id:string;state:'active'|'rollback_only'}}>>({});
   const liveGenerations = new Map<string,number>();
   /**
+   * Unknown outcomes the native host keeps for this app process until the user acknowledges
+   * them (also those from before a reload). `outcomeProfiles` names the profile of a lease or
+   * job started in this renderer session; earlier sessions' outcomes have no profile name.
+   */
+  const unresolvedOutcomes = ref<UnresolvedOutcome[]>([]);
+  const unresolvedError = ref('');
+  const outcomeProfiles = ref<Record<string,string>>({});
+  /** Only an unconfirmed (or unreadable) end can add an unresolved outcome. */
+  const unconfirmed=(end:TransactionEnd|null|undefined)=>end===null||end?.outcome==='unknown';
+  let pendingTimer:ReturnType<typeof setTimeout>|undefined;
+  /**
+   * Jobs a reload detached while still running may record an unknown outcome after this list:
+   * while the host reports any pending, list again each second. The host ends each one within
+   * its job deadline, so this stops; it also stops on a listing error.
+   */
+  function applyUnresolved(list:{outcomes:UnresolvedOutcome[];pending?:number}) {
+    unresolvedOutcomes.value=list.outcomes;
+    clearTimeout(pendingTimer); pendingTimer=undefined;
+    if((list.pending??0)>0)pendingTimer=setTimeout(()=>{ pendingTimer=undefined; void refreshUnresolvedOutcomes(); },1000);
+  }
+  async function refreshUnresolvedOutcomes() {
+    if(hostState().kind!=='desktop')return;
+    try {
+      const list=await listUnresolvedOutcomes();
+      if(!Array.isArray(list?.outcomes))throw new Error('Native protocol mismatch.');
+      applyUnresolved(list); unresolvedError.value='';
+    }
+    catch(error){ unresolvedError.value=`Unknown outcomes could not be listed (${(error as Error).message}) Earlier outcomes may still be unresolved; verify on the server.`; }
+  }
+  /** Explicit user acknowledgement: hides the outcome; it never changes what was recorded. */
+  async function acknowledgeUnresolvedOutcome(outcomeId:string) {
+    applyUnresolved(await acknowledgeOutcome(outcomeId));
+  }
+  /**
    * Closes the live handle. An open transaction is ended natively by the close; its recorded
    * outcome is then read by lease id (an outcome query: nothing is sent again). Returns that
    * outcome, null when it could not be read, or undefined when no transaction was open.
@@ -108,7 +142,13 @@ export const useWorkspace = defineStore('workspace', () => {
     liveGenerations.set(id,(liveGenerations.get(id)||0)+1);
     const handle=liveSessions.value[id]?.info?.handle;
     liveSessions.value[id]={status:'disconnected'};
-    const leaseEnd=async()=>lease?endLiveTransaction(lease.id,'rollback').catch(()=>null):undefined;
+    // Only an unconfirmed (or unreadable) end can add an unresolved outcome to list.
+    const leaseEnd=async()=>{
+      if(!lease)return undefined;
+      const end=await endLiveTransaction(lease.id,'rollback').catch(()=>null);
+      if(unconfirmed(end))await refreshUnresolvedOutcomes();
+      return end;
+    };
     if(handle) { try { await closeLive(handle); } catch(error) { if(!(error instanceof NativeOperationError && error.code==='FORBIDDEN')) {
       const end=await leaseEnd();
       if(end!==undefined)(error as Error).message+=` ${end?describeTransactionEnd(end).text:LEASE_OUTCOME_UNREADABLE}`;
@@ -162,11 +202,34 @@ export const useWorkspace = defineStore('workspace', () => {
     const current=liveSessions.value[id];
     if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile before running SQL.');
     const generation=liveGenerations.get(id);
-    const result=await runLiveJob(current.info.handle,sql,{leaseId:current.lease?.id,onJob});
+    const lease=current.lease;
+    // The lease's end as the native runtime recorded it (expired, closed, connection lost).
+    // Only called once the runtime reported the lease gone, so it returns that record and
+    // sends nothing.
+    const leaseEnd=async(leaseId:string)=>{
+      const end=await endLiveTransaction(leaseId,'rollback').catch(()=>null);
+      if(unconfirmed(end))await refreshUnresolvedOutcomes();
+      const session=liveSessions.value[id];
+      if(session?.lease?.id===leaseId)session.lease=undefined;
+      return end?describeTransactionEnd(end).text:'Its outcome could not be read; treat it as unknown and verify on the server.';
+    };
+    let accepted=false;
+    let result;
+    try { result=await runLiveJob(current.info.handle,sql,{leaseId:lease?.id,onJob:jobId=>{accepted=true;outcomeProfiles.value[jobId]=id;onJob?.(jobId);}}); }
+    catch(error){
+      // An accepted job may have ended unknown; a refusal for unresolved outcomes lists them.
+      if(accepted||(error instanceof NativeOperationError&&error.code==='UNRESOLVED_OUTCOMES'))await refreshUnresolvedOutcomes();
+      // A job on a lease that already ended (for example idle-expired) is refused before
+      // anything is sent; report why the transaction ended instead of a connection problem.
+      if(lease&&!accepted&&error instanceof NativeOperationError&&error.code==='FORBIDDEN'&&liveGenerations.get(id)===generation)
+        throw new NativeOperationError(error.code,`Nothing was sent: the transaction is no longer open. ${await leaseEnd(lease.id)}`);
+      throw error;
+    }
+    if(result.outcome==='unknown')await refreshUnresolvedOutcomes();
     if(liveGenerations.get(id)!==generation)throw new Error('Results were discarded because the connection changed. Outcomes of sent statements are unknown to this view.');
     const session=liveSessions.value[id];
-    if(session?.lease&&result.lease){
-      if(result.lease==='ended'){session.lease=undefined;session.error='The transaction connection was lost. Its outcome is unknown: COMMIT was never sent, but the rollback was not confirmed.';}
+    if(lease&&session?.lease?.id===lease.id&&result.lease){
+      if(result.lease==='ended')session.error=`The transaction ended during this job. ${await leaseEnd(lease.id)}`;
       else session.lease.state=result.lease;
     }
     return result;
@@ -174,8 +237,11 @@ export const useWorkspace = defineStore('workspace', () => {
   async function beginLiveTransaction_(id:string) {
     const current=liveSessions.value[id];
     if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile first.');
-    const lease=await beginLiveTransaction(current.info.handle);
+    let lease;
+    try { lease=await beginLiveTransaction(current.info.handle); }
+    catch(error){ if(error instanceof NativeOperationError&&error.code==='UNRESOLVED_OUTCOMES')await refreshUnresolvedOutcomes(); throw error; }
     current.lease={id:lease.leaseId,state:'active'};
+    outcomeProfiles.value[lease.leaseId]=id;
   }
   async function endLiveTransaction_(id:string,action:TransactionActionDto) {
     const current=liveSessions.value[id];
@@ -183,10 +249,12 @@ export const useWorkspace = defineStore('workspace', () => {
     try {
       const end=await endLiveTransaction(current.lease.id,action);
       current.lease=undefined;
+      if(unconfirmed(end))await refreshUnresolvedOutcomes();
       return end;
     } catch(error) {
       // The host removed the lease before sending COMMIT/ROLLBACK; only its outcome is unknown.
       if(error instanceof NativeOperationError && error.code==='DEADLINE_EXCEEDED')current.lease=undefined;
+      await refreshUnresolvedOutcomes();
       throw error;
     }
   }
@@ -353,6 +421,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
     liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus,
+    unresolvedOutcomes, unresolvedError, outcomeProfiles, refreshUnresolvedOutcomes, acknowledgeUnresolvedOutcome,
     runLiveJob: runLiveJobFor, beginLiveTransaction: beginLiveTransaction_, endLiveTransaction: endLiveTransaction_,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,
     connections,

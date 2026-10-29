@@ -37,3 +37,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [lints]
 workspace = true
+
+# Opens a real window; runs only with STONEQL_REAL_WINDOW=1 (see the file header).
+[[test]]
+name = "real_window_reload"
+harness = false

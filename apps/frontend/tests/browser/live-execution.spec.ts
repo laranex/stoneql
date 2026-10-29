@@ -9,9 +9,11 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
    const request=JSON.parse(args.message);const p=request.payload;log.push({command,payload:p});
    let payload:any;
-   const statement=(index:number,status:string,extra={})=>({index,status,inTransaction:!!lease,affectedRows:'0',resultSets:0,failure:null,...extra});
+   // Every StatementReport carries the full v1 wire shape, resultsWithheld included.
+   const statement=(index:number,status:string,extra={})=>({index,status,inTransaction:!!lease,affectedRows:'0',resultSets:0,failure:null,resultsWithheld:false,...extra});
    if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true,readWriteSql:true};
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
+   else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='connect_direct')payload={handle:'00000000-0000-0000-0000-000000000001',engineVersion:'MySQL fixture 8.4.6',database:p.database,expiresAfterSeconds:3600,access:p.access??'read_only'};
    else if(command==='disconnect_database')payload={connected:false};
    else if(command==='database_status')payload={connected:true};
@@ -22,7 +24,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
     if(p.jobId==='job_slow'){
      const cancelled=log.some(entry=>entry.command==='cancel_job');
      if(!cancelled){await new Promise(resolve=>setTimeout(resolve,200));payload={jobId:p.jobId,state:'running',outcome:null,cancellation:'none',serverCancelSent:false,deadlineExceeded:false,statements:[statement(0,'running')],batch:null,lease:null,done:false};}
-     else payload={jobId:p.jobId,state:'finished',outcome:'unknown',cancellation:'confirmed',serverCancelSent:true,deadlineExceeded:false,statements:[statement(0,'unknown'),statement(1,'not_run')],batch:null,lease:null,done:true};
+     else payload={jobId:p.jobId,state:'finished',outcome:'unknown',cancellation:'confirmed',serverCancelSent:true,deadlineExceeded:false,statements:[statement(0,'unknown',{resultsWithheld:true}),statement(1,'not_run')],batch:null,lease:null,done:true};
     }else{
      const statements=[statement(0,'succeeded',{resultSets:1}),statement(1,'succeeded',{resultSets:1}),statement(2,'failed',{failure:{constraint:'unique',sqlState:'23000'}})];
      const batches=[
@@ -81,6 +83,8 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
  await page.getByRole('button',{name:'Cancel',exact:true}).click();
  await expect(page.getByText(/Outcome unknown at statement 1 of 2 \(cancellation confirmed; effects not\)/)).toBeVisible();
  await expect(page.locator('.statement-outcome')).toHaveText(['#1 unknown','#2 not run']);
+ // B-11: rows discarded natively after the interrupt are reported as incomplete.
+ await expect(page.getByText(/Results of statement 1 after the interrupt were not delivered; the rows shown are incomplete\./)).toBeVisible();
  // Transactions: begin, run inside, roll back (server-confirmed in the stub).
  expect(await reloadHeld()).toBe(false);
  await page.getByRole('button',{name:'Begin transaction',exact:true}).click();
@@ -125,11 +129,12 @@ for(const theme of ['light','dark'])test(`${theme}: read-write gate, failed-conn
    let payload:any;
    if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true,...(gate?{readWriteSql:true}:{})};
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
+   else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='connect_direct')payload={handle:'00000000-0000-0000-0000-000000000002',engineVersion:'MySQL fixture 8.4.6',database:p.database,expiresAfterSeconds:3600,access:p.access??'read_only'};
    else if(command==='disconnect_database'){closed=true;payload={connected:false};}
    else if(command==='database_status')payload={connected:true};
    else if(command==='submit_job')payload={jobId:'job_failed',statementCount:2};
-   else if(command==='fetch_job')payload={jobId:p.jobId,state:'finished',outcome:'failed',cancellation:'none',serverCancelSent:false,deadlineExceeded:false,statements:[0,1].map(index=>({index,status:'not_run',inTransaction:false,affectedRows:'0',resultSets:0,failure:null})),batch:null,lease:null,done:true};
+   else if(command==='fetch_job')payload={jobId:p.jobId,state:'finished',outcome:'failed',cancellation:'none',serverCancelSent:false,deadlineExceeded:false,statements:[0,1].map(index=>({index,status:'not_run',inTransaction:false,affectedRows:'0',resultSets:0,failure:null,resultsWithheld:false})),batch:null,lease:null,done:true};
    else if(command==='begin_transaction'){lease='lease_9';payload={leaseId:lease,idleSeconds:60};}
    else if(command==='end_transaction')payload=closed?{outcome:'rolled_back',reason:'closed',commitSent:false,rollbackSent:true}:{outcome:'rolled_back',reason:'requested',commitSent:false,rollbackSent:true};
    else throw{code:'INVALID_REQUEST'};

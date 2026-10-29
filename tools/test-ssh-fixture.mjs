@@ -31,15 +31,20 @@ function run(command, args, env = base, { input } = {}) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
+// `test` names an integration test target; `null` selects the crate's own unit-test binary.
 function testBinary(pkg, test, features = []) {
-  const output = run('cargo', ['test', '--locked', '-p', pkg, ...features, '--test', test, '--no-run', '--message-format=json']);
-  const binary = output.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === test && message.executable)?.executable;
+  const target = test ? ['--test', test] : ['--lib'];
+  const name = test ?? pkg.replaceAll('-', '_');
+  const output = run('cargo', ['test', '--locked', '-p', pkg, ...features, ...target, '--no-run', '--message-format=json']);
+  const binary = output.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === name && message.profile?.test && message.executable)?.executable;
   if (!binary) throw Error(`${test} fixture binary missing`);
   return binary;
 }
 const binaries = [
   { name: 'runtime', path: testBinary('stoneql-runtime', 'ssh_tunnel'), test: 'ssh_tunnel_uses_owned_fixture', marker: 'STONEQL_SSH_RESULT ' },
   { name: 'native', path: testBinary('stoneql-desktop', 'live_ssh', ['--features', 'custom-protocol']), test: 'ssh_commands_use_owned_fixture', marker: 'STONEQL_NATIVE_RESULT ' },
+  // Contract 5.2: job cancellation through the tunnel with a free and with no free forward.
+  { name: 'cancellation', path: testBinary('stoneql-runtime', null), test: 'execution::ssh_fixture::ssh_cancellation_uses_owned_fixture', marker: 'STONEQL_SSH_CANCEL_RESULT ' },
 ];
 run('docker', ['build', '-q', '-t', IMAGE, resolve(root, 'tools/ssh-fixture')]);
 const output = resolve(root, 'artifacts/m005');

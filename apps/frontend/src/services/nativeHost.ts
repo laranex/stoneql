@@ -45,6 +45,19 @@ export async function resolveNativeClose(action: CloseAction): Promise<void> {
   await call<CloseResult, CloseDecision>(activeInvoker, 'resolve_close', {sessionId: current.info.sessionId, action});
 }
 
+/**
+ * Confirmed reload: rotates the native session before the page goes away. The host then resets
+ * the registry (leases rolled back with recorded outcomes, jobs interrupted, pools closed) and its
+ * navigation guard lets the reload through. The current session id becomes stale on purpose.
+ */
+export async function invalidateNativeSession(): Promise<void> {
+  if (current.kind !== 'desktop' || !activeInvoker) throw new Error('Native host unavailable');
+  const payload: HostInfoRequest = {nonce: `reload_${crypto.randomUUID()}`};
+  const info = await call<HostInfo, HostInfoRequest>(activeInvoker, 'host_info', payload, 20_000);
+  if (info.nonce !== payload.nonce || info.sessionId === current.info.sessionId) throw new Error('Native session was not rotated');
+  activeInvoker = undefined;
+}
+
 export class NativeOperationError extends Error {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }
@@ -67,15 +80,16 @@ const nativeMessages: Record<string,string> = {
   SECRET_UNAVAILABLE: 'The saved credential is unavailable or belongs to a different target. Enter it again.',
   BUSY: 'This connection is busy with another statement or an open transaction. Nothing was queued or sent.',
   CONFLICT: 'A statement in this transaction failed; only rollback is possible.',
+  UNRESOLVED_OUTCOMES: 'Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them.',
 };
 // The host's own fixed text is more specific for these codes (it never contains SQL or values).
-const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT']);
+const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOMES']);
 /**
  * Renderer waits never end before the native worst case: end_transaction is COMMIT (10 s) +
  * ROLLBACK (2 s) + close (2 s); disconnect releases jobs/leases (5 s) then closes the pool and tunnel.
  */
 export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000 };
-export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction';
+export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome';
 export async function nativeDatabase<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
   try {

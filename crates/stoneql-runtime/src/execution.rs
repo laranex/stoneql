@@ -27,8 +27,9 @@ use std::{
     time::Duration,
 };
 use stoneql_contracts::v1::{
-    CancellationDto, CellValue, Column, ConstraintKindDto, JobStateDto, JobUpdate, LeaseStateDto,
-    ResultBatch, StatementFailure, StatementReport, StatementStatusDto,
+    self, CancellationDto, CellValue, Column, ConstraintKindDto, JobStateDto, JobUpdate,
+    LeaseStateDto, OutcomeDto, ResultBatch, StatementFailure, StatementReport, StatementStatusDto,
+    TransactionEndReasonDto, UnresolvedJob, UnresolvedOutcome, UnresolvedOutcomes,
 };
 use stoneql_core::{ExecutionOutcome, Outcome};
 use tokio::{
@@ -86,12 +87,19 @@ impl ExecutionLimits {
     pub const ROLLBACK_DEADLINE: Duration = Duration::from_secs(2);
     /// Upper bound for releasing a handle's jobs and leases on close, reset or shutdown.
     pub const RELEASE_BOUND: Duration = Duration::from_secs(5);
-    /// Ended-lease outcomes kept per owner for a later `end_transaction` call (oldest of that
-    /// owner evicted first), so one owner's ends never evict another owner's (R-6).
+    /// Resolved (or acknowledged) ended-lease outcomes kept per owner for a later
+    /// `end_transaction` call (oldest of that owner evicted first), so one owner's ends never
+    /// evict another owner's (R-6). Unacknowledged unknown outcomes are never evicted.
     pub const MAX_ENDED_LEASES_PER_OWNER: usize = 32;
-    /// Ended-lease outcomes kept across all owners (owners change at every renderer reload);
-    /// the oldest record overall is evicted first.
+    /// Resolved (or acknowledged) records kept across all owners; the oldest is evicted first.
+    /// The desktop host has one owner per app process (kept across renderer reloads).
     pub const MAX_ENDED_LEASES: usize = 256;
+    /// Unknown outcomes (lease ends and jobs) an owner may leave unacknowledged. At this count
+    /// new jobs and transactions are refused (`UnresolvedOutcomes`) until the user acknowledges
+    /// some; none is dropped. Work already admitted can still add its own: at most
+    /// `MAX_LEASES_PER_OWNER` + `MAX_JOB_RECORDS_PER_OWNER` more (plus jobs a reset detached
+    /// that are still ending).
+    pub const MAX_UNRESOLVED_OUTCOMES_PER_OWNER: usize = 16;
     /// Lock waits for read-write SQLite connections (read-only stays at 1 s, D015).
     pub const SQLITE_WRITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
     /// `;` characters one SQLite statement may contain (each is checked with a prepare); a
@@ -99,11 +107,21 @@ impl ExecutionLimits {
     pub const SQLITE_MAX_SEMICOLONS: usize = 256;
     /// Checking the session's transaction state after a job (R-3).
     pub const STATE_PROBE_DEADLINE: Duration = Duration::from_secs(2);
-    /// PostgreSQL server-side backstop (L-3): each job sets `statement_timeout` to its
-    /// statement deadline plus this margin, longer than `CANCEL_GRACE`, so the client cancel
-    /// path normally ends a statement first and the server ends one the client had to abandon
-    /// (cancel connection unavailable).
-    pub const POSTGRES_TIMEOUT_MARGIN: Duration = Duration::from_secs(2);
+    /// PostgreSQL server-side timeout (L-3, Contract 5.3 ordering): each job sets
+    /// `statement_timeout` this much **before** its statement deadline (see
+    /// `postgres_statement_timeout`), so a timed-out statement normally ends on the server with
+    /// SQLSTATE 57014 and its reply arrives before the client deadline; the client deadline and
+    /// interrupt remain the backstop. Covers the reply's network/tunnel latency and the server's
+    /// interrupt-check latency.
+    pub const POSTGRES_TIMEOUT_MARGIN: Duration = Duration::from_secs(1);
+
+    /// The PostgreSQL `statement_timeout` for a statement deadline: strictly shorter than the
+    /// deadline, by `POSTGRES_TIMEOUT_MARGIN` but at most half the deadline, and never 0 ms
+    /// (which PostgreSQL treats as "no timeout").
+    pub fn postgres_statement_timeout(deadline: Duration) -> Duration {
+        let timeout = deadline.saturating_sub(Self::POSTGRES_TIMEOUT_MARGIN.min(deadline / 2));
+        Duration::from_millis(timeout.as_millis().max(1) as u64)
+    }
 }
 
 macro_rules! opaque_id {
@@ -124,6 +142,8 @@ macro_rules! opaque_id {
 }
 opaque_id!(JobId);
 opaque_id!(LeaseId);
+// A recorded outcome: the id of the lease or job it belongs to.
+opaque_id!(OutcomeId);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Access {
@@ -148,6 +168,8 @@ pub enum ExecutionError {
     Connection(LifecycleError),
     /// The server refused to start the transaction.
     Database,
+    /// `MAX_UNRESOLVED_OUTCOMES_PER_OWNER` unknown outcomes await acknowledgement.
+    UnresolvedOutcomes,
 }
 impl std::fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -162,6 +184,9 @@ impl std::fmt::Display for ExecutionError {
                 Self::Busy => "The transaction or connection is busy.",
                 Self::RollbackOnly => {
                     "A statement in this transaction failed; only rollback is possible."
+                }
+                Self::UnresolvedOutcomes => {
+                    "Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them."
                 }
                 _ => "The database refused to start the transaction.",
             }),
@@ -208,6 +233,26 @@ pub struct TransactionEnd {
     /// ROLLBACK was attempted, with the same meaning as `commit_sent`.
     pub rollback_sent: bool,
 }
+impl From<TransactionEnd> for v1::TransactionEnd {
+    fn from(end: TransactionEnd) -> Self {
+        Self {
+            outcome: match end.outcome {
+                Outcome::Committed => OutcomeDto::Committed,
+                Outcome::RolledBack => OutcomeDto::RolledBack,
+                Outcome::Rejected => OutcomeDto::Rejected,
+                Outcome::Unknown => OutcomeDto::Unknown,
+            },
+            reason: match end.reason {
+                EndReason::Requested => TransactionEndReasonDto::Requested,
+                EndReason::Expired => TransactionEndReasonDto::Expired,
+                EndReason::ConnectionLost => TransactionEndReasonDto::ConnectionLost,
+                EndReason::Closed => TransactionEndReasonDto::Closed,
+            },
+            commit_sent: end.commit_sent,
+            rollback_sent: end.rollback_sent,
+        }
+    }
+}
 impl TransactionEnd {
     /// Recorded before anything is sent; replaced only by what the server confirms.
     fn unknown(reason: EndReason) -> Self {
@@ -230,6 +275,19 @@ enum Target {
     Sqlite(PathBuf),
 }
 impl Target {
+    /// Display context for a recorded outcome: the database (or SQLite file) name, bounded.
+    /// Never host, user, credentials or SQL.
+    fn database(&self) -> String {
+        let name = match self {
+            Self::MySql(options) => options.get_database().unwrap_or_default().to_owned(),
+            Self::Postgres(options) => options.get_database().unwrap_or_default().to_owned(),
+            Self::Sqlite(path) => path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        name.chars().take(128).collect()
+    }
     fn of(pool: &EnginePool) -> Self {
         match pool {
             EnginePool::MySql(pool) => Self::MySql((*pool.connect_options()).clone()),
@@ -637,6 +695,8 @@ struct Progress {
     outcome: Option<ExecutionOutcome>,
     statements: Vec<StatementReport>,
     server_cancel_sent: bool,
+    /// A statement was ended by the PostgreSQL `statement_timeout` StoneQL set (L-3).
+    server_timeout: bool,
     /// The interrupted work was observed to stop.
     stop_confirmed: bool,
     lease: Option<LeaseStateDto>,
@@ -1045,6 +1105,15 @@ fn session_lost(error: &sqlx::Error) -> bool {
             .and_then(|error| error.code())
             .is_some_and(|code| code.starts_with("08") || code.starts_with("57P"))
 }
+/// PostgreSQL's own report that `statement_timeout` ended the statement (SQLSTATE 57014 is also
+/// used for other cancellations, so the server's message is checked too; it is never surfaced).
+/// The statement failed and, as PostgreSQL's timeout is disabled before a commit starts, was not
+/// committed; inside a transaction block the block is aborted.
+fn statement_timeout_error(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|error| {
+        error.code().as_deref() == Some("57014") && error.message().contains("statement timeout")
+    })
+}
 fn failure(error: &sqlx::Error) -> StatementFailure {
     use sqlx::error::ErrorKind;
     let database = error.as_database_error();
@@ -1077,6 +1146,7 @@ struct LeaseState {
 struct Lease {
     owner: OwnerId,
     handle: ConnectionId,
+    database: String,
     created: Instant,
     slot: Arc<tokio::sync::Mutex<Option<Physical>>>,
     state: Mutex<LeaseState>,
@@ -1102,8 +1172,78 @@ pub(crate) struct ExecutionState {
     /// Leases being opened per owner (L-4). Changed only while `leases` is locked, so the
     /// per-owner count (open plus opening) is checked and reserved atomically.
     opening: Mutex<HashMap<OwnerId, usize>>,
-    /// Oldest first.
-    ended: Mutex<Vec<(LeaseId, OwnerId, TransactionEnd)>>,
+    /// Recorded lease ends and unknown job outcomes, oldest first.
+    ended: Mutex<Vec<Recorded>>,
+    /// Jobs still running when a reset released their records (`RELEASE_BOUND` exceeded).
+    /// They may still record an unknown outcome; reported as `pending` until finished.
+    detached: Mutex<Vec<Arc<Job>>>,
+}
+/// What a recorded outcome describes. SQL-free: no statement text, values or driver text.
+enum Facts {
+    Lease(TransactionEnd),
+    /// Only jobs whose outcome is unknown are recorded here.
+    Job(UnresolvedJob),
+}
+struct Recorded {
+    id: Uuid,
+    owner: OwnerId,
+    database: String,
+    at: Instant,
+    facts: Facts,
+    /// The user acknowledged it: hidden from the unresolved list and evictable. The recorded
+    /// outcome itself never changes.
+    acknowledged: bool,
+}
+impl Recorded {
+    /// Unknown and not acknowledged: never evicted, and counted against
+    /// `MAX_UNRESOLVED_OUTCOMES_PER_OWNER`.
+    fn unresolved(&self) -> bool {
+        !self.acknowledged
+            && match &self.facts {
+                Facts::Lease(end) => end.outcome == Outcome::Unknown,
+                Facts::Job(_) => true,
+            }
+    }
+    /// Resolved or acknowledged: subject to the retention bounds.
+    fn evictable(&self) -> bool {
+        !self.unresolved()
+    }
+    fn dto(&self) -> UnresolvedOutcome {
+        let (transaction, job) = match &self.facts {
+            Facts::Lease(end) => (Some((*end).into()), None),
+            Facts::Job(job) => (None, Some(job.clone())),
+        };
+        UnresolvedOutcome {
+            outcome_id: self.id.to_string(),
+            database: self.database.clone(),
+            seconds_ago: u32::try_from(self.at.elapsed().as_secs()).unwrap_or(u32::MAX),
+            transaction,
+            job,
+        }
+    }
+}
+/// Evicts the oldest resolved or acknowledged records beyond the per-owner and overall bounds.
+/// Unresolved records are never evicted.
+fn trim(ended: &mut Vec<Recorded>, owner: OwnerId) {
+    let owned = |record: &Recorded| record.owner == owner && record.evictable();
+    while ended.iter().filter(|record| owned(record)).count()
+        > ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER
+    {
+        let oldest = ended
+            .iter()
+            .position(owned)
+            .expect("owner has an evictable record");
+        ended.remove(oldest);
+    }
+    while ended.iter().filter(|record| record.evictable()).count()
+        > ExecutionLimits::MAX_ENDED_LEASES
+    {
+        let oldest = ended
+            .iter()
+            .position(Recorded::evictable)
+            .expect("an evictable record exists");
+        ended.remove(oldest);
+    }
 }
 /// One reserved per-owner lease slot; released on drop unless the lease was registered.
 struct Reservation<'a> {
@@ -1134,6 +1274,7 @@ impl ExecutionState {
             leases: Mutex::new(HashMap::new()),
             opening: Mutex::new(HashMap::new()),
             ended: Mutex::new(Vec::new()),
+            detached: Mutex::new(Vec::new()),
         }
     }
     /// Reserves one of the owner's `MAX_LEASES_PER_OWNER` slots before any await (L-4).
@@ -1162,48 +1303,136 @@ impl ExecutionState {
         }
     }
     /// Inserts or replaces the recorded end of a lease (an unknown outcome is recorded first
-    /// and replaced only by a server-confirmed one). Each owner keeps its newest
-    /// `MAX_ENDED_LEASES_PER_OWNER` ends, so another owner's ends never evict them; all owners
-    /// together keep `MAX_ENDED_LEASES`.
-    fn record_end(&self, id: LeaseId, owner: OwnerId, end: TransactionEnd) {
+    /// and replaced only by a server-confirmed one); a replaced record becomes the newest.
+    /// Each owner keeps its newest `MAX_ENDED_LEASES_PER_OWNER` resolved or acknowledged ends,
+    /// so another owner's ends never evict them; all owners together keep `MAX_ENDED_LEASES`.
+    /// An unacknowledged unknown end is never evicted.
+    fn record_end(&self, id: LeaseId, owner: OwnerId, database: &str, end: TransactionEnd) {
         let mut ended = self.ended.lock().expect("ended lease lock");
-        if let Some(entry) = ended
-            .iter_mut()
-            .find(|(ended_id, ended_owner, _)| *ended_id == id && *ended_owner == owner)
-        {
-            entry.2 = end;
-            return;
-        }
-        let owned = ended
+        let mut acknowledged = false;
+        if let Some(index) = ended
             .iter()
-            .filter(|(_, ended_owner, _)| *ended_owner == owner);
-        if owned.count() >= ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER {
-            let oldest = ended
-                .iter()
-                .position(|(_, ended_owner, _)| *ended_owner == owner)
-                .expect("owner has ended leases");
-            ended.remove(oldest);
-        } else if ended.len() >= ExecutionLimits::MAX_ENDED_LEASES {
-            ended.remove(0);
+            .position(|record| record.id == id.0 && record.owner == owner)
+        {
+            let previous = ended.remove(index);
+            // A changed unknown (for example COMMIT now attempted) needs a new acknowledgement.
+            acknowledged = previous.acknowledged
+                && (end.outcome != Outcome::Unknown
+                    || matches!(previous.facts, Facts::Lease(before) if before == end));
         }
-        ended.push((id, owner, end));
+        ended.push(Recorded {
+            id: id.0,
+            owner,
+            database: database.to_owned(),
+            at: Instant::now(),
+            facts: Facts::Lease(end),
+            acknowledged,
+        });
+        trim(&mut ended, owner);
+    }
+    /// Records a job whose outcome is unknown, independently of its job record, so it survives
+    /// the record's release (final page, `TERMINAL_RETENTION`, reset).
+    fn record_job(&self, id: JobId, owner: OwnerId, database: String, job: UnresolvedJob) {
+        let mut ended = self.ended.lock().expect("ended lease lock");
+        ended.push(Recorded {
+            id: id.0,
+            owner,
+            database,
+            at: Instant::now(),
+            facts: Facts::Job(job),
+            acknowledged: false,
+        });
+        trim(&mut ended, owner);
     }
     fn recorded(&self, id: LeaseId, owner: OwnerId) -> Option<TransactionEnd> {
         self.ended
             .lock()
             .expect("ended lease lock")
             .iter()
-            .find(|(ended_id, ended_owner, _)| *ended_id == id && *ended_owner == owner)
-            .map(|(_, _, end)| *end)
+            .find(|record| record.id == id.0 && record.owner == owner)
+            .and_then(|record| match record.facts {
+                Facts::Lease(end) => Some(end),
+                Facts::Job(_) => None,
+            })
+    }
+    /// Refuses new read-write work while the owner has `MAX_UNRESOLVED_OUTCOMES_PER_OWNER`
+    /// unacknowledged unknown outcomes. Nothing is evicted to make room.
+    fn admit(&self, owner: OwnerId) -> Result<(), ExecutionError> {
+        let unresolved = self
+            .ended
+            .lock()
+            .expect("ended lease lock")
+            .iter()
+            .filter(|record| record.owner == owner && record.unresolved())
+            .count();
+        if unresolved >= ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER {
+            return Err(ExecutionError::UnresolvedOutcomes);
+        }
+        Ok(())
+    }
+    fn unresolved(&self, owner: OwnerId) -> UnresolvedOutcomes {
+        // Counted before the outcomes are read: a job records its unknown before it is marked
+        // finished, so `pending == 0` here means every detached job's outcome is in the list.
+        let pending = {
+            let mut detached = self.detached.lock().expect("detached job lock");
+            detached.retain(|job| !job.is_finished());
+            detached.iter().filter(|job| job.owner == owner).count() as u32
+        };
+        UnresolvedOutcomes {
+            pending,
+            outcomes: self
+                .ended
+                .lock()
+                .expect("ended lease lock")
+                .iter()
+                .filter(|record| record.owner == owner && record.unresolved())
+                .map(Recorded::dto)
+                .collect(),
+            limit: ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER as u32,
+        }
+    }
+    /// Marks an owned record acknowledged (idempotent). Never changes its outcome. It becomes
+    /// the newest evictable record, so it stays queryable until newer outcomes push it out
+    /// (rather than being evicted at once as the oldest).
+    fn acknowledge(&self, owner: OwnerId, id: OutcomeId) -> Result<(), ExecutionError> {
+        let mut ended = self.ended.lock().expect("ended lease lock");
+        let index = ended
+            .iter()
+            .position(|record| record.id == id.0 && record.owner == owner)
+            .ok_or(ExecutionError::Forbidden)?;
+        let mut record = ended.remove(index);
+        record.acknowledged = true;
+        ended.push(record);
+        trim(&mut ended, owner);
+        Ok(())
     }
     /// Removes a lease from the open set, recording `unknown` for it first so no caller can
     /// observe it as neither open nor ended. Returns the lease only to the caller that removed
     /// it; that caller alone concludes it.
     fn take_lease(&self, id: LeaseId, reason: EndReason) -> Option<Arc<Lease>> {
         let mut leases = self.leases.lock().expect("lease lock");
-        let owner = leases.get(&id)?.owner;
-        self.record_end(id, owner, TransactionEnd::unknown(reason));
+        let lease = leases.get(&id)?;
+        self.record_end(
+            id,
+            lease.owner,
+            &lease.database,
+            TransactionEnd::unknown(reason),
+        );
         leases.remove(&id)
+    }
+    /// Releases every job record (renderer reset): their pages have no reader any more. Unknown
+    /// outcomes are recorded separately and stay listable; jobs still running are kept as
+    /// detached until they finish, so the list reports them as pending.
+    pub(crate) fn forget_jobs(&self) {
+        let released = std::mem::take(&mut *self.jobs.lock().expect("job lock"));
+        let mut detached = self.detached.lock().expect("detached job lock");
+        detached.retain(|job| !job.is_finished());
+        detached.extend(
+            released
+                .into_values()
+                .map(|entry| entry.job)
+                .filter(|job| !job.is_finished()),
+        );
     }
     fn prune(&self) {
         self.jobs.lock().expect("job lock").retain(|_, entry| {
@@ -1264,7 +1493,9 @@ async fn release_within(inner: &Inner, handle: Option<ConnectionId>, bound: Dura
             if let Some(physical) = physical {
                 physical
                     .conclude(false, EndReason::Closed, lease.diverged(), |end| {
-                        inner.execution.record_end(id, lease.owner, end)
+                        inner
+                            .execution
+                            .record_end(id, lease.owner, &lease.database, end)
                     })
                     .await;
             }
@@ -1277,6 +1508,7 @@ async fn release_within(inner: &Inner, handle: Option<ConnectionId>, bound: Dura
 /// A lease whose connection slot is held by the running job.
 type HeldLease = (LeaseId, Arc<Lease>, OwnedMutexGuard<Option<Physical>>);
 struct Plan {
+    id: JobId,
     job: Arc<Job>,
     statements: Vec<Statement>,
     target: Target,
@@ -1339,6 +1571,7 @@ impl Connections {
     ) -> Result<(JobId, usize), ExecutionError> {
         let (pool, work) = self.writable(owner, handle)?;
         let execution = &self.0.execution;
+        execution.admit(owner)?;
         execution.prune();
         if execution
             .jobs
@@ -1407,6 +1640,7 @@ impl Connections {
                     })
                     .collect(),
                 server_cancel_sent: false,
+                server_timeout: false,
                 stop_confirmed: false,
                 lease: lease.as_ref().map(|_| LeaseStateDto::Active),
                 finished_at: None,
@@ -1429,6 +1663,7 @@ impl Connections {
             return Err(ExecutionError::Forbidden);
         }
         tokio::spawn(run(Plan {
+            id,
             job,
             statements,
             target: Target::of(&pool),
@@ -1483,13 +1718,9 @@ impl Connections {
                 job_id: id.opaque(),
                 state: progress.state,
                 outcome: progress.outcome.map(Into::into),
-                cancellation: match (reason, progress.stop_confirmed) {
-                    (None, _) => CancellationDto::None,
-                    (Some(_), false) => CancellationDto::Requested,
-                    (Some(_), true) => CancellationDto::Confirmed,
-                },
+                cancellation: cancellation(reason, progress.stop_confirmed),
                 server_cancel_sent: progress.server_cancel_sent,
-                deadline_exceeded: reason == Some(Reason::Deadline),
+                deadline_exceeded: reason == Some(Reason::Deadline) || progress.server_timeout,
                 statements: progress.statements.clone(),
                 batch,
                 lease: progress.lease,
@@ -1531,6 +1762,7 @@ impl Connections {
         handle: ConnectionId,
     ) -> Result<LeaseId, ExecutionError> {
         let (pool, work) = self.writable(owner, handle)?;
+        self.0.execution.admit(owner)?;
         let reservation = self.0.execution.reserve(owner)?;
         let permit = work.try_acquire_owned().map_err(|_| ExecutionError::Busy)?;
         let mut physical = tokio::time::timeout(self.0.deadline, Target::of(&pool).open())
@@ -1548,6 +1780,7 @@ impl Connections {
         let lease = Arc::new(Lease {
             owner,
             handle,
+            database: Target::of(&pool).database(),
             created: Instant::now(),
             slot: Arc::new(tokio::sync::Mutex::new(Some(physical))),
             state: Mutex::new(LeaseState {
@@ -1623,7 +1856,7 @@ impl Connections {
             Some(physical) => {
                 physical
                     .conclude(commit, EndReason::Requested, lease.diverged(), |end| {
-                        execution.record_end(id, owner, end)
+                        execution.record_end(id, owner, &lease.database, end)
                     })
                     .await
             }
@@ -1631,6 +1864,41 @@ impl Connections {
         })
     }
 
+    /// The owner's unknown outcomes not yet acknowledged, oldest first, including those of a
+    /// renderer session that ended (reload) in this process. In memory only: a process exit
+    /// loses them.
+    pub fn unresolved_outcomes(&self, owner: OwnerId) -> UnresolvedOutcomes {
+        self.0.execution.unresolved(owner)
+    }
+    /// Hides one of the owner's recorded outcomes after the user acknowledged it, returning the
+    /// remaining unresolved ones. Idempotent while the record exists; the recorded outcome
+    /// never changes (unknown is never turned into success or rollback). An unknown id or
+    /// another owner's gives `Forbidden`.
+    pub fn acknowledge_outcome(
+        &self,
+        owner: OwnerId,
+        id: OutcomeId,
+    ) -> Result<UnresolvedOutcomes, ExecutionError> {
+        self.0.execution.acknowledge(owner, id)?;
+        Ok(self.0.execution.unresolved(owner))
+    }
+    /// Whether the owner holds an open lease or a job record (running, or finished with its
+    /// final update not yet fetched). `reset` releases both, so a renderer rotation clears it.
+    pub fn has_active_work(&self, owner: OwnerId) -> bool {
+        let execution = &self.0.execution;
+        execution
+            .leases
+            .lock()
+            .expect("lease lock")
+            .values()
+            .any(|lease| lease.owner == owner)
+            || execution
+                .jobs
+                .lock()
+                .expect("job lock")
+                .values()
+                .any(|entry| entry.job.owner == owner)
+    }
     /// Open leases, for lifecycle evidence only.
     pub fn open_transactions(&self) -> usize {
         self.0.execution.leases.lock().expect("lease lock").len()
@@ -1694,7 +1962,9 @@ async fn expire(registry: Weak<Inner>, id: LeaseId, lease: Weak<Lease>) {
         if let Some(physical) = slot.take() {
             physical
                 .conclude(false, EndReason::Expired, lease.diverged(), |end| {
-                    inner.execution.record_end(id, lease.owner, end)
+                    inner
+                        .execution
+                        .record_end(id, lease.owner, &lease.database, end)
                 })
                 .await;
         }
@@ -1741,13 +2011,16 @@ async fn run(mut plan: Plan) {
     let mut outcome = ExecutionOutcome::Succeeded;
     let mut stop_confirmed = true;
     let mut reusable = true;
-    // L-3: the PostgreSQL server ends a statement the client had to abandon.
+    // L-3: the PostgreSQL server ends a statement before the client deadline (Contract 5.3).
+    let server_timeout = ExecutionLimits::postgres_statement_timeout(plan.statement_deadline);
     if let Session::Postgres(session) = &mut connection.session {
-        let backstop = plan.statement_deadline + ExecutionLimits::POSTGRES_TIMEOUT_MARGIN;
         // A fixed number of milliseconds computed here, never request text.
         let set = sqlx::raw_sql(
-            sqlx::AssertSqlSafe(format!("SET statement_timeout = {}", backstop.as_millis()))
-                .into_sql_str(),
+            sqlx::AssertSqlSafe(format!(
+                "SET statement_timeout = {}",
+                server_timeout.as_millis()
+            ))
+            .into_sql_str(),
         );
         // On any error no user statement is sent and the job fails. Refused by the server: in
         // a lease the block may now be aborted, so the lease becomes rollback-only below.
@@ -1776,6 +2049,7 @@ async fn run(mut plan: Plan) {
         plan.sink.statement = index as u32;
         plan.sink.next_result = 0;
         plan.sink.withheld = false;
+        let postgres = matches!(connection.session, Session::Postgres(_));
         let Physical { session, interrupt } = &mut connection;
         // R-1: nothing is sent unless SQLite parses the text as exactly one statement.
         if let Session::Sqlite(sqlite) = session
@@ -1792,12 +2066,17 @@ async fn run(mut plan: Plan) {
             outcome = ExecutionOutcome::Failed;
             break;
         }
+        let sent_at = Instant::now();
         let guarded = guarded(
             statement(session, &text.sql, &mut plan.sink, control),
             control,
             &*interrupt,
         )
         .await;
+        let timed_out = postgres
+            && !guarded.interrupted
+            && matches!(&guarded.result, Some(Err(error)) if statement_timeout_error(error))
+            && sent_at.elapsed() >= server_timeout;
         let (status, report_failure, completed) = match &guarded.result {
             Some(Ok(done)) => (
                 StatementStatusDto::Succeeded,
@@ -1832,6 +2111,7 @@ async fn run(mut plan: Plan) {
                 report.result_sets = sets;
             }
             progress.server_cancel_sent |= guarded.signal == Some(true);
+            progress.server_timeout |= timed_out;
         });
         match status {
             // Completed despite an interrupt: the next iteration stops before sending more.
@@ -1899,8 +2179,41 @@ async fn run(mut plan: Plan) {
         None if reusable && !diverged => connection.close().await,
         None => drop(connection),
     }
+    // Recorded before the final update is visible, so an unknown is never only in a job
+    // record that a reset or `TERMINAL_RETENTION` releases.
+    if outcome == ExecutionOutcome::Unknown
+        && let Some(inner) = plan.registry.upgrade()
+    {
+        let reason = control.reason();
+        let summary = {
+            let progress = job.progress.lock().expect("job progress lock");
+            UnresolvedJob {
+                statement_count: progress.statements.len() as u32,
+                unknown_statement: progress
+                    .statements
+                    .iter()
+                    .find(|report| report.status == StatementStatusDto::Unknown)
+                    .map(|report| report.index),
+                in_transaction: in_lease,
+                cancellation: cancellation(reason, stop_confirmed),
+                server_cancel_sent: progress.server_cancel_sent,
+                deadline_exceeded: reason == Some(Reason::Deadline) || progress.server_timeout,
+            }
+        };
+        inner
+            .execution
+            .record_job(plan.id, job.owner, plan.target.database(), summary);
+    }
     finish(&job, outcome, stop_confirmed, lease_state);
     drop(plan);
+}
+
+fn cancellation(reason: Option<Reason>, stop_confirmed: bool) -> CancellationDto {
+    match (reason, stop_confirmed) {
+        (None, _) => CancellationDto::None,
+        (Some(_), false) => CancellationDto::Requested,
+        (Some(_), true) => CancellationDto::Confirmed,
+    }
 }
 
 /// The lease connection is gone with an uncertain transaction: never claim rollback.
@@ -1930,5 +2243,7 @@ fn finish(
     job.finished.notify_waiters();
 }
 
+#[cfg(test)]
+mod ssh_fixture;
 #[cfg(test)]
 mod tests;

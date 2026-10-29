@@ -87,6 +87,9 @@ pub enum ErrorCode {
     SecretUnavailable,
     /// The handle is running a job or holds an open transaction. Work is never queued.
     Busy,
+    /// Too many unknown outcomes await the user's acknowledgement; new read-write work is
+    /// refused until some are acknowledged. Nothing is dropped to make room.
+    UnresolvedOutcomes,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -125,6 +128,9 @@ impl ErrorCode {
                 "The saved credential is unavailable or belongs to a different connection target."
             }
             Self::Busy => "The connection is busy with another statement or an open transaction.",
+            Self::UnresolvedOutcomes => {
+                "Unknown outcomes are waiting for acknowledgement; no new read-write work was started."
+            }
             Self::Internal => "The operation could not be completed.",
         }
     }

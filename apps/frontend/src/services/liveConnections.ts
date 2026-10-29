@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -148,6 +148,31 @@ export async function endLiveTransaction(leaseId: string, action: TransactionAct
     throw error;
   }
 }
+/**
+ * Unknown outcomes the native host recorded for this app process and the user has not
+ * acknowledged, including those from before a reload. In memory only: quitting StoneQL loses them.
+ */
+export const listUnresolvedOutcomes = () => nativeDatabase<UnresolvedOutcomes>('list_unresolved_outcomes', {});
+/** Hides one listed outcome. It never changes what was recorded; nothing is sent to a database. */
+export const acknowledgeOutcome = (outcomeId: string) => nativeDatabase<UnresolvedOutcomes>('acknowledge_outcome', { outcomeId });
+/** Plain text for a listed unknown outcome; never claims success or rollback. */
+export function describeUnresolvedOutcome(outcome: UnresolvedOutcome): string {
+  const where = outcome.database ? ` on “${outcome.database}”` : '';
+  const base = 'Outcome unknown — the server may or may not have applied it.';
+  if (outcome.transaction) {
+    const end = outcome.transaction;
+    const why = end.reason === 'expired' ? 'expired after being idle' : end.reason === 'connection_lost' ? 'lost its connection' : end.reason === 'closed' ? 'was closed (disconnect, reload or quit)' : 'was ended';
+    const sent = end.commitSent && end.rollbackSent ? 'COMMIT and then ROLLBACK may have been sent; neither was confirmed.'
+      : end.commitSent ? 'COMMIT may have been sent and was not confirmed.'
+      : end.rollbackSent ? 'ROLLBACK may have been sent and was not confirmed.'
+      : 'Neither COMMIT nor ROLLBACK was confirmed.';
+    return `Transaction${where} ${why}. ${base} ${sent} Verify on the server; StoneQL never retries.`;
+  }
+  const job = outcome.job!;
+  const at = job.unknownStatement === null ? ' (the session state after it did not match)' : ` at statement ${job.unknownStatement + 1} of ${job.statementCount}`;
+  const how = job.cancellation === 'requested' ? ' Cancellation was requested, not confirmed; it may still be running on the server.' : job.cancellation === 'confirmed' ? ' It was interrupted.' : '';
+  return `SQL job${where}${at}${job.inTransaction ? ' inside a transaction' : ''}${job.deadlineExceeded ? ' after the deadline' : ''}. ${base}${how} Verify on the server; StoneQL never retries.`;
+}
 export type OutcomeNotice = { kind: 'success' | 'warning' | 'error'; text: string };
 /** Transaction end as the server confirmed it; anything unconfirmed is unknown. */
 export function describeTransactionEnd(end: TransactionEnd): OutcomeNotice {
@@ -190,6 +215,10 @@ function describeJobOutcome(job: LiveJobResult, inTransaction: boolean): Outcome
   }
   if (job.outcome === 'failed' && !failed && ran === 0)
     return { kind: 'error', text: "The job's connection could not be opened; nothing was sent." };
+  // deadlineExceeded on a failed job: the server's own statement timeout (PostgreSQL, set below
+  // the client deadline) ended the statement with an error; the client sent no interrupt.
+  if (job.outcome === 'failed' && failed && job.deadlineExceeded)
+    return { kind: 'error', text: `The server stopped ${where(failed.index)} at the statement time limit${failed.failure?.sqlState ? ` · SQLSTATE ${failed.failure.sqlState}` : ''}. ${failed.index ? `Earlier statements ${failed.inTransaction ? 'remain in the open transaction' : 'were committed'}; later` : 'Later'} statements were not sent.` };
   if (job.outcome === 'failed' && failed)
     return { kind: 'error', text: `The database rejected ${where(failed.index)}${failed.failure?.constraint ? ` (${failed.failure.constraint.replace('_', ' ')} constraint)` : ''}${failed.failure?.sqlState ? ` · SQLSTATE ${failed.failure.sqlState}` : ''}. ${failed.index ? `Earlier statements ${failed.inTransaction ? 'remain in the open transaction' : 'were committed'}; ` : ''}later statements were not sent.` };
   if (job.outcome === 'cancelled')

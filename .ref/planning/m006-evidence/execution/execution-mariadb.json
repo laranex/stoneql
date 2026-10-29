@@ -7,21 +7,21 @@
   },
   "bulkCancel": [
     {
-      "cancelToTerminalMs": 1220.990875,
+      "cancelToTerminalMs": 1217.962166,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
       "serverCancelSent": true
     },
     {
-      "cancelToTerminalMs": 1224.8706249999998,
+      "cancelToTerminalMs": 1170.1211250000001,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
       "serverCancelSent": true
     },
     {
-      "cancelToTerminalMs": 1279.941583,
+      "cancelToTerminalMs": 1267.417209,
       "cancellation": "confirmed",
       "executedOnce": true,
       "rowsAfterSettle": 0,
@@ -31,11 +31,11 @@
   "busyNotQueued": true,
   "cancel": {
     "confirmed": 100,
-    "deadlinePathConfirmed": true,
+    "deadlinePath": "client deadline interrupt (confirmed)",
     "graceMs": 1500,
-    "maxMs": 18.818708,
-    "p50Ms": 4.6588330000000004,
-    "p95Ms": 5.786292,
+    "maxMs": 10.950458,
+    "p50Ms": 4.6465,
+    "p95Ms": 5.662584,
     "samples": 100,
     "serverSignalsSent": 100
   },
@@ -66,7 +66,7 @@
   },
   "killFailure": {
     "boundMs": 2500,
-    "cancelToTerminalMs": 1501.687,
+    "cancelToTerminalMs": 1502.3159590000002,
     "cancellation": "requested",
     "executions": 1,
     "killedByObserver": true,
@@ -83,8 +83,8 @@
   "lostEndReplies": {
     "commit_drop_s2c": {
       "commitSent": true,
-      "endMsMax": 10005.084,
-      "endMsP50": 10003.636917,
+      "endMsMax": 10005.143666,
+      "endMsP50": 10004.491124999999,
       "endStatementReachedServer": "3/3",
       "n": 3,
       "repeatEndSameOutcome": "3/3",
@@ -94,8 +94,8 @@
     },
     "commit_sever": {
       "commitSent": true,
-      "endMsMax": 0.19287500000000002,
-      "endMsP50": 0.127833,
+      "endMsMax": 0.19,
+      "endMsP50": 0.142416,
       "endStatementReachedServer": "0/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -105,8 +105,8 @@
     },
     "commit_sever_on_reply": {
       "commitSent": true,
-      "endMsMax": 0.736791,
-      "endMsP50": 0.525834,
+      "endMsMax": 1.0305,
+      "endMsP50": 0.5214580000000001,
       "endStatementReachedServer": "50/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -116,8 +116,8 @@
     },
     "rollback_drop_s2c": {
       "commitSent": false,
-      "endMsMax": 2012.818458,
-      "endMsP50": 2004.5789580000003,
+      "endMsMax": 2004.3819580000002,
+      "endMsP50": 2004.2896250000001,
       "endStatementReachedServer": "3/3",
       "n": 3,
       "repeatEndSameOutcome": "3/3",
@@ -127,8 +127,8 @@
     },
     "rollback_sever": {
       "commitSent": false,
-      "endMsMax": 0.5682499999999999,
-      "endMsP50": 0.14525000000000002,
+      "endMsMax": 0.224542,
+      "endMsP50": 0.123208,
       "endStatementReachedServer": "0/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -138,8 +138,8 @@
     },
     "rollback_sever_on_reply": {
       "commitSent": false,
-      "endMsMax": 0.726833,
-      "endMsP50": 0.562083,
+      "endMsMax": 5.311875,
+      "endMsP50": 0.513334,
       "endStatementReachedServer": "50/50",
       "n": 50,
       "repeatEndSameOutcome": "50/50",
@@ -238,17 +238,30 @@
     "rollback",
     "rollback_only"
   ],
+  "unknownOutcomeRetention": {
+    "acknowledgementChangesOutcome": false,
+    "churnMs": 898.85925,
+    "confirmedEndsChurned": 288,
+    "lostCommit": {
+      "commitSent": true,
+      "outcome": "unknown",
+      "rowCommittedObserved": 1
+    },
+    "oldestConfirmedEvicted": true,
+    "unknownListedAfterChurn": true,
+    "unknownQueryableAfterChurn": true
+  },
   "writeCancel": {
     "cancellation": "confirmed",
     "connectionDiscarded": "30/30",
     "executedOnce": "30/30",
     "interruptDelivered": "30/30",
-    "maxMs": 7.791250000000001,
+    "maxMs": 13.494917000000001,
     "n": 30,
     "note": "rowUnchanged is the observed data state after the lock holder rolled back (statement never acquired the lock); not a claimed rollback",
     "outcome": "unknown",
-    "p50Ms": 5.019042,
-    "p95Ms": 7.356125,
+    "p50Ms": 5.674667,
+    "p95Ms": 11.190375000000001,
     "rowUnchanged": "30/30",
     "serverInterrupt": "KILL QUERY",
     "sessionsBaseline": 2

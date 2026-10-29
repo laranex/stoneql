@@ -2902,3 +2902,30 @@ label svg {
 .result-sets {
   margin-bottom: var(--space-2);
 }
+
+/* M006 unknown outcomes: shown above every workspace until explicitly acknowledged. */
+.unresolved-outcomes {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3) 0;
+  border-bottom: 1px solid var(--danger-line);
+  background: var(--bg);
+}
+.unresolved-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--space-2);
+  color: var(--danger);
+}
+.unresolved-heading .muted {
+  font-size: var(--font-small);
+}
+.unresolved-outcome .button {
+  flex-shrink: 0;
+}
+.unresolved-age {
+  color: var(--muted);
+}

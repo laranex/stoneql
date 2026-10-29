@@ -73,8 +73,12 @@ authorityKeyIdentifier = keyid:always
   writeFileSync(join(exposed, 'pg_hba.conf'), 'local all all trust\nhostssl all all all scram-sha-256\nhostnossl all all all reject\n', { mode: 0o644 });
   const prepare = 'install -d -o postgres -m 700 /tmp/stoneql-tls && install -o postgres -m 600 /stoneql-tls/server-key.pem /tmp/stoneql-tls/ && install -o postgres -m 644 /stoneql-tls/server.pem /stoneql-tls/pg_hba.conf /tmp/stoneql-tls/ && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/stoneql-tls/server.pem -c ssl_key_file=/tmp/stoneql-tls/server-key.pem -c hba_file=/tmp/stoneql-tls/pg_hba.conf -c ssl_min_protocol_version=TLSv1.2' +
     // Execution evidence reads the writer's statements from a csvlog inside the disposable
-    // container (only stoneql_writer logs statements; see 002-execution.sql).
-    (executionEvaluation ? ' -c logging_collector=on -c log_destination=csvlog -c log_directory=log -c log_filename=stoneql' : '');
+    // container (only stoneql_writer logs statements; see 002-execution.sql). The data
+    // directory is tmpfs inside a 512 MiB cgroup: the default max_wal_size (1 GB, never reached
+    // by a checkpoint during a run) let the bulk-cancel section's WAL fill the container's memory
+    // until the kernel OOM-killed a backend (crash restart, every session dropped), so WAL is
+    // bounded here like InnoDB's fixed-size redo log.
+    (executionEvaluation ? ' -c logging_collector=on -c log_destination=csvlog -c log_directory=log -c log_filename=stoneql -c max_wal_size=64MB' : '');
   writeFileSync(override, JSON.stringify({ services: { postgresql: { volumes: [`${exposed}:/stoneql-tls:ro`], entrypoint: ['sh', '-c', prepare] } } }));
   writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE stoneql_fixture_marker(id text PRIMARY KEY); INSERT INTO stoneql_fixture_marker VALUES ('${marker}');
 CREATE TYPE fixture_mood AS ENUM ('active', 'unknown label');

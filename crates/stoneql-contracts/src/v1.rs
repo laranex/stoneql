@@ -187,6 +187,7 @@ pub enum ErrorCodeDto {
     SshAgentUnavailable,
     SecretUnavailable,
     Busy,
+    UnresolvedOutcomes,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -226,6 +227,7 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::SshAgentUnavailable => ErrorCodeDto::SshAgentUnavailable,
             ErrorCode::SecretUnavailable => ErrorCodeDto::SecretUnavailable,
             ErrorCode::Busy => ErrorCodeDto::Busy,
+            ErrorCode::UnresolvedOutcomes => ErrorCodeDto::UnresolvedOutcomes,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -753,6 +755,58 @@ pub struct TransactionEnd {
     // ROLLBACK was attempted, with the same meaning as `commitSent`.
     pub rollback_sent: bool,
 }
+/// Lists the unresolved outcomes of this app process's owner, including those recorded under
+/// an earlier renderer session (before a reload).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedOutcomesRequest {
+    pub session_id: String,
+}
+/// Hides one unresolved outcome after the user explicitly acknowledged it. Idempotent; it never
+/// changes the recorded outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeOutcomeRequest {
+    pub session_id: String,
+    pub outcome_id: String,
+}
+/// SQL-free facts of a job whose outcome is unknown. `unknownStatement` is the zero-based index
+/// of the statement sent without a definitive reply (absent when the session's transaction
+/// state after the job did not match).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedJob {
+    pub statement_count: u32,
+    pub unknown_statement: Option<u32>,
+    pub in_transaction: bool,
+    pub cancellation: CancellationDto,
+    pub server_cancel_sent: bool,
+    pub deadline_exceeded: bool,
+}
+/// An `unknown` outcome (a transaction end or a job) the user has not acknowledged. The server
+/// may or may not have applied the work; only the server can tell. No SQL text, values, driver
+/// messages or credentials: `database` is the database or SQLite file name of the connection.
+/// Exactly one of `transaction` and `job` is present. Kept in memory by this app process only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedOutcome {
+    pub outcome_id: String,
+    pub database: String,
+    pub seconds_ago: u32,
+    pub transaction: Option<TransactionEnd>,
+    pub job: Option<UnresolvedJob>,
+}
+/// Oldest first. At `limit` unresolved outcomes new jobs and transactions are refused
+/// (`UNRESOLVED_OUTCOMES`) until some are acknowledged; none is ever dropped to make room.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnresolvedOutcomes {
+    pub outcomes: Vec<UnresolvedOutcome>,
+    pub limit: u32,
+    // Jobs a renderer reset detached while still running. Each may still add an unknown
+    // outcome; list again until this is 0, then `outcomes` includes all of them.
+    pub pending: u32,
+}
 
 pub fn typescript() -> String {
     let config = ts_rs::Config::default();
@@ -799,6 +853,11 @@ pub fn typescript() -> String {
         EndTransactionRequest::decl(&config),
         TransactionEndReasonDto::decl(&config),
         TransactionEnd::decl(&config),
+        UnresolvedOutcomesRequest::decl(&config),
+        AcknowledgeOutcomeRequest::decl(&config),
+        UnresolvedJob::decl(&config),
+        UnresolvedOutcome::decl(&config),
+        UnresolvedOutcomes::decl(&config),
         CloseAction::decl(&config),
         CloseDecision::decl(&config),
         CloseResult::decl(&config),

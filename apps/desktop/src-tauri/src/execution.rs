@@ -7,13 +7,14 @@ use super::{
 };
 use std::time::Duration;
 use stoneql_contracts::v1::{
-    CancelJobResult, ConnectionHandleRequest, EndTransactionRequest, Envelope, ErrorDto,
-    JobAccepted, JobRequest, JobUpdate, OutcomeDto, ProtocolVersion, SubmitJobRequest,
-    TransactionActionDto, TransactionEnd, TransactionEndReasonDto, TransactionLease, is_opaque_id,
+    AcknowledgeOutcomeRequest, CancelJobResult, ConnectionHandleRequest, EndTransactionRequest,
+    Envelope, ErrorDto, JobAccepted, JobRequest, JobUpdate, OutcomeDto, ProtocolVersion,
+    SubmitJobRequest, TransactionActionDto, TransactionEnd, TransactionLease, UnresolvedOutcomes,
+    UnresolvedOutcomesRequest, is_opaque_id,
 };
-use stoneql_core::{CoreError, ErrorCode, Outcome};
+use stoneql_core::{CoreError, ErrorCode};
 use stoneql_runtime::{
-    ConnectionId, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId,
+    ConnectionId, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, OutcomeId,
 };
 use tauri::{Runtime, State, WebviewWindow};
 
@@ -29,12 +30,16 @@ fn execution_error(error: ExecutionError) -> ErrorDto {
         ExecutionError::Script(..) => ErrorCode::UnsupportedSql,
         ExecutionError::Connection(error) => return lifecycle(error),
         ExecutionError::Database => ErrorCode::QueryRejected,
+        ExecutionError::UnresolvedOutcomes => ErrorCode::UnresolvedOutcomes,
     };
     let mut dto = ErrorDto::from(CoreError::rejected(code));
     // The runtime's specific refusal text is static and safe to show.
     if matches!(
         error,
-        ExecutionError::Script(..) | ExecutionError::RollbackOnly | ExecutionError::ReadOnlyHandle
+        ExecutionError::Script(..)
+            | ExecutionError::RollbackOnly
+            | ExecutionError::ReadOnlyHandle
+            | ExecutionError::UnresolvedOutcomes
     ) {
         dto.message = error.to_string();
     }
@@ -190,25 +195,45 @@ pub async fn end_transaction<R: Runtime>(
         )
         .await
         .map_err(execution_error)?;
+    Ok(reply(request.request_id, end.into()))
+}
+
+/// Unknown outcomes this app process recorded for its owner and the user has not acknowledged,
+/// including those of the renderer session before a reload (the owner outlives rotations).
+/// SQL-free summaries only.
+#[tauri::command]
+pub fn list_unresolved_outcomes<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<UnresolvedOutcomes>, ErrorDto> {
+    let request: Envelope<UnresolvedOutcomesRequest> = decode(&message)?;
+    authorize(&window, &session, &request.payload.session_id)?;
     Ok(reply(
         request.request_id,
-        TransactionEnd {
-            outcome: match end.outcome {
-                Outcome::Committed => OutcomeDto::Committed,
-                Outcome::RolledBack => OutcomeDto::RolledBack,
-                Outcome::Rejected => OutcomeDto::Rejected,
-                Outcome::Unknown => OutcomeDto::Unknown,
-            },
-            reason: match end.reason {
-                EndReason::Requested => TransactionEndReasonDto::Requested,
-                EndReason::Expired => TransactionEndReasonDto::Expired,
-                EndReason::ConnectionLost => TransactionEndReasonDto::ConnectionLost,
-                EndReason::Closed => TransactionEndReasonDto::Closed,
-            },
-            commit_sent: end.commit_sent,
-            rollback_sent: end.rollback_sent,
-        },
+        session.connections.unresolved_outcomes(session.owner),
     ))
+}
+
+/// The user acknowledged one unknown outcome: it is hidden from the list (idempotent). The
+/// recorded outcome never changes. Returns the outcomes still unresolved.
+#[tauri::command]
+pub fn acknowledge_outcome<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<UnresolvedOutcomes>, ErrorDto> {
+    let request: Envelope<AcknowledgeOutcomeRequest> = decode(&message)?;
+    authorize(&window, &session, &request.payload.session_id)?;
+    if !is_opaque_id(&request.payload.outcome_id) {
+        return Err(invalid());
+    }
+    let id = OutcomeId::parse(&request.payload.outcome_id).map_err(execution_error)?;
+    let remaining = session
+        .connections
+        .acknowledge_outcome(session.owner, id)
+        .map_err(execution_error)?;
+    Ok(reply(request.request_id, remaining))
 }
 
 /// The renderer session changed while the request ran: the outcome is not reported to it.
@@ -238,5 +263,11 @@ mod tests {
             ErrorCodeDto::Conflict
         );
         assert!(!busy.retryable && !script.retryable);
+        let unresolved = execution_error(ExecutionError::UnresolvedOutcomes);
+        assert_eq!(
+            (unresolved.code, unresolved.outcome),
+            (ErrorCodeDto::UnresolvedOutcomes, OutcomeDto::Rejected)
+        );
+        assert!(unresolved.message.contains("acknowledge") && !unresolved.retryable);
     }
 }

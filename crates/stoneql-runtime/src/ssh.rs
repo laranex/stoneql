@@ -23,7 +23,9 @@ use std::{
 const MAX_AGENT_IDENTITIES: usize = 5;
 /// Private keys are small text files; anything larger is refused before parsing.
 pub(crate) const MAX_KEY_FILE_BYTES: u64 = 16_384;
-/// Concurrent forwarded streams per tunnel. The pool uses one; the rest absorb reconnects.
+/// Concurrent forwarded streams per tunnel: the pool, a job or lease connection and a cancel
+/// connection use at most three; the fourth absorbs reconnects. Streams beyond it are closed at
+/// once, so a cancel connection fails fast instead of waiting (Contract 5.2).
 const MAX_FORWARDS: usize = 4;
 
 /// Trusted SSH tunnel configuration. Never derives Debug/Serialize: it may carry secrets.
@@ -382,8 +384,30 @@ async fn forward(
     else {
         return;
     };
-    let mut remote = channel.into_stream();
-    let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+    use tokio::io::AsyncWriteExt;
+    let remote = channel.into_stream();
+    let (mut local_read, mut local_write) = local.split();
+    let (mut remote_read, mut remote_write) = tokio::io::split(remote);
+    // As `copy_bidirectional`, except that the forward (its slot and SSH channel) ends as soon
+    // as the local side is done. Database clients never half-close, so that means StoneQL
+    // closed or discarded the connection; waiting for the server as well would let an abandoned
+    // statement hold a forward until it ends server-side, exhausting the tunnel for later
+    // cancels (Contract 5.2). A server EOF only half-closes the local side, so the client can
+    // still finish its own close.
+    let upstream = async {
+        let _ = tokio::io::copy(&mut local_read, &mut remote_write).await;
+        // Delivers anything written before the close (for example COM_QUIT) and an EOF.
+        let _ = remote_write.shutdown().await;
+    };
+    let downstream = async {
+        let _ = tokio::io::copy(&mut remote_read, &mut local_write).await;
+        let _ = local_write.shutdown().await;
+        std::future::pending::<()>().await
+    };
+    tokio::select! {
+        () = upstream => {}
+        () = downstream => {}
+    }
 }
 
 #[cfg(unix)]

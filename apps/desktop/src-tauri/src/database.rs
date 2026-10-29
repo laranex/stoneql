@@ -40,7 +40,7 @@ pub(crate) fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto
 }
 /// Omitted means read-only; read-write is an explicit per-connection opt-in, refused here
 /// (before credential lookup or network I/O) while the host's read-write gate is off, and over
-/// SSH until tunnelled cancellation is fixture-tested.
+/// SSH until the user enables SSH read-write separately (D025-9).
 pub(crate) fn access(
     session: &NativeSession,
     mode: Option<AccessModeDto>,

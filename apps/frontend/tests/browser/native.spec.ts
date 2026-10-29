@@ -7,6 +7,7 @@ for(const theme of ['light','dark']) test(`${theme}: native close uses shared un
       const request=JSON.parse(args.message);
       const payload=command==='host_info'?{runtime:'desktop',appVersion:'0.1.0',sessionId:'native_test_session',nonce:request.payload.nonce,simulated:true}
         :command==='resolve_close'?((window as any).nativeCloseActions.push(request.payload.action),{closed:request.payload.action==='confirm'})
+        :command==='list_unresolved_outcomes'?{outcomes:[],limit:16}
         :{simulated:true,values:request.payload.values};
       return {version:1,requestId:request.requestId,payload};
     }}};

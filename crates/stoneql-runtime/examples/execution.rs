@@ -1,6 +1,8 @@
 //! Disposable fixture harness for M006 read-write execution (MySQL, MariaDB, PostgreSQL).
 //! Run only by `npm run test:execution`, which owns the fixture containers and credentials.
 //! Prints one JSON report; assertions fail the run. No SQL text or credentials are reported.
+//! A failure names the harness step and, for a fixture-owner query, that query's fixed harness
+//! text (tags and server ids only) on stderr; the runner also redacts the password.
 use serde_json::json;
 use sqlx::{
     Connection, MySqlConnection, PgConnection, SqlSafeStr,
@@ -18,11 +20,30 @@ use stoneql_contracts::v1::{
 use stoneql_core::{Engine, Outcome};
 use stoneql_runtime::{
     Access, ConnectionId, Connections, DirectServer, EndReason, ExecutionError, ExecutionLimits,
-    JobId, JobOptions, LeaseId, OwnerId, QueryLimits, ReadError, ScriptError, mysql_state_matches,
-    postgres_commit, postgres_state_matches,
+    JobId, JobOptions, LeaseId, OutcomeId, OwnerId, QueryLimits, ReadError, ScriptError,
+    TransactionEnd, mysql_state_matches, postgres_commit, postgres_state_matches,
 };
 
 type Failure = Box<dyn std::error::Error>;
+
+/// The harness step now running, prefixed to any error `main` returns so a failure (including a
+/// bare driver error from an observer query) is locatable. Static labels only.
+static STEP: std::sync::Mutex<&'static str> = std::sync::Mutex::new("startup");
+fn step(name: &'static str) {
+    *STEP.lock().expect("step lock") = name;
+}
+/// Context for an observer/locker query error: the harness's own fixed SQL (tags and server ids
+/// only, never credentials or user data); long text keeps its head and its tag-bearing tail.
+fn observer_error(sql: &str, error: sqlx::Error) -> Failure {
+    let chars: Vec<char> = sql.chars().collect();
+    let sql: String = if chars.len() > 240 {
+        let (head, tail) = (&chars[..120], &chars[chars.len() - 120..]);
+        format!("{}…{}", String::from_iter(head), String::from_iter(tail))
+    } else {
+        sql.to_owned()
+    };
+    format!("fixture-owner query `{sql}`: {error} ({error:?})").into()
+}
 
 /// Fixture-owner connection used only to observe and inject faults.
 enum Observer {
@@ -31,29 +52,27 @@ enum Observer {
 }
 impl Observer {
     async fn scalar_i64(&mut self, sql: &'static str) -> Result<i64, Failure> {
-        Ok(match self {
-            Self::MySql(connection) => sqlx::query_scalar(sql).fetch_one(connection).await?,
-            Self::Postgres(connection) => sqlx::query_scalar(sql).fetch_one(connection).await?,
-        })
+        match self {
+            Self::MySql(connection) => sqlx::query_scalar(sql).fetch_one(connection).await,
+            Self::Postgres(connection) => sqlx::query_scalar(sql).fetch_one(connection).await,
+        }
+        .map_err(|error| observer_error(sql, error))
     }
     async fn scalar(&mut self, sql: String) -> Result<i64, Failure> {
-        let sql = sqlx::AssertSqlSafe(sql);
-        Ok(match self {
-            Self::MySql(connection) => sqlx::query_scalar(sql).fetch_one(connection).await?,
-            Self::Postgres(connection) => sqlx::query_scalar(sql).fetch_one(connection).await?,
-        })
+        let text = sqlx::AssertSqlSafe(sql.clone());
+        match self {
+            Self::MySql(connection) => sqlx::query_scalar(text).fetch_one(connection).await,
+            Self::Postgres(connection) => sqlx::query_scalar(text).fetch_one(connection).await,
+        }
+        .map_err(|error| observer_error(&sql, error))
     }
     async fn execute(&mut self, sql: String) -> Result<(), Failure> {
-        let sql = sqlx::AssertSqlSafe(sql);
+        let text = sqlx::AssertSqlSafe(sql.clone());
         match self {
-            Self::MySql(connection) => {
-                sqlx::raw_sql(sql).execute(connection).await?;
-            }
-            Self::Postgres(connection) => {
-                sqlx::raw_sql(sql).execute(connection).await?;
-            }
+            Self::MySql(connection) => sqlx::raw_sql(text).execute(connection).await.map(drop),
+            Self::Postgres(connection) => sqlx::raw_sql(text).execute(connection).await.map(drop),
         }
-        Ok(())
+        .map_err(|error| observer_error(&sql, error))
     }
 }
 
@@ -78,10 +97,40 @@ impl Run {
                 batches.push(batch);
             }
             if update.done {
+                self.settle(id, &update)?;
                 return Ok((batches, update));
             }
         }
         Err("job did not finish".into())
+    }
+    /// P3: an unknown job outcome stays listed until acknowledged. The harness checks it is
+    /// listed, then acknowledges it (after asserting the outcome itself), so the many unknown
+    /// samples below are not refused by `MAX_UNRESOLVED_OUTCOMES_PER_OWNER`.
+    fn settle(&self, id: JobId, update: &JobUpdate) -> Result<(), Failure> {
+        if update.outcome != Some(ExecutionOutcomeDto::Unknown) {
+            return Ok(());
+        }
+        self.acknowledge(
+            &id.opaque(),
+            "unknown job outcome listed until acknowledged",
+        )
+    }
+    fn acknowledge(&self, id: &str, listed: &'static str) -> Result<(), Failure> {
+        let unresolved = self.connections.unresolved_outcomes(self.owner).outcomes;
+        ensure(
+            unresolved.iter().any(|outcome| outcome.outcome_id == id),
+            listed,
+        )?;
+        let remaining = self
+            .connections
+            .acknowledge_outcome(self.owner, OutcomeId::parse(id)?)?;
+        ensure(
+            remaining
+                .outcomes
+                .iter()
+                .all(|outcome| outcome.outcome_id != id),
+            "acknowledged outcome hidden",
+        )
     }
     async fn run(
         &self,
@@ -276,6 +325,100 @@ impl Spy {
     }
 }
 
+/// P3 (M006 blocker 3, Contract 4.5): a lost-COMMIT `unknown` (relay `sever_on_reply`: COMMIT
+/// forwarded, reply never delivered) is kept, listable and queryable, through more confirmed
+/// lease ends than both retention bounds (32 per owner, 256 overall), which do evict the
+/// oldest confirmed ones. Acknowledging it hides it without changing the recorded outcome.
+async fn unknown_outcome_retention(
+    run: &Run,
+    relay_handle: ConnectionId,
+    observer: &mut Observer,
+) -> Result<serde_json::Value, Failure> {
+    let (connections, owner) = (&run.connections, run.owner);
+    relay("normal").await?;
+    step("unknown outcome retention: begin");
+    let lease = connections.begin_transaction(owner, relay_handle).await?;
+    step("unknown outcome retention: insert");
+    let tag = "(9001, 1)";
+    let (_, update) = run
+        .run_on(
+            relay_handle,
+            &format!("INSERT INTO exec_item(id, parent) VALUES {tag}"),
+            Some(lease),
+        )
+        .await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+        "retention lease insert",
+    )?;
+    relay("sever_on_reply").await?;
+    step("unknown outcome retention: lost commit");
+    let lost = connections.end_transaction(owner, lease, true).await?;
+    relay("sever").await?;
+    relay("normal").await?;
+    let expected = TransactionEnd {
+        outcome: Outcome::Unknown,
+        reason: EndReason::Requested,
+        commit_sent: true,
+        rollback_sent: false,
+    };
+    ensure(lost == expected, "lost COMMIT is unknown with commitSent")?;
+    let churn = ExecutionLimits::MAX_ENDED_LEASES + ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER;
+    let started = Instant::now();
+    let mut first = None;
+    for _ in 0..churn {
+        step("unknown outcome retention: churn begin");
+        let churned = connections.begin_transaction(owner, run.handle).await?;
+        step("unknown outcome retention: churn end");
+        first.get_or_insert(churned);
+        let end = connections.end_transaction(owner, churned, false).await?;
+        ensure(
+            end.outcome == Outcome::RolledBack,
+            "churn rollback confirmed",
+        )?;
+    }
+    let churn_ms = started.elapsed().as_secs_f64() * 1000.0;
+    step("unknown outcome retention: after churn");
+    let first = first.ok_or("churn")?;
+    // The oldest confirmed end was evicted; the unknown one was not.
+    let evicted =
+        connections.end_transaction(owner, first, true).await == Err(ExecutionError::Forbidden);
+    ensure(evicted, "confirmed ends beyond the bounds are evicted")?;
+    let listed = connections
+        .unresolved_outcomes(owner)
+        .outcomes
+        .into_iter()
+        .find(|outcome| outcome.outcome_id == lease.opaque())
+        .ok_or("lost COMMIT still listed after churn")?;
+    ensure(
+        listed.transaction == Some(expected.into()) && listed.job.is_none(),
+        "listed facts unchanged",
+    )?;
+    ensure(
+        connections.end_transaction(owner, lease, false).await? == expected,
+        "lost COMMIT still queryable after churn",
+    )?;
+    let applied = observer
+        .scalar("SELECT COUNT(*) FROM exec_item WHERE id = 9001".into())
+        .await?;
+    let remaining = connections.acknowledge_outcome(owner, OutcomeId::parse(&lease.opaque())?)?;
+    ensure(
+        remaining
+            .outcomes
+            .iter()
+            .all(|outcome| outcome.outcome_id != lease.opaque())
+            && connections.end_transaction(owner, lease, true).await? == expected,
+        "acknowledgement hides the outcome without changing it",
+    )?;
+    Ok(json!({
+        "lostCommit": {"outcome": "unknown", "commitSent": true, "rowCommittedObserved": applied},
+        "confirmedEndsChurned": churn, "churnMs": churn_ms,
+        "oldestConfirmedEvicted": evicted,
+        "unknownListedAfterChurn": true, "unknownQueryableAfterChurn": true,
+        "acknowledgementChangesOutcome": false,
+    }))
+}
+
 /// Requests cancellation and returns (cancel→terminal latency, final update).
 async fn cancel_and_wait(run: &Run, id: JobId) -> Result<(f64, JobUpdate), Failure> {
     let requested = Instant::now();
@@ -290,6 +433,7 @@ async fn cancel_and_wait(run: &Run, id: JobId) -> Result<(f64, JobUpdate), Failu
             terminal = Some(requested.elapsed().as_secs_f64() * 1000.0);
         }
         if update.done {
+            run.settle(id, &update)?;
             return Ok((terminal.ok_or("terminal")?, update));
         }
     }
@@ -512,6 +656,7 @@ async fn write_faults(
         .scalar("SELECT v FROM exec_lock WHERE id = 1".into())
         .await?;
 
+    step("write cancel");
     // A. Long-running write blocked on a row lock held by another session, then cancelled.
     let (mut samples, mut kills, mut unchanged, mut discarded, mut once) = (Vec::new(), 0, 0, 0, 0);
     for sample in 0..30 {
@@ -613,6 +758,7 @@ async fn write_faults(
         "write cancel p95 within proposed 2 s",
     )?;
 
+    step("bulk cancel");
     // A2. Large INSERT … SELECT cancelled mid-way: statement atomicity observed afterwards.
     let mut bulk = Vec::new();
     for sample in 0..3 {
@@ -650,19 +796,25 @@ async fn write_faults(
             "serverCancelSent": update.server_cancel_sent, "rowsAfterSettle": rows,
             "executedOnce": observer.scalar(spy.executions(&tag)).await? == 1,
         }));
+        // The cancelled insert's dead rows stay in the table's files; the fixture's data
+        // directory is memory-backed, so they are released before the next sample.
+        observer.execute("TRUNCATE TABLE exec_bulk".into()).await?;
     }
     report.insert("bulkCancel".into(), json!(bulk));
 
-    // B. The cancel connection cannot be opened: requested, not confirmed; no hang. With a 3 s
-    // statement deadline, PostgreSQL's statement_timeout backstop (L-3) must end the abandoned
-    // statement server-side; MySQL/MariaDB have none and the observer ends it.
+    step("kill failure");
+    // B. The cancel connection cannot be opened: requested, not confirmed; no hang. With a 5 s
+    // statement deadline, PostgreSQL's server statement_timeout (L-3, deadline - margin) must
+    // end the abandoned statement server-side, after the abandon and before the client
+    // deadline; MySQL/MariaDB have none and the observer ends it.
     locker.execute("BEGIN".into()).await?;
     locker
         .execute("SELECT v FROM exec_lock WHERE id = 1 FOR UPDATE".into())
         .await?;
     let tag = "AND 2000 = 2000";
     let mut options = JobOptions::new(format!("UPDATE exec_lock SET v = v + 1 WHERE id = 1 {tag}"));
-    options.statement_deadline = Duration::from_secs(3);
+    let deadline = Duration::from_secs(5);
+    options.statement_deadline = deadline;
     let (id, _) = connections.submit_job(owner, relay_handle, options)?;
     let started = Instant::now();
     ensure(
@@ -691,7 +843,7 @@ async fn write_faults(
     )?;
     tokio::time::sleep(Duration::from_millis(500)).await;
     let still_running = observer.scalar(spy.running(tag)).await? == session;
-    let backstop = Duration::from_secs(3) + ExecutionLimits::POSTGRES_TIMEOUT_MARGIN;
+    let backstop = ExecutionLimits::postgres_statement_timeout(deadline);
     let ended_by_server = !spy.mysql
         && wait_for(
             observer,
@@ -706,8 +858,11 @@ async fn write_faults(
     }
     if !spy.mysql {
         ensure(
-            still_running && ended_by_server && ended_after >= backstop.as_secs_f64() * 1000.0,
-            "statement_timeout backstop ended the abandoned statement",
+            still_running
+                && ended_by_server
+                && ended_after >= backstop.as_secs_f64() * 1000.0
+                && ended_after < deadline.as_secs_f64() * 1000.0,
+            "server statement_timeout ended the abandoned statement before the client deadline",
         )?;
         // The abandoned session itself is ended by the observer (PostgreSQL does not notice a
         // closed client while waiting on a lock).
@@ -726,13 +881,21 @@ async fn write_faults(
             "statementStillRunningAfterAbandon": still_running,
             "killedByObserver": spy.mysql && still_running,
             "serverBackstop": if spy.mysql { json!(null) } else {
-                json!({"statementTimeoutMs": backstop.as_millis(), "endedByServer": ended_by_server, "endedAfterSubmitMs": ended_after})
+                json!({"statementDeadlineMs": deadline.as_millis(), "statementTimeoutMs": backstop.as_millis(), "endedByServer": ended_by_server, "endedAfterSubmitMs": ended_after})
             },
             "rowApplied": value != initial,
             "executions": observer.scalar(spy.executions(tag)).await?,
         }),
     );
 
+    step("postgres server timeout");
+    // C. PostgreSQL only: the server statement_timeout fires before the client deadline.
+    if !spy.mysql {
+        let timeout = postgres_server_timeout(run, observer, &mut locker, &spy, baseline).await?;
+        report.insert("postgresServerTimeout".into(), timeout);
+    }
+
+    step("lost end replies");
     // D. Lost COMMIT/ROLLBACK replies through the relay: unknown, never retried.
     let mut lost = serde_json::Map::new();
     let mut marker = 8000;
@@ -802,6 +965,7 @@ async fn write_faults(
                 // Asking again returns the recorded outcome and sends nothing.
                 let again = connections.end_transaction(owner, lease, !commit).await?;
                 repeat_same += usize::from(again == end);
+                run.acknowledge(&lease.opaque(), "lost end reply listed until acknowledged")?;
                 ensure(
                     logged <= 1
                         && observer
@@ -849,6 +1013,12 @@ async fn write_faults(
         }
     }
     report.insert("lostEndReplies".into(), serde_json::Value::Object(lost));
+
+    step("unknown outcome retention");
+    report.insert(
+        "unknownOutcomeRetention".into(),
+        unknown_outcome_retention(run, relay_handle, observer).await?,
+    );
     report.insert(
         "noResend".into(),
         json!({
@@ -863,6 +1033,284 @@ async fn write_faults(
     }
     connections.disconnect(owner, relay_handle).await?;
     Ok(report)
+}
+
+/// Submits a job and polls it every 20 ms; returns (submit→terminal ms, final update).
+async fn timed(run: &Run, options: JobOptions) -> Result<(f64, JobUpdate), Failure> {
+    let (id, _) = run.connections.submit_job(run.owner, run.handle, options)?;
+    let submitted = Instant::now();
+    let mut terminal = None;
+    loop {
+        let update = run
+            .connections
+            .fetch_job(run.owner, id, Duration::from_millis(20))
+            .await?;
+        if terminal.is_none() && update.outcome.is_some() {
+            terminal = Some(submitted.elapsed().as_secs_f64() * 1000.0);
+        }
+        if update.done {
+            run.settle(id, &update)?;
+            return Ok((terminal.ok_or("terminal")?, update));
+        }
+    }
+}
+
+/// L-3 / Contract 5.3 ordering on PostgreSQL 17.6: StoneQL's server `statement_timeout`
+/// (statement deadline - margin) ends a lock-blocked write on the server with SQLSTATE 57014
+/// before the client deadline. The job is `failed` (authoritative: the statement ended with an
+/// error before any commit, and the session check confirms the transaction state), not
+/// `unknown`; in a lease the block is aborted and the lease becomes rollback-only, and the
+/// rollback is reported only as the server confirms it. Cancellation still works before the
+/// server timeout; a script that disables the server timeout still meets the client deadline
+/// and interrupt (the backstop); an external cancel (57014 for another reason) is not reported
+/// as a deadline. Writer sessions return to baseline with none left in a transaction.
+async fn postgres_server_timeout(
+    run: &Run,
+    observer: &mut Observer,
+    locker: &mut Observer,
+    spy: &Spy,
+    baseline: i64,
+) -> Result<serde_json::Value, Failure> {
+    let deadline = Duration::from_secs(3);
+    let server = ExecutionLimits::postgres_statement_timeout(deadline);
+    let (server_ms, deadline_ms) = (
+        server.as_secs_f64() * 1000.0,
+        deadline.as_secs_f64() * 1000.0,
+    );
+    let initial = observer
+        .scalar("SELECT v FROM exec_lock WHERE id = 1".into())
+        .await?;
+    let timeout_errors = format!(
+        "SELECT COUNT(*) FROM {PG_LOG} WHERE split_part(line, ',', 2) = '\"stoneql_writer\"' AND line LIKE '%,ERROR,57014,\"canceling statement due to statement timeout\"%'"
+    );
+    let errors_before = observer.scalar(timeout_errors.clone()).await?;
+    let lock = async |locker: &mut Observer| -> Result<(), Failure> {
+        locker.execute("BEGIN".into()).await?;
+        locker
+            .execute("SELECT v FROM exec_lock WHERE id = 1 FOR UPDATE".into())
+            .await
+    };
+    let blocked = |tag: &str| format!("UPDATE exec_lock SET v = v + 1 WHERE id = 1 AND {tag}");
+    let is_timeout = |update: &JobUpdate, index: usize| {
+        update.outcome == Some(ExecutionOutcomeDto::Failed)
+            && update.statements[index].status == StatementStatusDto::Failed
+            && update.statements[index]
+                .failure
+                .as_ref()
+                .and_then(|failure| failure.sql_state.as_deref())
+                == Some("57014")
+            && update.cancellation == CancellationDto::None
+            && !update.server_cancel_sent
+            && update.deadline_exceeded
+    };
+
+    step("postgres server timeout C1 autocommit");
+    // C1. Autocommit, 10 samples: failed by the server timeout, before the client deadline.
+    let mut samples = Vec::new();
+    let mut once = 0;
+    for sample in 0..10 {
+        let tag = format!("2100{sample} = 2100{sample}");
+        lock(locker).await?;
+        let mut options = JobOptions::new(blocked(&tag));
+        options.statement_deadline = deadline;
+        let (terminal, update) = timed(run, options).await?;
+        locker.execute("ROLLBACK".into()).await?;
+        ensure(
+            is_timeout(&update, 0),
+            "server statement_timeout ends the write as failed (57014)",
+        )?;
+        ensure(
+            terminal >= server_ms && terminal < deadline_ms,
+            "server timeout fires before the client deadline",
+        )?;
+        once += i64::from(observer.scalar(spy.executions(&tag)).await? == 1);
+        samples.push(terminal);
+    }
+    ensure(once == 10, "timed-out writes executed once")?;
+    let value = observer
+        .scalar("SELECT v FROM exec_lock WHERE id = 1".into())
+        .await?;
+    ensure(value == initial, "timed-out autocommit writes not applied")?;
+    let errors = observer.scalar(timeout_errors.clone()).await? - errors_before;
+    ensure(errors >= 10, "server log records the statement timeouts")?;
+
+    step("postgres server timeout C2 lease");
+    // C2. In a lease: the block is aborted (server-observed), the lease rollback-only, and the
+    // requested rollback is confirmed by the server.
+    let lease = run
+        .connections
+        .begin_transaction(run.owner, run.handle)
+        .await?;
+    let (_, update) = run
+        .run(
+            "INSERT INTO exec_item(id, parent) VALUES (2201, 1)",
+            Some(lease),
+        )
+        .await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+        "lease insert before the timeout",
+    )?;
+    lock(locker).await?;
+    let mut options = JobOptions::new(blocked("2202 = 2202"));
+    options.lease = Some(lease);
+    options.statement_deadline = deadline;
+    let (lease_terminal, update) = timed(run, options).await?;
+    locker.execute("ROLLBACK".into()).await?;
+    ensure(
+        is_timeout(&update, 0)
+            && update.lease == Some(LeaseStateDto::RollbackOnly)
+            && lease_terminal >= server_ms
+            && lease_terminal < deadline_ms,
+        "in-lease server timeout makes the lease rollback-only",
+    )?;
+    let aborted = observer
+        .scalar_i64("SELECT COUNT(*) FROM pg_stat_activity WHERE usename = 'stoneql_writer' AND state = 'idle in transaction (aborted)'")
+        .await?;
+    ensure(aborted == 1, "server shows the lease block aborted")?;
+    ensure(
+        matches!(
+            run.connections.submit_job(run.owner, run.handle, {
+                let mut options = JobOptions::new("SELECT 1");
+                options.lease = Some(lease);
+                options
+            }),
+            Err(ExecutionError::RollbackOnly)
+        ),
+        "rollback-only lease refuses further statements",
+    )?;
+    let end = run
+        .connections
+        .end_transaction(run.owner, lease, false)
+        .await?;
+    ensure(
+        end.outcome == Outcome::RolledBack && !end.commit_sent,
+        "rollback confirmed by the server",
+    )?;
+    ensure(
+        observer
+            .scalar_i64("SELECT COUNT(*) FROM exec_item WHERE id = 2201")
+            .await?
+            == 0,
+        "rolled-back lease work not visible",
+    )?;
+
+    step("postgres server timeout C3 cancel");
+    // C3. A cancel before the server timeout still takes the client interrupt path.
+    lock(locker).await?;
+    let mut options = JobOptions::new(blocked("2203 = 2203"));
+    options.statement_deadline = deadline;
+    let (id, _) = run.connections.submit_job(run.owner, run.handle, options)?;
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    let (cancel_ms, update) = cancel_and_wait(run, id).await?;
+    locker.execute("ROLLBACK".into()).await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Unknown)
+            && update.cancellation == CancellationDto::Confirmed
+            && update.server_cancel_sent
+            && !update.deadline_exceeded,
+        "cancel before the server timeout is confirmed by the interrupt",
+    )?;
+
+    step("postgres server timeout C4 backstop");
+    // C4. A script that disables the server timeout meets the client deadline and interrupt.
+    lock(locker).await?;
+    let mut options = JobOptions::new(format!(
+        "SET statement_timeout = 0; {}",
+        blocked("2204 = 2204")
+    ));
+    options.statement_deadline = deadline;
+    let (backstop_ms, update) = timed(run, options).await?;
+    locker.execute("ROLLBACK".into()).await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Unknown)
+            && statuses(&update) == [StatementStatusDto::Succeeded, StatementStatusDto::Unknown]
+            && update.deadline_exceeded
+            && update.server_cancel_sent
+            && backstop_ms >= deadline_ms,
+        "client deadline and interrupt remain the backstop",
+    )?;
+
+    step("postgres server timeout C5 external cancel");
+    // C5. 57014 from someone else's cancel is a failure, not a deadline, even when it arrives
+    // after the server-timeout duration (here the script disabled the server timeout, and the
+    // external cancel lands between the server timeout and the client deadline).
+    lock(locker).await?;
+    let tag = "2205 = 2205";
+    let mut options = JobOptions::new(format!("SET statement_timeout = 0; {}", blocked(tag)));
+    options.statement_deadline = deadline;
+    let (id, _) = run.connections.submit_job(run.owner, run.handle, options)?;
+    let submitted = Instant::now();
+    ensure(
+        wait_for(
+            observer,
+            &spy.running(tag),
+            |session| session > 0,
+            Duration::from_secs(2),
+        )
+        .await?,
+        "write blocked for external cancel",
+    )?;
+    let session = observer.scalar(spy.running(tag)).await?;
+    tokio::time::sleep_until((submitted + server + Duration::from_millis(300)).into()).await;
+    observer
+        .execute(format!("SELECT pg_cancel_backend({session})"))
+        .await?;
+    let (_, update) = run.drain(id).await?;
+    let external_ms = submitted.elapsed().as_secs_f64() * 1000.0;
+    locker.execute("ROLLBACK".into()).await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Failed)
+            && update.statements[1]
+                .failure
+                .as_ref()
+                .and_then(|failure| failure.sql_state.as_deref())
+                == Some("57014")
+            && update.cancellation == CancellationDto::None
+            && !update.deadline_exceeded
+            && external_ms < deadline_ms,
+        "external cancel is not reported as a deadline",
+    )?;
+
+    step("postgres server timeout cleanup");
+    // Cleanup: no writer session left in a transaction; the count never exceeds the baseline.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let sessions = observer.scalar(spy.sessions().into()).await?;
+    let in_transaction = observer
+        .scalar_i64("SELECT COUNT(*) FROM pg_stat_activity WHERE usename = 'stoneql_writer' AND state LIKE 'idle in transaction%'")
+        .await?;
+    ensure(
+        sessions <= baseline && in_transaction == 0,
+        "server-timeout jobs leave no sessions behind",
+    )?;
+    let value = observer
+        .scalar("SELECT v FROM exec_lock WHERE id = 1".into())
+        .await?;
+    ensure(value == initial, "no timed-out or cancelled write applied")?;
+    Ok(json!({
+        "statementDeadlineMs": deadline.as_millis(),
+        "statementTimeoutMs": server.as_millis(),
+        "marginMs": ExecutionLimits::POSTGRES_TIMEOUT_MARGIN.as_millis(),
+        "autocommit": {
+            "n": samples.len(), "outcome": "failed", "sqlState": "57014",
+            "cancellation": "none", "deadlineExceeded": true,
+            "submitToTerminalMsMin": samples.iter().copied().fold(f64::MAX, f64::min),
+            "submitToTerminalMsP50": percentile(&mut samples.clone(), 0.5),
+            "submitToTerminalMsMax": samples.iter().copied().fold(0.0, f64::max),
+            "executedOnce": format!("{once}/10"), "serverLogTimeoutErrors": errors,
+            "rowApplied": false,
+        },
+        "lease": {
+            "submitToTerminalMs": lease_terminal, "leaseState": "rollback_only",
+            "serverStateAbortedBlock": aborted == 1, "rollbackConfirmed": true,
+            "leaseWorkVisibleAfter": false,
+        },
+        "cancelBeforeServerTimeout": {"cancelToTerminalMs": cancel_ms, "cancellation": "confirmed"},
+        "clientDeadlineBackstop": {"submitToTerminalMs": backstop_ms, "outcome": "unknown", "deadlineExceeded": true},
+        "externalCancelAfterServerTimeoutNotDeadline": {"submitToTerminalMs": external_ms, "outcome": "failed", "sqlState": "57014", "deadlineExceeded": false},
+        "writerSessionsAfter": sessions, "writerSessionsBaseline": baseline,
+        "writerSessionsInTransactionAfter": in_transaction,
+    }))
 }
 
 /// Item 6 (MySQL/MariaDB): a COMMIT the server refuses with a database error (here ER 1290,
@@ -998,6 +1446,22 @@ async fn postgres_state_and_commit(
 
 #[tokio::main]
 async fn main() -> Result<(), Failure> {
+    let started = Instant::now();
+    harness().await.map_err(|error| {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        format!(
+            "step `{}` failed {:.1} s into the harness (unix {:.3}): {error} ({error:?})",
+            STEP.lock().map(|step| *step).unwrap_or("unknown"),
+            started.elapsed().as_secs_f64(),
+            at.as_secs_f64(),
+        )
+        .into()
+    })
+}
+
+async fn harness() -> Result<(), Failure> {
     let engine = match env::var("STONEQL_LIFECYCLE_ENGINE")?.as_str() {
         "mysql" => Engine::MySql,
         "mariadb" => Engine::MariaDb,
@@ -1077,6 +1541,7 @@ async fn main() -> Result<(), Failure> {
     };
     let mut report = serde_json::Map::new();
 
+    step("session state and COMMIT");
     // Session-state and COMMIT checks first, so a regression fails the run early.
     if mysql {
         report.insert(
@@ -1090,6 +1555,7 @@ async fn main() -> Result<(), Failure> {
         );
     }
 
+    step("expiry lease start");
     // Lease expiry runs in the background on a second handle for the real LEASE_IDLE.
     let expiry_handle = connections
         .connect_with_access(owner, config(), None, None, Access::ReadWrite)
@@ -1105,6 +1571,7 @@ async fn main() -> Result<(), Failure> {
         "expiry lease insert",
     )?;
 
+    step("read-only handles");
     // Read-only handles and the M003 path are unchanged.
     let read_only = connections.connect(owner, config()).await?;
     ensure(
@@ -1119,6 +1586,7 @@ async fn main() -> Result<(), Failure> {
         .read_only(owner, handle, "SELECT 1", limits)
         .await?;
 
+    step("owner isolation");
     // Owner isolation.
     let other = OwnerId::new();
     let (id, _) = connections.submit_job(owner, handle, JobOptions::new(run.slow()))?;
@@ -1145,6 +1613,7 @@ async fn main() -> Result<(), Failure> {
     report.insert("ownerIsolation".into(), json!(true));
     report.insert("busyNotQueued".into(), json!(true));
 
+    step("exact values");
     // Exact values through the read-write path.
     let exact = if mysql {
         "SELECT s, u, d, dt, zd, tm, n FROM raw_values WHERE id = 1"
@@ -1194,6 +1663,7 @@ async fn main() -> Result<(), Failure> {
     )?;
     report.insert("exactValues".into(), json!(true));
 
+    step("multiple result sets");
     // Multiple result sets: a script, and a routine.
     let (batches, update) = run
         .run("SELECT 1 AS a; SELECT 'two' AS b, 2 AS c", None)
@@ -1223,6 +1693,7 @@ async fn main() -> Result<(), Failure> {
         )?;
         report.insert("procedureResultSets".into(), json!(sets));
     }
+    step("text protocol");
     // MySQL statements that cannot be prepared (USE) use the text protocol.
     if mysql {
         let (batches, update) = run
@@ -1238,6 +1709,7 @@ async fn main() -> Result<(), Failure> {
         )?;
     }
 
+    step("DDL partial outcomes");
     // Partial outcomes with DDL; authoritative unique and foreign-key failures.
     let (_, update) = run
         .run(
@@ -1280,6 +1752,7 @@ async fn main() -> Result<(), Failure> {
         json!(["unique", "foreign_key"]),
     );
 
+    step("transactions");
     // Transactions.
     let lease = connections.begin_transaction(owner, handle).await?;
     ensure(
@@ -1379,6 +1852,7 @@ async fn main() -> Result<(), Failure> {
         json!(["commit", "rollback", "rollback_only"]),
     );
 
+    step("connection loss in a lease");
     // Connection loss mid-transaction: the server session is killed by the observer.
     let lease = connections.begin_transaction(owner, handle).await?;
     run.run(
@@ -1428,6 +1902,7 @@ async fn main() -> Result<(), Failure> {
     )?;
     report.insert("connectionLossUnknown".into(), json!(true));
 
+    step("cancel latency");
     // Cancellation latency: cancel request to terminal state, 100 samples.
     let mut samples = Vec::new();
     let mut signals = 0;
@@ -1464,6 +1939,7 @@ async fn main() -> Result<(), Failure> {
             last = Some(update);
         }
         let update = last.ok_or("cancel update")?;
+        run.settle(id, &update)?;
         samples.push(terminal.ok_or("terminal")?.as_secs_f64() * 1000.0);
         signals += usize::from(update.server_cancel_sent);
         let slow = &update.statements[count - 2];
@@ -1498,10 +1974,22 @@ async fn main() -> Result<(), Failure> {
     deadline.statement_deadline = Duration::from_secs(1);
     let (id, _) = connections.submit_job(owner, handle, deadline)?;
     let (_, update) = run.drain(id).await?;
+    // MySQL/MariaDB: the client deadline interrupts. PostgreSQL: the server statement_timeout
+    // (L-3) ends the statement first, so it fails with 57014 and nothing is cancelled.
     ensure(
         update.deadline_exceeded
-            && update.outcome == Some(ExecutionOutcomeDto::Unknown)
-            && update.cancellation == CancellationDto::Confirmed,
+            && if mysql {
+                update.outcome == Some(ExecutionOutcomeDto::Unknown)
+                    && update.cancellation == CancellationDto::Confirmed
+            } else {
+                update.outcome == Some(ExecutionOutcomeDto::Failed)
+                    && update.cancellation == CancellationDto::None
+                    && update.statements[0]
+                        .failure
+                        .as_ref()
+                        .and_then(|failure| failure.sql_state.as_deref())
+                        == Some("57014")
+            },
         "deadline",
     )?;
     let max = samples.iter().copied().fold(0.0, f64::max);
@@ -1515,7 +2003,7 @@ async fn main() -> Result<(), Failure> {
             "p95Ms": percentile(&mut samples.clone(), 0.95),
             "maxMs": max,
             "graceMs": ExecutionLimits::CANCEL_GRACE.as_millis(),
-            "deadlinePathConfirmed": true,
+            "deadlinePath": if mysql { "client deadline interrupt (confirmed)" } else { "server statement_timeout (failed, 57014)" },
         }),
     );
     ensure(
@@ -1523,6 +2011,7 @@ async fn main() -> Result<(), Failure> {
         "cancel p95 within proposed 2 s",
     )?;
 
+    step("fault cycles");
     // 100 fault/transaction cycles; the next job must never see the previous session state.
     // Baseline writer sessions: the expiry lease plus idle, never-job-used pool connections.
     let writer_sessions = if mysql {
@@ -1629,6 +2118,7 @@ async fn main() -> Result<(), Failure> {
         json!({"cycles": 100, "committed": committed, "dirtyConnectionsReused": 0, "sessionStateLeaks": 0, "writerSessionsBefore": baseline, "writerSessionsAfter": sessions}),
     );
 
+    step("backpressure");
     // Backpressure: a large result is paged and the statement waits for the consumer.
     let mut options = JobOptions::new(if engine == Engine::MariaDb {
         "SET SESSION max_recursive_iterations = 200000; WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 100000) SELECT x, REPEAT('p', 64) FROM c"
@@ -1661,6 +2151,7 @@ async fn main() -> Result<(), Failure> {
         json!({"pages": batches.len(), "rowsDelivered": rows, "truncated": true, "parkedWhileUnread": true}),
     );
 
+    step("policy and session state");
     // R-2/R-3 on real servers: wrapper and compound statements refused before send, CALL
     // refused, and the session-state probe checked against real diverged sessions.
     if mysql {
@@ -1676,6 +2167,7 @@ async fn main() -> Result<(), Failure> {
         report.insert("policyAndSessionState".into(), json!(probes));
     }
 
+    step("lease expiry");
     // Real lease expiry after LEASE_IDLE without use. Checked before the fault sections, whose
     // hundreds of lease ends would evict this owner's older ended-lease records (32 per owner).
     let wait = ExecutionLimits::LEASE_IDLE + Duration::from_secs(3);
@@ -1701,6 +2193,7 @@ async fn main() -> Result<(), Failure> {
         json!({"idleSeconds": ExecutionLimits::LEASE_IDLE.as_secs(), "outcome": "rolled_back"}),
     );
 
+    step("write faults setup");
     // Write cancellation, failed interrupt (and the PostgreSQL backstop), no re-send and lost
     // COMMIT/ROLLBACK replies, on every network engine.
     {
@@ -1715,6 +2208,7 @@ async fn main() -> Result<(), Failure> {
         }
     }
 
+    step("shutdown");
     connections.shutdown().await;
     ensure(
         connections.open_transactions() == 0,

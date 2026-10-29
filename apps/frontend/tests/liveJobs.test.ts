@@ -16,7 +16,7 @@ function host(replies:Record<string,Reply>){
   return{version:1,requestId:request.requestId,payload:reply(request.payload)};
  }}}}};
 }
-const statement=(index:number,status:string,extra={})=>({index,status,inTransaction:false,affectedRows:'0',resultSets:0,failure:null,...extra});
+const statement=(index:number,status:string,extra={})=>({index,status,inTransaction:false,affectedRows:'0',resultSets:0,failure:null,resultsWithheld:false,...extra});
 test('read-write is an explicit connect option; read-only stays the default payload',async()=>{
  const h=host({connect_direct:()=>({handle:'h',engineVersion:'v',database:'d',expiresAfterSeconds:3600,access:'read_only'})});
  await bootstrapNativeHost(h.global);
@@ -154,4 +154,15 @@ test('B-11: results withheld after an interrupt are marked incomplete and said s
  assert.match(notice.text,/Results of statement 1 after the interrupt were not delivered; the rows shown are incomplete\.$/);
  assert.doesNotMatch(describeJob(job('succeeded',['succeeded']),false).text,/not delivered/);
  await bootstrapNativeHost({});
+});
+test('L-3: a statement ended by the server statement timeout is described as a time limit, not a rejection or an unknown',()=>{
+ const timedOut=(index:number,inTransaction=false)=>job('failed',index?['succeeded','failed']:['failed','not_run'],{deadlineExceeded:true,statements:(index?['succeeded','failed']:['failed','not_run']).map((status,i)=>statement(i,status,{inTransaction,...(status==='failed'?{failure:{constraint:null,sqlState:'57014'}}:{})})) as LiveJobResult['statements']});
+ const first=describeJob(timedOut(0),false);
+ assert.deepEqual(first,{kind:'error',text:'The server stopped statement 1 of 2 at the statement time limit · SQLSTATE 57014. Later statements were not sent.'});
+ assert.match(describeJob(timedOut(1),false).text,/^The server stopped statement 2 of 2 at the statement time limit · SQLSTATE 57014\. Earlier statements were committed; later statements were not sent\.$/);
+ assert.match(describeJob(timedOut(1,true),true).text,/Earlier statements remain in the open transaction/);
+ for(const notice of [first,describeJob(timedOut(1),false)])assert.doesNotMatch(notice.text,/rejected|unknown|cancel|rolled back|executed successfully/i);
+ // Without deadlineExceeded (for example someone else's cancel), a 57014 stays a rejection.
+ const external=job('failed',['failed'],{statements:[statement(0,'failed',{failure:{constraint:null,sqlState:'57014'}})] as LiveJobResult['statements']});
+ assert.match(describeJob(external,false).text,/^The database rejected statement 1 of 1 · SQLSTATE 57014\./);
 });

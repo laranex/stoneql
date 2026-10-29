@@ -40,6 +40,29 @@ The macOS-only platform scope of StoneQL v0.1.0 Alpha is an **Approved product d
 
 Windows and Linux native runs, credential stores, SSH agents, packaging and remote cross-OS CI remain open for later releases and are not counted as passed. Under D022, SQLite live support, advanced database objects and XLSX import are also Deferred, and PostgreSQL is optional: their existing fixture commands (`npm run test:native-postgres` and the SQLite runtime tests) keep running as regressions but are not alpha release evidence unless PostgreSQL is admitted.
 
+### Native reload guard (M006 read-write blocker 2)
+
+The desktop host refuses every navigation of the main webview while its runtime registry holds an open transaction lease, or a job of the current session whose final update the renderer has not fetched (running, or finished with results not yet read). The decision comes from native state only, never from the renderer. A refused navigation asks the renderer to confirm with the in-app dialog. On confirmation the renderer rotates the session through `host_info`: the host resets the registry, so leases are rolled back with recorded outcomes, jobs are interrupted and every job record is released. Only then does the reload proceed. The decision is `Connections::has_active_work(owner)` (an open lease or a job record of the app's single runtime owner). `unknown` outcomes from before the reload stay listed by the new renderer until acknowledged (see SQL execution, Unknown outcomes). Read-write SQL stays gated off, so production builds cannot hold a lease or a job yet.
+
+| Reload path | Present in | Covered by |
+| --- | --- | --- |
+| `location.reload()`, same-origin `location.assign`, native `Webview::reload` | All builds | `STONEQL_REAL_WINDOW=1 cargo test --locked -p stoneql-desktop --features custom-protocol --test real_window_reload` (real WKWebView; run `npm run build` first; skipped without the variable) |
+| Guard decision (lease, job, idle handle, confirmed rotation) | All builds | `tests/reload_guard.rs` in `npm run desktop:test` (MockRuntime; MockRuntime does not run navigation hooks) |
+| Web content process terminated (renderer crash) while a lease and a running job are held: host ends the session, reloads, the new renderer lists the interrupted job | macOS builds | `real_window_reload` (kills the window's `com.apple.WebKit.WebContent` process with SIGKILL; it is identified as the only one started since the test began and nothing is killed when that is ambiguous) and `tests/reload_guard.rs` (`renderer_lost` against MockRuntime) |
+| In-app confirmation, cancel and confirm | All builds | `tests/browser/native-reload.spec.ts` (browser shim, Light/Dark) |
+| Cmd+R | No responder: the default macOS menu has no Reload item | Manual check |
+| WKWebView context-menu Reload; Web Inspector reload | Context menu: all builds, unverified. Inspector: debug builds only (devtools are off in release) | Manual check |
+
+Manual check, on a local debug build with `READ_WRITE_SQL_ENABLED` temporarily set to `true` (not committed), against a disposable database:
+
+1. Connect read-write, begin a transaction and insert a row.
+2. Press Cmd+R. Nothing should happen.
+3. Right-click an empty area of the page and choose Reload, if the menu offers it. Then open Web Inspector and press Cmd+R inside it. Each time, the page must stay loaded and show "Reload StoneQL?".
+4. Click Cancel. The transaction must still be open and usable.
+5. Repeat step 3 and click Reload StoneQL. The page reloads, the row is absent when checked from an independent client, and the server session has ended.
+6. If the rollback was not confirmed (for example the server was paused), the reloaded page lists the transaction as "Outcome unknown" until you acknowledge it.
+7. Renderer crash: begin a transaction, insert a row and start a long statement. Find the new content process (`ps -axo pid,lstart,comm | grep WebKit.WebContent`, the one started with StoneQL) and run `kill -9 <pid>`. The window must reload by itself (not stay blank), the row must be absent from an independent client, and the interrupted statement must be listed as "Outcome unknown".
+
 ## M001 foundation verification — 2026-10-25
 
 The approved Rust foundation/evaluation adds no production connectivity or frontend integration. Local checks passed: Rust workspace build/fmt/all-target Clippy, 12 Rust tests, generated TypeScript drift/strict compilation, host/driver/runtime boundary checks, 28 live driver assertions, cargo-audit with zero vulnerabilities/warnings after Tokio remediation, 128 frontend tests plus seven root tests, frontend build, 17 browser scenarios (12.9s), documentation build and workflow lint. The 73-file frontend preservation audit still passes. See [driver evaluation](../architecture/driver-evaluation.md) and [Rust development](./rust-foundation.md) for reproducible evidence, tested fixtures and limitations. Native Windows/Linux hosted CI and production TLS/pooling/transaction guarantees remain unverified; M001 completion review and M002 approval are pending. No commit or push was made for M001.

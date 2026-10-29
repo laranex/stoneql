@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useConnectionWorkflow, reportLeaseEnd, LEASE_DISCONNECT_WARNING } from './composables/useConnectionWorkflow';
-import { hostState, resolveNativeClose } from './services/nativeHost';
+import { hostState, invalidateNativeSession, resolveNativeClose } from './services/nativeHost';
 const nativeHostState = hostState();
 let liveStatusTimer: ReturnType<typeof setInterval> | undefined;
 import { insertRecords, RecordConstraintError } from './services/recordMutations';
@@ -57,7 +57,7 @@ import {
   Sun,
   Square,
 } from 'lucide-vue-next';
-import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd } from './services/liveConnections';
+import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -881,6 +881,18 @@ async function transaction(action: 'begin' | 'commit' | 'rollback') {
     notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
   } catch (error) { notify((error as Error).message, 'error'); }
 }
+/** Explicit acknowledgement of one unknown outcome: hides it; the recorded outcome never changes. */
+async function acknowledgeOutcome(outcomeId: string) {
+  try { await store.acknowledgeUnresolvedOutcome(outcomeId); }
+  catch (error) { notify((error as Error).message, 'error'); }
+}
+function outcomeProfile(outcomeId: string) {
+  const id = store.outcomeProfiles[outcomeId];
+  return id ? store.connections.find((c) => c.id === id)?.name || 'Removed profile' : 'Before a reload';
+}
+function outcomeAge(seconds: number) {
+  return seconds < 60 ? 'less than a minute ago' : seconds < 3600 ? `${Math.floor(seconds / 60)} min ago` : `${Math.floor(seconds / 3600)} h ago`;
+}
 /** Disconnecting rolls back an open transaction: confirm first, then show its outcome. */
 async function disconnectLive() {
   const profileId = store.activeId;
@@ -1092,8 +1104,22 @@ function hasOpenLiveWork() {
     store.connections.some((c) => c.mode === 'live' && store.workspaces[c.id]?.queries.some((q) => q.running));
 }
 const LIVE_WORK_CLOSE_WARNING = 'A live transaction is open or a live statement is running. Closing StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. The outcome will not be shown.';
+let reloadConfirmed = false;
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (hasUnsavedChanges() || hasOpenLiveWork()) { event.preventDefault(); event.returnValue = ''; }
+  if (!reloadConfirmed && (hasUnsavedChanges() || hasOpenLiveWork())) { event.preventDefault(); event.returnValue = ''; }
+}
+/** The native host refused a reload or navigation because it holds a lease or job for this session. */
+let nativeReloadHandling = false;
+async function nativeReloadRequested() {
+  if (nativeReloadHandling || nativeHostState.kind !== 'desktop') return;
+  nativeReloadHandling = true;
+  try {
+    if (!(await askDiscard(`A live transaction is open, or a live statement is running or has results not yet shown. Reloading StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. An outcome the server did not confirm is listed after the reload until you acknowledge it; quitting StoneQL loses that list.${hasUnsavedChanges() ? ' Unsaved changes are discarded too.' : ''} Reload StoneQL?`, 'Reload StoneQL'))) return;
+    reloadConfirmed = true;
+    await invalidateNativeSession();
+    window.location.reload();
+  } catch { reloadConfirmed = false; notify('Reload could not be completed natively. Check live connections before continuing.', 'error'); }
+  finally { nativeReloadHandling = false; }
 }
 let nativeCloseHandling = false;
 async function nativeCloseRequested() {
@@ -1112,6 +1138,8 @@ function repositionEditor() {
   if (editing.value?.anchor) Object.assign(editing.value, positionCellEditor(editing.value.anchor));
 }
 onMounted(() => {
+  // Unknown outcomes recorded before a reload stay listed until acknowledged.
+  if(nativeHostState.kind==='desktop')void store.refreshUnresolvedOutcomes();
   if(nativeHostState.kind==='desktop')liveStatusTimer=setInterval(()=>{if(isLive.value)void store.refreshLiveStatus(store.activeId);},30000);
   window.addEventListener('scroll', repositionEditor, true);
   window.addEventListener('resize', repositionEditor);
@@ -1119,6 +1147,7 @@ onMounted(() => {
   window.addEventListener('keydown', keyboard);
   window.addEventListener('beforeunload', beforeUnload);
   window.addEventListener('stoneql-close-requested', nativeCloseRequested);
+  window.addEventListener('stoneql-reload-requested', nativeReloadRequested);
 });
 onBeforeUnmount(() => {
   if(liveStatusTimer)clearInterval(liveStatusTimer);
@@ -1129,11 +1158,23 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', keyboard);
   window.removeEventListener('beforeunload', beforeUnload);
   window.removeEventListener('stoneql-close-requested', nativeCloseRequested);
+  window.removeEventListener('stoneql-reload-requested', nativeReloadRequested);
 });
 </script>
 
 <template>
   <div class="app-shell">
+    <section v-if="store.unresolvedOutcomes.length || store.unresolvedError" class="unresolved-outcomes" role="alert" aria-label="Unknown outcomes">
+      <div class="unresolved-heading">
+        <AlertCircle :size="14" /><strong>Outcome unknown — the server may or may not have applied this work.</strong>
+        <span class="muted">Verify on the server. Acknowledging only hides an entry; it does not change it. Kept until you acknowledge it or quit StoneQL.</span>
+      </div>
+      <div v-if="store.unresolvedError" class="notice error"><span class="notice-message">{{ store.unresolvedError }}</span></div>
+      <div v-for="outcome in store.unresolvedOutcomes" :key="outcome.outcomeId" class="notice error unresolved-outcome">
+        <span class="notice-message"><strong>{{ outcomeProfile(outcome.outcomeId) }}</strong> · {{ describeUnresolvedOutcome(outcome) }} <span class="unresolved-age">Recorded {{ outcomeAge(outcome.secondsAgo) }}.</span></span>
+        <button class="button" type="button" :aria-label="`Acknowledge unknown outcome: ${describeUnresolvedOutcome(outcome)}`" @click="acknowledgeOutcome(outcome.outcomeId)">Acknowledge</button>
+      </div>
+    </section>
     <div class="connection-tabs" role="tablist" aria-label="Connections">
       <div class="tab-leading"><Server :size="14" /> CONNECTIONS</div>
       <div

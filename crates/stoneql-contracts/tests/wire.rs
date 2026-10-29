@@ -339,4 +339,30 @@ fn execution_replies_keep_outcomes_cancellation_and_exact_values_distinct() {
         ErrorDto::from(CoreError::rejected(ErrorCode::Busy)).code,
         ErrorCodeDto::Busy
     );
+    let refused = ErrorDto::from(CoreError::rejected(ErrorCode::UnresolvedOutcomes));
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap()["code"],
+        json!("UNRESOLVED_OUTCOMES")
+    );
+    assert_eq!(refused.outcome, OutcomeDto::Rejected);
+    let listed = json!({"outcomes":[{"outcomeId":"o","database":"app","secondsAgo":3,"transaction":{"outcome":"unknown","reason":"closed","commitSent":true,"rollbackSent":false},"job":null}],"limit":16,"pending":1});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<UnresolvedOutcomes>(listed.clone()).unwrap())
+            .unwrap(),
+        listed
+    );
+    assert!(
+        decode_envelope::<AcknowledgeOutcomeRequest>(
+            &json!({"version":1,"requestId":"r","payload":{"sessionId":"s","outcomeId":"o"}})
+                .to_string()
+        )
+        .is_ok()
+    );
+    let ack: Result<Envelope<AcknowledgeOutcomeRequest>, _> = decode_envelope(
+        &json!({"version":1,"requestId":"r","payload":{"sessionId":"s","outcomeId":"o","outcome":"rolled_back"}}).to_string(),
+    );
+    assert!(
+        ack.is_err(),
+        "acknowledgement carries only the id; it can never set an outcome"
+    );
 }

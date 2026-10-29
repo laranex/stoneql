@@ -336,3 +336,56 @@ test('R-7: a failed close with an open transaction still queries and shows its o
   assert.match(store.liveSessions[id].error, /Transaction rolled back \(confirmed by the server\)/);
   assert.ok(store.opened.includes(id), 'the workspace stays open after a failed close');
 });
+test('a job on an idle-expired lease reports the recorded expiry, not a lost or unavailable connection', async () => {
+  const native = nativeFixture();
+  const invoke = native.global.__TAURI__.core.invoke;
+  // The runtime refuses a job on an ended lease with FORBIDDEN before sending anything, and
+  // end_transaction returns the lease's recorded end.
+  native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
+    const request = JSON.parse(args.message);
+    if (command === 'submit_job') { native.calls.push({ command, payload: request.payload }); throw { code: 'FORBIDDEN', message: 'This action is not permitted.' }; }
+    if (command === 'end_transaction') { native.calls.push({ command, payload: request.payload }); return { version: 1, requestId: request.requestId, payload: { outcome: 'rolled_back', reason: 'expired', commitSent: false, rollbackSent: true } }; }
+    return invoke(command, args);
+  };
+  const { store, flow } = await setup(native.global);
+  liveDraft(flow);
+  await flow.saveConnection();
+  const id = flow.connectionDraft.value.id;
+  store.liveSessions[id].lease = { id: 'lease_1', state: 'active' };
+  native.calls.length = 0;
+  await assert.rejects(store.runLiveJob(id, 'UPDATE t SET a = 1'), (error: any) => {
+    assert.equal(error.code, 'FORBIDDEN');
+    assert.equal(error.message, 'Nothing was sent: the transaction is no longer open. Transaction rolled back (confirmed by the server). The transaction had expired after being idle.');
+    assert.doesNotMatch(error.message, /connection was lost|Reconnect|unavailable/i);
+    return true;
+  });
+  assert.deepEqual(native.calls.map(c => c.command), ['submit_job', 'end_transaction']);
+  assert.equal(native.calls[1]!.payload.leaseId, 'lease_1');
+  assert.equal(store.liveSessions[id].lease, undefined, 'the ended lease is no longer shown as open');
+  assert.equal(store.liveSessions[id].status, 'connected', 'the connection itself is still usable');
+  // Without a lease, FORBIDDEN keeps its connection meaning and no lease end is queried.
+  native.calls.length = 0;
+  await assert.rejects(store.runLiveJob(id, 'UPDATE t SET a = 1'), (error: any) => error.code === 'FORBIDDEN' && /Reconnect/.test(error.message));
+  assert.deepEqual(native.calls.map(c => c.command), ['submit_job']);
+});
+test('a lease that ends during a job reports its recorded reason', async () => {
+  const native = nativeFixture();
+  const invoke = native.global.__TAURI__.core.invoke;
+  native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
+    const request = JSON.parse(args.message);
+    const reply = (payload: unknown) => { native.calls.push({ command, payload: request.payload }); return { version: 1, requestId: request.requestId, payload }; };
+    if (command === 'submit_job') return reply({ jobId: 'job_1', statementCount: 1 });
+    if (command === 'fetch_job') return reply({ jobId: 'job_1', state: 'finished', outcome: 'unknown', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [{ index: 0, status: 'unknown', inTransaction: true, affectedRows: '0', resultSets: 0, failure: null, resultsWithheld: false }], batch: null, lease: 'ended', done: true });
+    if (command === 'end_transaction') return reply({ outcome: 'unknown', reason: 'connection_lost', commitSent: false, rollbackSent: false });
+    return invoke(command, args);
+  };
+  const { store, flow } = await setup(native.global);
+  liveDraft(flow);
+  await flow.saveConnection();
+  const id = flow.connectionDraft.value.id;
+  store.liveSessions[id].lease = { id: 'lease_1', state: 'active' };
+  const result = await store.runLiveJob(id, 'UPDATE t SET a = 1');
+  assert.equal(result.lease, 'ended');
+  assert.equal(store.liveSessions[id].lease, undefined);
+  assert.equal(store.liveSessions[id].error, 'The transaction ended during this job. Transaction outcome unknown. Its connection was lost. Neither COMMIT nor ROLLBACK was sent or confirmed. Verify on the server; StoneQL never retries.');
+});

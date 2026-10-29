@@ -1185,18 +1185,21 @@ fn handle_idle(connections: &Connections, handle: ConnectionId) -> bool {
         == ExecutionLimits::RUNNING_JOBS_PER_HANDLE
 }
 
-/// R-6: ended-lease outcomes are kept per owner, so many ends by one owner (or many owners)
-/// never evict another owner's recent outcome; all owners together stay bounded.
+/// R-6: resolved ended-lease outcomes are kept per owner, so many ends by one owner (or many
+/// owners) never evict another owner's recent outcome; all owners together stay bounded.
 #[test]
 fn r6_ended_lease_records_are_kept_per_owner_and_bounded_overall() {
     let state = ExecutionState::new();
-    let end = TransactionEnd::unknown(EndReason::Requested);
+    let end = TransactionEnd {
+        outcome: Outcome::RolledBack,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
     let (a, b) = (OwnerId::new(), OwnerId::new());
     let kept = LeaseId(Uuid::new_v4());
-    state.record_end(kept, a, end);
+    state.record_end(kept, a, "db", end);
     let ids: Vec<_> = (0..40).map(|_| LeaseId(Uuid::new_v4())).collect();
     for &id in &ids {
-        state.record_end(id, b, end);
+        state.record_end(id, b, "db", end);
     }
     assert_eq!(state.recorded(kept, a), Some(end));
     let evicted = ids.len() - ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER;
@@ -1210,19 +1213,19 @@ fn r6_ended_lease_records_are_kept_per_owner_and_bounded_overall() {
             .iter()
             .all(|&id| state.recorded(id, b) == Some(end))
     );
-    // Replacing a record (unknown → confirmed) never evicts anything.
+    // Replacing a record (unknown → confirmed) keeps the bounds.
     let confirmed = TransactionEnd {
-        outcome: Outcome::RolledBack,
+        outcome: Outcome::Committed,
         ..end
     };
-    state.record_end(kept, a, confirmed);
+    state.record_end(kept, a, "db", confirmed);
     assert_eq!(state.recorded(kept, a), Some(confirmed));
     assert_eq!(
         state.ended.lock().unwrap().len(),
         1 + ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER
     );
     for _ in 0..ExecutionLimits::MAX_ENDED_LEASES {
-        state.record_end(LeaseId(Uuid::new_v4()), OwnerId::new(), end);
+        state.record_end(LeaseId(Uuid::new_v4()), OwnerId::new(), "db", end);
     }
     assert_eq!(
         state.ended.lock().unwrap().len(),
@@ -1231,7 +1234,306 @@ fn r6_ended_lease_records_are_kept_per_owner_and_bounded_overall() {
     assert_eq!(
         state.recorded(kept, a),
         None,
-        "the oldest record overall goes first"
+        "the oldest resolved record overall goes first"
+    );
+}
+
+fn job_facts() -> UnresolvedJob {
+    UnresolvedJob {
+        statement_count: 1,
+        unknown_statement: Some(0),
+        in_transaction: false,
+        cancellation: CancellationDto::Requested,
+        server_cancel_sent: false,
+        deadline_exceeded: false,
+    }
+}
+fn listed(state: &ExecutionState, owner: OwnerId) -> Vec<String> {
+    state
+        .unresolved(owner)
+        .outcomes
+        .into_iter()
+        .map(|outcome| outcome.outcome_id)
+        .collect()
+}
+
+/// P3: unacknowledged unknown outcomes (lease ends and jobs) are never evicted by the 32/256
+/// bounds, however many resolved outcomes this or other owners record; resolved ones still are.
+#[test]
+fn p3_unresolved_unknowns_survive_eviction_pressure_and_resolved_ones_are_evicted() {
+    let state = ExecutionState::new();
+    let owner = OwnerId::new();
+    let unknown = TransactionEnd {
+        commit_sent: true,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
+    let resolved = TransactionEnd {
+        outcome: Outcome::RolledBack,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
+    let lease = LeaseId(Uuid::new_v4());
+    let job = JobId(Uuid::new_v4());
+    state.record_end(lease, owner, "app", unknown);
+    state.record_job(job, owner, "app".into(), job_facts());
+    let own: Vec<_> = (0..3 * ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER)
+        .map(|_| LeaseId(Uuid::new_v4()))
+        .collect();
+    for &id in &own {
+        state.record_end(id, owner, "app", resolved);
+    }
+    for _ in 0..2 * ExecutionLimits::MAX_ENDED_LEASES {
+        state.record_end(LeaseId(Uuid::new_v4()), OwnerId::new(), "other", resolved);
+    }
+    assert_eq!(state.recorded(lease, owner), Some(unknown));
+    assert_eq!(listed(&state, owner), [lease.opaque(), job.opaque()]);
+    let outcomes = state.unresolved(owner).outcomes;
+    assert_eq!(outcomes[0].transaction, Some(unknown.into()));
+    assert_eq!(
+        (outcomes[0].database.as_str(), &outcomes[0].job),
+        ("app", &None)
+    );
+    assert_eq!(outcomes[1].job, Some(job_facts()));
+    assert_eq!(outcomes[1].transaction, None);
+    // Resolved ones are still bounded per owner and overall.
+    let ended = state.ended.lock().unwrap();
+    assert_eq!(
+        ended.iter().filter(|r| !r.unresolved()).count(),
+        ExecutionLimits::MAX_ENDED_LEASES
+    );
+    assert_eq!(ended.len(), 2 + ExecutionLimits::MAX_ENDED_LEASES);
+    drop(ended);
+    assert!(
+        own[..own.len() - 1]
+            .iter()
+            .all(|&id| state.recorded(id, owner).is_none())
+    );
+    assert!(listed(&state, OwnerId::new()).is_empty(), "owner-scoped");
+    // Acknowledged with the owner's bound already full, it stays queryable (newest evictable).
+    state
+        .acknowledge(owner, OutcomeId::parse(&lease.opaque()).unwrap())
+        .unwrap();
+    assert_eq!(listed(&state, owner), [job.opaque()]);
+    assert_eq!(state.recorded(lease, owner), Some(unknown));
+}
+
+/// P3: acknowledgement is owner-scoped and idempotent, hides the outcome without changing it
+/// (unknown is never turned into success or rollback) and only then makes it evictable. A
+/// record that changes while still unknown (COMMIT now attempted) must be acknowledged again.
+#[test]
+fn p3_acknowledgement_hides_without_changing_the_outcome() {
+    let state = ExecutionState::new();
+    let (owner, other) = (OwnerId::new(), OwnerId::new());
+    let lease = LeaseId(Uuid::new_v4());
+    let unknown = TransactionEnd::unknown(EndReason::Closed);
+    state.record_end(lease, owner, "app", unknown);
+    let id = OutcomeId::parse(&lease.opaque()).unwrap();
+    assert_eq!(state.acknowledge(other, id), Err(ExecutionError::Forbidden));
+    assert_eq!(listed(&state, owner), [lease.opaque()]);
+    for _ in 0..2 {
+        assert_eq!(state.acknowledge(owner, id), Ok(()));
+        assert!(listed(&state, owner).is_empty());
+        assert_eq!(state.recorded(lease, owner), Some(unknown));
+    }
+    // The end is still being concluded: COMMIT is now attempted, a different unknown.
+    let sent = TransactionEnd {
+        commit_sent: true,
+        ..unknown
+    };
+    state.record_end(lease, owner, "app", sent);
+    assert_eq!(listed(&state, owner), [lease.opaque()]);
+    state.acknowledge(owner, id).unwrap();
+    // Recording the same unknown again keeps the acknowledgement.
+    state.record_end(lease, owner, "app", sent);
+    assert!(listed(&state, owner).is_empty());
+    assert_eq!(state.recorded(lease, owner), Some(sent));
+    // Acknowledged, it is evictable like a resolved outcome.
+    let resolved = TransactionEnd {
+        outcome: Outcome::RolledBack,
+        ..unknown
+    };
+    for _ in 0..ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER {
+        state.record_end(LeaseId(Uuid::new_v4()), owner, "app", resolved);
+    }
+    assert_eq!(state.recorded(lease, owner), None);
+    assert_eq!(state.acknowledge(owner, id), Err(ExecutionError::Forbidden));
+    assert_eq!(
+        state.acknowledge(
+            owner,
+            OutcomeId::parse(&Uuid::new_v4().to_string()).unwrap()
+        ),
+        Err(ExecutionError::Forbidden)
+    );
+}
+
+/// P3: at `MAX_UNRESOLVED_OUTCOMES_PER_OWNER` unacknowledged unknowns new jobs and
+/// transactions are refused before anything is sent, and nothing is dropped; another owner is
+/// unaffected; acknowledging one admits work again.
+#[tokio::test]
+async fn p3_the_unresolved_cap_refuses_new_work_and_never_drops_an_outcome() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let state = &connections.0.execution;
+    let ids: Vec<_> = (0..ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER)
+        .map(|_| JobId(Uuid::new_v4()))
+        .collect();
+    for &id in &ids {
+        state.record_job(id, owner, "fixture.sqlite".into(), job_facts());
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            connections
+                .submit_job(
+                    owner,
+                    handle,
+                    JobOptions::new("INSERT INTO parent VALUES (51)")
+                )
+                .unwrap_err(),
+            ExecutionError::UnresolvedOutcomes
+        );
+        assert_eq!(
+            connections
+                .begin_transaction(owner, handle)
+                .await
+                .unwrap_err(),
+            ExecutionError::UnresolvedOutcomes
+        );
+    }
+    assert_eq!(connections.retained_jobs(), 0);
+    assert_eq!(connections.open_transactions(), 0);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 51")
+            .await,
+        0
+    );
+    let all = connections.unresolved_outcomes(owner);
+    assert_eq!(
+        all.limit as usize,
+        ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER
+    );
+    assert_eq!(
+        all.outcomes
+            .iter()
+            .map(|o| o.outcome_id.clone())
+            .collect::<Vec<_>>(),
+        ids.iter().map(|id| id.opaque()).collect::<Vec<_>>()
+    );
+    // Another owner's work is not refused by this owner's outcomes.
+    let other = OwnerId::new();
+    let grant = connections
+        .grant_sqlite_file(other, &fixture.file())
+        .unwrap();
+    let other_handle = connections
+        .connect_sqlite_with_access(other, &grant, Access::ReadWrite)
+        .await
+        .unwrap();
+    let (_, update) = run(
+        &connections,
+        other,
+        other_handle,
+        JobOptions::new("SELECT 1"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    // Acknowledging one admits new work.
+    let remaining = connections
+        .acknowledge_outcome(owner, OutcomeId::parse(&ids[0].opaque()).unwrap())
+        .unwrap();
+    assert_eq!(remaining.outcomes.len(), ids.len() - 1);
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (51)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+}
+
+/// P3 + P2: a job interrupted by a renderer reset ends `unknown`; the reset releases its job
+/// record (so it no longer holds reload), yet the unknown outcome stays listable for the same
+/// owner (the next renderer session) with SQL-free facts, and never for another owner.
+#[tokio::test]
+async fn p3_a_job_unknown_survives_the_reset_that_releases_its_record() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    assert!(!connections.has_active_work(owner));
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    assert!(connections.has_active_work(owner));
+    let mut options = JobOptions::new(format!("INSERT INTO parent VALUES (61); {SLOW}"));
+    options.lease = Some(lease);
+    let (job, _) = connections.submit_job(owner, handle, options).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    connections.reset().await;
+    assert!(
+        !connections.has_active_work(owner),
+        "reset releases job records and leases"
+    );
+    assert_eq!(connections.retained_jobs(), 0);
+    assert_eq!(
+        connections
+            .fetch_job(owner, job, Duration::ZERO)
+            .await
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    let outcomes = connections.unresolved_outcomes(owner).outcomes;
+    let job_outcome = outcomes
+        .iter()
+        .find(|outcome| outcome.outcome_id == job.opaque())
+        .expect("the interrupted job is listed");
+    assert_eq!(job_outcome.database, "fixture.sqlite");
+    assert_eq!(
+        job_outcome.job,
+        Some(UnresolvedJob {
+            statement_count: 2,
+            unknown_statement: Some(1),
+            in_transaction: true,
+            cancellation: CancellationDto::Confirmed,
+            server_cancel_sent: true,
+            deadline_exceeded: false,
+        })
+    );
+    // The lease's ROLLBACK was confirmed: resolved, so not listed.
+    assert!(
+        outcomes
+            .iter()
+            .all(|outcome| outcome.outcome_id != lease.opaque())
+    );
+    assert_eq!(
+        connections
+            .end_transaction(owner, lease, true)
+            .await
+            .unwrap()
+            .outcome,
+        Outcome::RolledBack
+    );
+    assert!(
+        connections
+            .unresolved_outcomes(OwnerId::new())
+            .outcomes
+            .is_empty()
+    );
+    let id = OutcomeId::parse(&job.opaque()).unwrap();
+    assert_eq!(
+        connections
+            .acknowledge_outcome(OwnerId::new(), id)
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert!(
+        connections
+            .acknowledge_outcome(owner, id)
+            .unwrap()
+            .outcomes
+            .is_empty()
+    );
+    assert!(
+        connections
+            .acknowledge_outcome(owner, id)
+            .unwrap()
+            .outcomes
+            .is_empty()
     );
 }
 
@@ -1322,4 +1624,127 @@ async fn b11_results_read_after_an_interrupt_are_flagged_withheld() {
     let (_, update) = run(&connections, owner, handle, options).await;
     assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
     assert!(!update.statements[0].results_withheld);
+}
+
+/// L-3 / Contract 5.3 ordering: PostgreSQL's server timeout fires strictly before the client
+/// statement deadline, by the margin when the deadline allows it, and is never 0 ms (which
+/// PostgreSQL treats as "disabled").
+#[test]
+fn postgres_statement_timeout_is_strictly_before_the_client_deadline_and_never_disabled() {
+    let ms = Duration::from_millis;
+    for seconds in [1, 2, 3, 30, 300] {
+        let deadline = Duration::from_secs(seconds);
+        let timeout = ExecutionLimits::postgres_statement_timeout(deadline);
+        assert!(
+            timeout < deadline,
+            "{seconds} s: {timeout:?} not before the deadline"
+        );
+        assert!(
+            timeout >= deadline / 2,
+            "{seconds} s: {timeout:?} below half"
+        );
+        assert!(!timeout.is_zero());
+    }
+    assert_eq!(
+        ExecutionLimits::postgres_statement_timeout(Duration::from_secs(30)),
+        ms(29_000)
+    );
+    assert_eq!(
+        ExecutionLimits::postgres_statement_timeout(Duration::from_secs(3)),
+        ms(2_000)
+    );
+    assert_eq!(
+        ExecutionLimits::postgres_statement_timeout(Duration::from_secs(1)),
+        ms(500)
+    );
+    // Sub-millisecond deadlines (not reachable from the host, which sends whole seconds) still
+    // get a server timeout rather than `0` = none.
+    assert_eq!(
+        ExecutionLimits::postgres_statement_timeout(Duration::from_micros(1)),
+        ms(1)
+    );
+    assert_eq!(
+        ExecutionLimits::postgres_statement_timeout(Duration::from_millis(3)),
+        ms(1)
+    );
+}
+
+/// An idle-expired lease is gone: a job on it is refused before anything is sent, and the
+/// lease's recorded end (what the renderer then shows) states the expiry and the confirmed
+/// rollback, without a second ROLLBACK being sent.
+#[tokio::test]
+async fn a_job_on_an_expired_lease_is_refused_and_the_recorded_end_states_the_expiry() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let entry = connections.0.execution.leases.lock().unwrap()[&lease].clone();
+    entry.state.lock().unwrap().last_used =
+        Instant::now() - ExecutionLimits::LEASE_IDLE - Duration::from_secs(1);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        expire(
+            Arc::downgrade(&connections.0),
+            lease,
+            Arc::downgrade(&entry),
+        ),
+    )
+    .await
+    .unwrap();
+    drop(entry);
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (21)");
+    options.lease = Some(lease);
+    assert_eq!(
+        connections.submit_job(owner, handle, options).err(),
+        Some(ExecutionError::Forbidden)
+    );
+    for commit in [false, true] {
+        let end = connections
+            .end_transaction(owner, lease, commit)
+            .await
+            .unwrap();
+        assert_eq!(
+            (end.outcome, end.reason, end.commit_sent),
+            (Outcome::RolledBack, EndReason::Expired, false)
+        );
+    }
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 21")
+            .await,
+        0
+    );
+}
+
+/// F-3: a job still running when a reset released its record (its `RELEASE_BOUND` was
+/// exceeded) records its unknown outcome later, after the next renderer may already have
+/// listed. The list reports such detached jobs as `pending` until each has finished, and a
+/// job is only counted finished after its unknown outcome is recorded, so `pending == 0`
+/// means the listed outcomes are complete.
+#[tokio::test]
+async fn detached_jobs_are_pending_until_their_late_unknown_is_recorded() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let (job, _) = connections
+        .submit_job(owner, handle, JobOptions::new(SLOW))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let running = connections.0.execution.jobs.lock().unwrap()[&job]
+        .job
+        .clone();
+    // The reset's bounded wait ended before the job did: its record is released regardless.
+    connections.0.execution.forget_jobs();
+    assert!(
+        !connections.has_active_work(owner),
+        "detached work never holds reload"
+    );
+    let listed = connections.unresolved_outcomes(owner);
+    assert_eq!((listed.outcomes.len(), listed.pending), (0, 1));
+    assert_eq!(connections.unresolved_outcomes(OwnerId::new()).pending, 0);
+    running.control.trip(Reason::Closed);
+    running.wait_finished().await;
+    let listed = connections.unresolved_outcomes(owner);
+    assert_eq!(listed.pending, 0);
+    assert_eq!(listed.outcomes.len(), 1);
+    assert_eq!(listed.outcomes[0].outcome_id, job.opaque());
+    connections.shutdown().await;
 }
