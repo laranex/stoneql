@@ -2227,10 +2227,11 @@ async fn harness() -> Result<(), Failure> {
     connections
         .read_only(owner, handle, "SELECT 1", limits)
         .await?;
-    // Every job/lease/cancel connection was discarded: the session count returns to baseline.
+    // Every job/lease/cancel connection was discarded: the session count never exceeds the
+    // baseline (the background expiry lease may end meanwhile).
     tokio::time::sleep(Duration::from_millis(500)).await;
     let sessions = observer.scalar_i64(writer_sessions).await?;
-    ensure(sessions == baseline, "dirty or leaked sessions remain")?;
+    ensure(sessions <= baseline, "dirty or leaked sessions remain")?;
     report.insert(
         "faultCycles".into(),
         json!({"cycles": 100, "committed": committed, "dirtyConnectionsReused": 0, "sessionStateLeaks": 0, "writerSessionsBefore": baseline, "writerSessionsAfter": sessions}),
