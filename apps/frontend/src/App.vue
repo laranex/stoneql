@@ -70,8 +70,10 @@ import SchemaIcon from './components/SchemaIcon.vue';
 import ColumnKeys from './components/ColumnKeys.vue';
 import ColumnName from './components/ColumnName.vue';
 import { gridTarget } from './services/gridNavigation';
+import { invisibleSegments, rawSelectionText } from './services/invisibleValues';
+import { hasLineBreak } from './services/lineEndings';
+import RawTextarea from './components/RawTextarea.vue';
 import { dialog as vDialog } from './directives/dialog';
-import EnumBadge from './components/EnumBadge.vue';
 import EnumEditor from './components/EnumEditor.vue';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
@@ -321,14 +323,26 @@ function gridKeydown(event: KeyboardEvent, row: Row, rowIndex: number, columnInd
     focusGridCell(target.row, target.column);
   }
 }
-function positionCellEditor(anchor?: HTMLElement) {
-  if (!anchor?.getBoundingClientRect) return { left: 16, top: 120 };
+/**
+ * Anchors the floating editor below its cell, or above it (by its bottom edge) when it does not fit
+ * below and there is more room above; the chosen side's free space caps its height.
+ */
+function positionCellEditor(anchor?: HTMLElement, height = 0) {
+  if (!anchor?.getBoundingClientRect) return { left: 16, top: 120, bottom: null, maxHeight: null };
   const rect = anchor.getBoundingClientRect(),
-    width = Math.min(340, window.innerWidth - 24);
-  return {
-    left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
-    top: Math.max(8, Math.min(rect.bottom, window.innerHeight - 200)),
-  };
+    width = Math.min(340, window.innerWidth - 24),
+    left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+    below = window.innerHeight - 8 - rect.bottom,
+    above = rect.top - 8;
+  return height <= below || below >= above
+    ? { left, top: Math.max(8, rect.bottom), bottom: null, maxHeight: Math.max(below, 0) }
+    : { left, top: null, bottom: window.innerHeight - rect.top, maxHeight: above };
+}
+/** Re-anchors the open editor using its rendered (unclamped) height. */
+function placeCellEditor() {
+  const e = editing.value,
+    editor = typeof document.getElementById === 'function' ? document.getElementById('inline-cell-editor') : null;
+  if (e?.anchor) Object.assign(e, positionCellEditor(e.anchor, editor ? editor.scrollHeight + 2 : 0));
 }
 const editing = ref<{
   row: Row;
@@ -336,9 +350,13 @@ const editing = ref<{
   value: string;
   isNull: boolean;
   useDefault: boolean;
+  multiline: boolean;
+  lineIssue: string;
   error: string;
   left: number;
-  top: number;
+  top: number | null;
+  bottom: number | null;
+  maxHeight: number | null;
   anchor?: HTMLElement;
 } | null>(null);
 async function editCell(row: Row, column: string, event?: MouseEvent | KeyboardEvent) {
@@ -350,22 +368,46 @@ async function editCell(row: Row, column: string, event?: MouseEvent | KeyboardE
     value: String(row[column] ?? ''),
     isNull: row[column] === null,
     useDefault: false,
+    multiline: hasLineBreak(row[column]),
+    lineIssue: '',
     error: '',
     anchor: event?.currentTarget as HTMLElement | undefined,
     ...positionCellEditor(event?.currentTarget as HTMLElement | undefined),
   };
   nextTick(() => {
-    if (typeof document.getElementById === 'function')
-      document
-        .getElementById('inline-cell-editor')
-        ?.querySelector<HTMLElement>('select,input:not([type=checkbox])')
-        ?.focus();
+    if (typeof document.getElementById !== 'function') return;
+    placeCellEditor();
+    document
+      .getElementById('inline-cell-editor')
+      ?.querySelector<HTMLElement>('select:enabled,textarea:enabled,input:not([type=checkbox]):enabled')
+      ?.focus();
   });
+}
+/** Enter saves, except in the multi-line editor where it inserts a newline and Ctrl/Cmd+Enter saves; buttons keep native Enter. */
+function cellEditorEnter(event: KeyboardEvent) {
+  const target = event.target as HTMLElement;
+  if (event.isComposing || target.tagName === 'BUTTON') return;
+  if (target.tagName === 'TEXTAREA' && !event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  saveCell();
+}
+/** Copies marked grid text as the characters it stands for, never as marker glyphs. */
+function copyRawSelection(event: ClipboardEvent) {
+  const selection = document.getSelection();
+  if (!selection?.rangeCount || selection.isCollapsed || !event.clipboardData) return;
+  const text = rawSelectionText(selection.getRangeAt(0).cloneContents());
+  if (text === null) return;
+  event.clipboardData.setData('text/plain', text);
+  event.preventDefault();
 }
 function saveCell() {
   const e = editing.value,
     c = table.value?.columns.find((c) => c.name === e?.column);
   if (!e || !c) return;
+  if (e.lineIssue && !e.isNull && !e.useDefault) {
+    e.error = e.lineIssue;
+    return;
+  }
   const checked = validateValue(c, e.isNull ? null : e.value, store.connection.engine, {
     row: e.row,
     table: table.value,
@@ -389,6 +431,8 @@ const insertValues = ref<Record<string, string>>({}),
   recordNulls = ref<Record<string, boolean>>({}),
   recordDefaults = ref<Record<string, boolean>>({}),
   recordErrors = ref<Record<string, string>>({}),
+  recordLineIssues = ref<Record<string, string>>({}),
+  recordMultiline = ref<Record<string, boolean>>({}),
   insertOriginal = ref(''),
   insertMode = ref<Row | null>(null);
 function recordSnapshot() {
@@ -412,6 +456,7 @@ async function discard() {
   recordNulls.value = {};
   recordDefaults.value = {};
   recordErrors.value = {};
+  recordLineIssues.value = {};
   return true;
 }
 function tabKeydown(event: KeyboardEvent) {
@@ -472,6 +517,8 @@ function prepareInsert(row?: Row, copy = false) {
   recordNulls.value = {};
   recordDefaults.value = {};
   recordErrors.value = {};
+  recordLineIssues.value = {};
+  recordMultiline.value = {};
   insertMode.value = row && !copy ? row : null;
   for (const c of table.value?.columns ?? []) {
     const generated = !!(c.autoIncrement);
@@ -483,6 +530,7 @@ function prepareInsert(row?: Row, copy = false) {
         ? ''
         : String(row[c.name] ?? '')
       : (c.default ?? '');
+    recordMultiline.value[c.name] = hasLineBreak(insertValues.value[c.name]);
   }
   insertOriginal.value = recordSnapshot();
 }
@@ -498,6 +546,10 @@ function commitInsert() {
   const values: Row = {},
     errors: Record<string, string> = {};
   for (const c of t.columns) {
+    if (recordLineIssues.value[c.name] && !recordNulls.value[c.name] && !recordDefaults.value[c.name]) {
+      errors[c.name] = recordLineIssues.value[c.name]!;
+      continue;
+    }
     const checked = validateValue(
       c,
       recordNulls.value[c.name] ? null : (insertValues.value[c.name] ?? ''),
@@ -530,6 +582,7 @@ function commitInsert() {
   recordNulls.value = {};
   recordDefaults.value = {};
   recordErrors.value = {};
+  recordLineIssues.value = {};
   insertOriginal.value = '';
   insertMode.value = null;
   w.value.view = 'Browse';
@@ -1135,7 +1188,7 @@ async function nativeCloseRequested() {
   finally { nativeCloseHandling = false; }
 }
 function repositionEditor() {
-  if (editing.value?.anchor) Object.assign(editing.value, positionCellEditor(editing.value.anchor));
+  placeCellEditor();
 }
 onMounted(() => {
   // Unknown outcomes recorded before a reload stay listed until acknowledged.
@@ -1440,6 +1493,7 @@ onBeforeUnmount(() => {
                 role="grid"
                 aria-label="Table records"
                 v-grid-resize="browseGridOptions"
+                @copy="copyRawSelection"
               >
                 <thead>
                   <tr>
@@ -1524,11 +1578,9 @@ onBeforeUnmount(() => {
                       @focus="gridFocus = { row: rowIndex, column: columnIndex }"
                       @keydown="gridKeydown($event, row, rowIndex, columnIndex)"
                       @dblclick="editCell(row, c.name, $event)"
-                      :title="row[c.name] === null ? 'NULL' : String(row[c.name])"
+                      :title="row[c.name] === null ? 'SQL NULL' : String(row[c.name])"
                       :class="{
                         'numeric-cell': /^(int|decimal)/.test(c.type),
-                        'email-cell': c.name === 'email',
-                        'date-cell': c.name.endsWith('_at'),
                       }"
                     >
                       <div
@@ -1539,10 +1591,19 @@ onBeforeUnmount(() => {
                         :aria-label="`Edit cell ${editing?.column}`"
                         :style="
                           editing
-                            ? { left: editing.left + 'px', top: editing.top + 'px' }
+                            ? {
+                                left: editing.left + 'px',
+                                top: editing.top === null ? 'auto' : editing.top + 'px',
+                                bottom: editing.bottom === null ? 'auto' : editing.bottom + 'px',
+                                maxHeight:
+                                  editing.maxHeight === null
+                                    ? undefined
+                                    : `min(300px, 70vh, ${editing.maxHeight}px)`,
+                              }
                             : undefined
                         "
-                        @keydown.enter.prevent="saveCell"
+                        :class="{ 'multiline-editor': editing?.multiline }"
+                        @keydown.enter="cellEditorEnter"
                         v-if="editing?.row === row && editing.column === c.name"
                       >
                         <EnumEditor
@@ -1551,6 +1612,16 @@ onBeforeUnmount(() => {
                           :column="c"
                           :engine="store.connection.engine"
                           :label="`Edit ${c.name}`"
+                          :disabled="editing.isNull || editing.useDefault"
+                          :invalid="!!editing.error"
+                          :describedby="editing.error ? 'inline-value-error' : undefined"
+                        />
+                        <RawTextarea
+                          v-else-if="editing.multiline"
+                          v-model="editing.value"
+                          v-model:issue="editing.lineIssue"
+                          :label="`Edit ${c.name}`"
+                          :rows="5"
                           :disabled="editing.isNull || editing.useDefault"
                           :invalid="!!editing.error"
                           :describedby="editing.error ? 'inline-value-error' : undefined"
@@ -1595,16 +1666,12 @@ onBeforeUnmount(() => {
                           >{{ editing.error }}</span
                         >
                       </div>
-                      <EnumBadge
-                        v-else-if="
-                          row[c.name] !== null && choiceDefinition(c, store.connection.engine)
-                        "
-                        :column="c"
-                        :engine="store.connection.engine"
-                        :value="row[c.name]!"
-                      />
-                      <i v-else-if="row[c.name] === null" class="null-value">NULL</i
-                      ><span v-else>{{ row[c.name] }}</span>
+                      <i v-else-if="row[c.name] === null" class="null-value" role="img" aria-label="SQL NULL">NULL</i
+                      ><span v-else-if="!invisibleSegments(row[c.name])">{{ row[c.name] }}</span
+                      ><span v-else><template v-for="(s, k) in invisibleSegments(row[c.name])" :key="k"
+                        ><span v-if="s.marker" class="invisible-marker" role="img" :aria-label="s.label" :data-raw="s.raw">{{ s.marker }}</span
+                        ><template v-else>{{ s.text }}</template></template
+                      ></span>
                     </td>
                   </tr>
                   <tr v-if="!rows.length">
@@ -1872,7 +1939,7 @@ onBeforeUnmount(() => {
               >
               <ResultNotice v-if="result.truncated" kind="warning" :notification-key="w.history.length">{{ query.job ? 'Result limited by the configured row or byte bounds.' : 'Result limited to 1,000 rows or 1 MiB.' }} Individual values were not truncated.</ResultNotice>
               <div class="data-grid-wrap">
-                <table class="data-grid" v-grid-resize="resultGridOptions">
+                <table class="data-grid" v-grid-resize="resultGridOptions" @copy="copyRawSelection">
                   <thead>
                     <tr>
                       <th
@@ -1912,8 +1979,12 @@ onBeforeUnmount(() => {
                         :key="c"
                         :title="r[c] === null ? 'SQL NULL' : String(r[c] ?? '')"
                       >
-                        <i v-if="r[c] === null" class="null-value">NULL</i
-                        ><span v-else>{{ r[c] }}</span>
+                        <i v-if="r[c] === null" class="null-value" role="img" aria-label="SQL NULL">NULL</i
+                        ><span v-else-if="!invisibleSegments(r[c])">{{ r[c] }}</span
+                      ><span v-else><template v-for="(s, k) in invisibleSegments(r[c])" :key="k"
+                        ><span v-if="s.marker" class="invisible-marker" role="img" :aria-label="s.label" :data-raw="s.raw">{{ s.marker }}</span
+                        ><template v-else>{{ s.text }}</template></template
+                      ></span>
                       </td>
                     </tr>
                     <tr v-if="!result.rows.length">
@@ -1998,7 +2069,7 @@ onBeforeUnmount(() => {
                 <span v-if="searchResults.length > 100" class="muted">(first 100 shown)</span>
               </h3>
               <div class="data-grid-wrap">
-                <table class="data-grid" v-grid-resize="searchGridOptions">
+                <table class="data-grid" v-grid-resize="searchGridOptions" @copy="copyRawSelection">
                   <thead>
                     <tr>
                       <th v-for="c in table.columns" :key="c.name"><ColumnName :column="c" /></th>
@@ -2007,7 +2078,12 @@ onBeforeUnmount(() => {
                   </thead>
                   <tbody>
                     <tr v-for="(row, i) in searchResults.slice(0, 100)" :key="i">
-                      <td v-for="c in table.columns" :key="c.name" :title="row[c.name] === null ? 'SQL NULL' : String(row[c.name])"><i v-if="row[c.name] === null" class="null-value">NULL</i><EnumBadge v-else-if="choiceDefinition(c, store.connection.engine)" :column="c" :engine="store.connection.engine" :value="row[c.name]!" /><span v-else>{{ row[c.name] }}</span></td>
+                      <td v-for="c in table.columns" :key="c.name" :title="row[c.name] === null ? 'SQL NULL' : String(row[c.name])"><i v-if="row[c.name] === null" class="null-value" role="img" aria-label="SQL NULL">NULL</i
+                      ><span v-else-if="!invisibleSegments(row[c.name])">{{ row[c.name] }}</span
+                      ><span v-else><template v-for="(s, k) in invisibleSegments(row[c.name])" :key="k"
+                        ><span v-if="s.marker" class="invisible-marker" role="img" :aria-label="s.label" :data-raw="s.raw">{{ s.marker }}</span
+                        ><template v-else>{{ s.text }}</template></template
+                      ></span></td>
                       <td v-if="!isReadOnly" class="row-actions"><button @click="editRow(row)">Edit</button><button class="danger-text" @click="removeRows([row])">Delete</button></td>
                     </tr>
                     <tr v-if="!searchResults.length">
@@ -2073,17 +2149,15 @@ onBeforeUnmount(() => {
                         :invalid="!!recordErrors[c.name]"
                         :describedby="recordErrors[c.name] ? `record-error-${c.name}` : undefined"
                       />
-                      <textarea
-                        v-else-if="/text/i.test(c.type) || insertValues[c.name]?.includes('\n')"
+                      <RawTextarea
+                        v-else-if="/text/i.test(c.type) || recordMultiline[c.name]"
                         v-model="insertValues[c.name]"
-                        :aria-label="`Value for ${c.name}`"
+                        v-model:issue="recordLineIssues[c.name]"
+                        :label="`Value for ${c.name}`"
                         :disabled="recordNulls[c.name] || recordDefaults[c.name]"
-                        :aria-invalid="!!recordErrors[c.name] || undefined"
-                        :aria-describedby="
-                          recordErrors[c.name] ? `record-error-${c.name}` : undefined
-                        "
-                        rows="2"
-                      ></textarea>
+                        :invalid="!!recordErrors[c.name]"
+                        :describedby="recordErrors[c.name] ? `record-error-${c.name}` : undefined"
+                      />
                       <input
                         v-else
                         v-model="insertValues[c.name]"

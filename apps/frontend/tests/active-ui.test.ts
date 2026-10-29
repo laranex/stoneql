@@ -355,7 +355,7 @@ test('actual Insert, Edit, and inline controls share schema validation and prese
   let row = gridRow(),
     cells = row.children.filter((n) => n.type === 'td');
   assert.equal(findAll(cells[5]!, (n) => n.props.class === 'enum-values').length, 0);
-  assert.equal(findAll(cells[6]!, (n) => n.props.class === 'enum-values').length, 1);
+  assert.equal(findAll(cells[6]!, (n) => n.props.class === 'enum-values').length, 0);
   await cells[6]!.props.onDblclick();
   await nextTick();
   await set('Edit status', 'unknown');
