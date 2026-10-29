@@ -2,7 +2,7 @@
 
 **StoneQL** is the product name; **StoneAge SQL Admin** is its expanded name. The official tagline is **Old habits. New engine.** The former product name was dbAdmin. Use `stoneql` for private machine-readable names and `stoneql-*` for Rust crates.
 
-The original vector mark depicts three stacked, cut-stone strata with restrained slate and blue tones. It is repository-authored, works on both themes and is shared by the frontend, documentation site and raster native icon. No third-party logo assets were incorporated. UI density and semantic status colors are unchanged.
+The app icon (adopted 2026-10-26) shows a faceted stone cradling a database cylinder on a rounded slate-blue tile. It is user-supplied raster artwork. `apps/desktop/src-tauri/icons/icon-source.png` is the 1024 px master, cropped from the supplied image to the tile with a transparent margin on Apple's icon grid; `node tools/prepare-desktop-icon.mjs` regenerates the 512 px desktop `icon.png` and the 256 px `apps/frontend/public/icon.png` used by the frontend header, favicon and documentation site. It replaces the earlier repository-authored cut-stone SVG mark. Bundled macOS `.icns` output is not generated yet because packaging is disabled (M009). UI density and semantic status colors are unchanged.
 
 ## Compatibility boundaries
 

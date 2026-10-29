@@ -10,7 +10,7 @@ playwright-report/
 .ref/workprogress.md
 .website/dist/
 .website/cache/
-.website/public/icon.svg
+.website/public/icon.png
 .website/public/CNAME
 /workprogress.md
 /target/

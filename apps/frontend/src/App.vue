@@ -2945,7 +2945,7 @@ onBeforeUnmount(() => {
         aria-label="About StoneQL"
       >
         <header>
-          <h2><img src="/icon.svg" width="26" alt="" /> StoneQL</h2>
+          <h2><img src="/icon.png" width="26" height="26" alt="" /> StoneQL</h2>
           <button class="icon-button" aria-label="Close help" @click="help = false">
             <X :size="16" />
           </button>

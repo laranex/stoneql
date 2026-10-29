@@ -8,10 +8,10 @@ export default defineConfig({
   base, srcDir: fileURLToPath(new URL('../../docs/', import.meta.url)),
   outDir: fileURLToPath(new URL('../dist/', import.meta.url)),
   cacheDir: fileURLToPath(new URL('../cache/', import.meta.url)), appearance: true,
-  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}icon.svg` }]],
+  head: [['link', { rel: 'icon', type: 'image/png', href: `${base}icon.png` }]],
   vite: { publicDir: fileURLToPath(new URL('../public/', import.meta.url)) },
   themeConfig: {
-    logo: '/icon.svg', nav: [{ text: 'Guide', link: '/getting-started/' }, { text: 'Architecture', link: '/architecture/overview' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
+    logo: '/icon.png', nav: [{ text: 'Guide', link: '/getting-started/' }, { text: 'Architecture', link: '/architecture/overview' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
     sidebar, search: { provider: 'local' }, outline: [2, 3],
     socialLinks: repository ? [{ icon: 'github', link: repository }] : [],
     footer: { message: 'Mock-first prototype · Desktop live read-only development slice.' }

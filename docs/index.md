@@ -5,8 +5,8 @@ hero:
   text: Old habits. New engine.
   tagline: StoneAge SQL Admin — formerly dbAdmin. A compact, familiar database workspace.
   image:
-    src: /icon.svg
-    alt: Original StoneQL database icon
+    src: /icon.png
+    alt: StoneQL faceted-stone database icon
   actions:
     - theme: brand
       text: Get started
