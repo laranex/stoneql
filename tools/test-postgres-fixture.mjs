@@ -1,7 +1,7 @@
 // Owned PostgreSQL 17.6 TLS fixture for the native IPC adapter. Mirrors the MySQL/MariaDB runner's
 // isolation rules: local Docker only, random project/port/credentials/marker, generated v3 CAs,
 // no inherited PG*/database settings, and verified removal of every owned resource.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,10 +9,13 @@ import { resolve, join } from 'node:path';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
-if (process.argv.length > 2) throw Error('Unknown fixture option');
+// `--execution` runs the M006 read-write harness (examples/execution.rs) instead of IPC checks.
+const executionEvaluation = process.argv[2] === '--execution';
+if (process.argv.length > (executionEvaluation ? 3 : 2)) throw Error('Unknown fixture option');
 let binary;
 function run(command, args, env = base) {
-  const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 240_000 });
+  // The execution harness waits for a real lease idle expiry and runs 200+ relayed lease cycles.
+  const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: executionEvaluation ? 1_800_000 : 240_000 });
   if (result.status !== 0 || result.error) {
     // The fixture test emits only static assertions and synthetic values; still redact the password.
     const message = command === binary && env.STONEQL_FIXTURE_PASSWORD
@@ -23,10 +26,15 @@ function run(command, args, env = base) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
-const artifacts = run('cargo', ['test', '--locked', '-p', 'stoneql-desktop', '--features', 'custom-protocol', '--test', 'live_postgres', '--no-run', '--message-format=json']);
-binary = artifacts.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === 'live_postgres' && message.executable)?.executable;
+if (executionEvaluation) {
+  run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', 'execution']);
+  binary = resolve(root, 'target/debug/examples/execution');
+} else {
+  const artifacts = run('cargo', ['test', '--locked', '-p', 'stoneql-desktop', '--features', 'custom-protocol', '--test', 'live_postgres', '--no-run', '--message-format=json']);
+  binary = artifacts.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === 'live_postgres' && message.executable)?.executable;
+}
 if (!binary) throw Error('PostgreSQL fixture test binary missing');
-const output = resolve(root, 'artifacts/m004');
+const output = resolve(root, executionEvaluation ? 'artifacts/m006' : 'artifacts/m004');
 mkdirSync(output, { recursive: true });
 const temp = mkdtempSync(join(tmpdir(), 'stoneql-postgres-'));
 const tls = join(temp, 'tls');
@@ -40,6 +48,7 @@ const env = { ...base, STONEQL_FIXTURE_PASSWORD: password, STONEQL_FIXTURE_INIT:
 const override = join(temp, 'compose.json');
 const args = ['compose', '-f', resolve(root, 'experiments/sqlx-spike/fixtures/compose.yml'), '-f', override, '-p', project];
 let started = false;
+let relay;
 const cleanup = { attempted: false, remainingContainers: null, remainingNetworks: null, temporaryRemoved: false };
 try {
   writeFileSync(join(tls, 'root.cnf'), `[req]
@@ -62,7 +71,10 @@ authorityKeyIdentifier = keyid:always
   for (const name of ['server.pem', 'server-key.pem']) writeFileSync(join(exposed, name), readFileSync(join(tls, name)), { mode: 0o644 });
   // Local socket trust serves only the image's init/readiness tooling inside the container.
   writeFileSync(join(exposed, 'pg_hba.conf'), 'local all all trust\nhostssl all all all scram-sha-256\nhostnossl all all all reject\n', { mode: 0o644 });
-  const prepare = 'install -d -o postgres -m 700 /tmp/stoneql-tls && install -o postgres -m 600 /stoneql-tls/server-key.pem /tmp/stoneql-tls/ && install -o postgres -m 644 /stoneql-tls/server.pem /stoneql-tls/pg_hba.conf /tmp/stoneql-tls/ && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/stoneql-tls/server.pem -c ssl_key_file=/tmp/stoneql-tls/server-key.pem -c hba_file=/tmp/stoneql-tls/pg_hba.conf -c ssl_min_protocol_version=TLSv1.2';
+  const prepare = 'install -d -o postgres -m 700 /tmp/stoneql-tls && install -o postgres -m 600 /stoneql-tls/server-key.pem /tmp/stoneql-tls/ && install -o postgres -m 644 /stoneql-tls/server.pem /stoneql-tls/pg_hba.conf /tmp/stoneql-tls/ && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tmp/stoneql-tls/server.pem -c ssl_key_file=/tmp/stoneql-tls/server-key.pem -c hba_file=/tmp/stoneql-tls/pg_hba.conf -c ssl_min_protocol_version=TLSv1.2' +
+    // Execution evidence reads the writer's statements from a csvlog inside the disposable
+    // container (only stoneql_writer logs statements; see 002-execution.sql).
+    (executionEvaluation ? ' -c logging_collector=on -c log_destination=csvlog -c log_directory=log -c log_filename=stoneql' : '');
   writeFileSync(override, JSON.stringify({ services: { postgresql: { volumes: [`${exposed}:/stoneql-tls:ro`], entrypoint: ['sh', '-c', prepare] } } }));
   writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE stoneql_fixture_marker(id text PRIMARY KEY); INSERT INTO stoneql_fixture_marker VALUES ('${marker}');
 CREATE TYPE fixture_mood AS ENUM ('active', 'unknown label');
@@ -86,6 +98,21 @@ GRANT USAGE ON SCHEMA public TO stoneql_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_reader;
 GRANT USAGE ON SEQUENCE trust_seq TO stoneql_reader;
 `);
+  if (executionEvaluation) writeFileSync(join(init, '002-execution.sql'), `CREATE ROLE stoneql_writer LOGIN PASSWORD '${password}';
+GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_writer;
+GRANT USAGE, CREATE ON SCHEMA public TO stoneql_writer;
+CREATE TABLE exec_parent(id int PRIMARY KEY); INSERT INTO exec_parent VALUES (1);
+CREATE TABLE exec_item(id int PRIMARY KEY, parent int REFERENCES exec_parent(id));
+CREATE TABLE exec_cycle(n int PRIMARY KEY);
+CREATE TABLE exec_lock(id int PRIMARY KEY, v bigint NOT NULL); INSERT INTO exec_lock VALUES (1, 0);
+CREATE TABLE exec_digit(n int PRIMARY KEY); INSERT INTO exec_digit SELECT generate_series(0, 9);
+CREATE TABLE exec_bulk(n int NOT NULL);
+CREATE PROCEDURE exec_proc(INOUT result text) LANGUAGE plpgsql AS $$ BEGIN result := 'procedure'; END $$;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_writer;
+GRANT INSERT, UPDATE, DELETE ON exec_parent, exec_item, exec_cycle, exec_lock, exec_bulk TO stoneql_writer;
+ALTER ROLE stoneql_writer SET log_statement = 'all';
+GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
+`);
   started = true;
   run('docker', [...args, 'up', '-d', 'postgresql'], env);
   let ready = false;
@@ -107,13 +134,29 @@ GRANT USAGE ON SEQUENCE trust_seq TO stoneql_reader;
   if (!/^127\.0\.0\.1:\d+$/.test(port)) throw Error('Loopback fixture required');
   Object.assign(env, { STONEQL_LIFECYCLE_PORT: port.split(':')[1], STONEQL_LIFECYCLE_CA: join(tls, 'ca.pem'), STONEQL_LIFECYCLE_BAD_CA: join(tls, 'bad-ca.pem') });
   const image = run('docker', ['inspect', '--format', '{{.Image}}', run('docker', [...args, 'ps', '-q', 'postgresql'], env)]);
-  const result = run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
-  const report = JSON.parse(result.split('\n').find(line => line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null');
-  if (!report) throw Error('Fixture report missing');
-  report.image = image;
-  writeFileSync(join(output, 'native-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
-  console.log(`postgresql: real database IPC checks passed (${report.lifecycleSamples} TLS lifecycle samples)`);
+  if (executionEvaluation) {
+    // Test-owned loopback relay for lost-reply and failed-cancel injection (examples/execution.rs).
+    relay = spawn(process.execPath, [resolve(root, 'tools/tcp-fault-relay.mjs'), env.STONEQL_LIFECYCLE_PORT], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
+    const ports = await new Promise((done, fail) => {
+      let text = '';
+      relay.stdout.on('data', chunk => { text += chunk; if (text.includes('\n')) done(JSON.parse(text.split('\n')[0])); });
+      relay.on('exit', () => fail(Error('Fault relay exited')));
+    });
+    Object.assign(env, { STONEQL_RELAY_PORT: String(ports.relayPort), STONEQL_RELAY_CONTROL: String(ports.controlPort) });
+    const report = JSON.parse(run(binary, [], { ...env, STONEQL_LIFECYCLE_ENGINE: 'postgresql' }));
+    report.image = image;
+    writeFileSync(join(output, 'execution-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
+    console.log(`postgresql: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)`);
+  } else {
+    const result = run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
+    const report = JSON.parse(result.split('\n').find(line => line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null');
+    if (!report) throw Error('Fixture report missing');
+    report.image = image;
+    writeFileSync(join(output, 'native-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
+    console.log(`postgresql: real database IPC checks passed (${report.lifecycleSamples} TLS lifecycle samples)`);
+  }
 } finally {
+  relay?.kill();
   try {
     if (started) {
       cleanup.attempted = true;
@@ -129,7 +172,7 @@ GRANT USAGE ON SEQUENCE trust_seq TO stoneql_reader;
       rmSync(temp, { recursive: true, force: true });
     } finally {
       cleanup.temporaryRemoved = !existsSync(temp);
-      writeFileSync(join(output, 'native-cleanup-postgresql.json'), JSON.stringify(cleanup, null, 2) + '\n');
+      writeFileSync(join(output, `${executionEvaluation ? 'execution' : 'native'}-cleanup-postgresql.json`), JSON.stringify(cleanup, null, 2) + '\n');
     }
   }
 }

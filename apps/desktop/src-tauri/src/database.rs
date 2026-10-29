@@ -4,12 +4,13 @@ use super::{
     ssh_transport::{endpoint, tunnel_config},
 };
 use std::{sync::atomic::Ordering, time::Duration};
+use stoneql_contracts::v1::AccessModeDto;
 use stoneql_contracts::v1::{
     ConnectionHandleRequest, DirectConnectionRequest, EngineDto, Envelope, ErrorDto,
     LiveConnection, LiveConnectionStatus, LiveQueryRequest, ProtocolVersion, ResultSet,
 };
 use stoneql_core::{CoreError, Engine, ErrorCode, Outcome};
-use stoneql_runtime::{ConnectionId, DirectServer, LifecycleError, QueryLimits, ReadError};
+use stoneql_runtime::{Access, ConnectionId, DirectServer, LifecycleError, QueryLimits, ReadError};
 use tauri::{Runtime, State, WebviewWindow};
 pub(crate) fn authorize<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -36,6 +37,26 @@ pub(crate) fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto
         })
         .map_err(|_| ErrorDto::from(CoreError::rejected(ErrorCode::Capacity)))?;
     Ok(RequestSlot(&session.active_requests))
+}
+/// Omitted means read-only; read-write is an explicit per-connection opt-in, refused here
+/// (before credential lookup or network I/O) while the host's read-write gate is off, and over
+/// SSH until tunnelled cancellation is fixture-tested.
+pub(crate) fn access(
+    session: &NativeSession,
+    mode: Option<AccessModeDto>,
+    ssh: bool,
+) -> Result<Access, ErrorDto> {
+    match mode {
+        Some(AccessModeDto::ReadWrite) if !session.read_write_sql => {
+            let mut error = lifecycle(LifecycleError::Unsupported);
+            error.message =
+                "Read-write SQL is disabled in this build pending safety approval.".into();
+            Err(error)
+        }
+        Some(AccessModeDto::ReadWrite) if ssh => Err(lifecycle(LifecycleError::Unsupported)),
+        Some(AccessModeDto::ReadWrite) => Ok(Access::ReadWrite),
+        _ => Ok(Access::ReadOnly),
+    }
 }
 pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
     CoreError::rejected(match error {
@@ -64,11 +85,15 @@ fn query_error(error: ReadError) -> ErrorDto {
         ReadError::UnsupportedSql => ErrorCode::UnsupportedSql,
         ReadError::PacketTooLarge | ReadError::ResultTooWide => ErrorCode::PacketTooLarge,
         ReadError::Timeout => ErrorCode::DeadlineExceeded,
+        ReadError::Busy => ErrorCode::Busy,
         _ => ErrorCode::QueryRejected,
     };
     CoreError {
         code,
-        outcome: if matches!(error, ReadError::InvalidLimits | ReadError::UnsupportedSql) {
+        outcome: if matches!(
+            error,
+            ReadError::InvalidLimits | ReadError::UnsupportedSql | ReadError::Busy
+        ) {
             Outcome::Rejected
         } else {
             Outcome::Unknown
@@ -106,6 +131,7 @@ pub async fn connect_direct<R: Runtime>(
     {
         return Err(invalid());
     }
+    let mode = access(&session, input.access, input.ssh.is_some())?;
     // References are resolved here, for this exact target and route, off the async workers.
     let scope = database_scope(
         &input.engine,
@@ -128,7 +154,7 @@ pub async fn connect_direct<R: Runtime>(
     let database = input.database.clone();
     let handle = session
         .connections
-        .connect_with(
+        .connect_with_access(
             session.owner,
             DirectServer {
                 engine,
@@ -141,6 +167,7 @@ pub async fn connect_direct<R: Runtime>(
             },
             tunnel,
             input.attempt_id.as_deref(),
+            mode,
         )
         .await;
     connected(
@@ -170,6 +197,14 @@ pub(crate) async fn connected(
         .connections
         .engine_version(session.owner, handle)
         .map_err(lifecycle)?;
+    let access = match session
+        .connections
+        .access(session.owner, handle)
+        .map_err(lifecycle)?
+    {
+        Access::ReadOnly => AccessModeDto::ReadOnly,
+        Access::ReadWrite => AccessModeDto::ReadWrite,
+    };
     Ok(Envelope {
         version: ProtocolVersion,
         request_id,
@@ -178,6 +213,7 @@ pub(crate) async fn connected(
             engine_version,
             database,
             expires_after_seconds: 3600,
+            access,
         },
     })
 }
@@ -269,6 +305,7 @@ mod tests {
             crate::HostServices {
                 secrets: std::sync::Arc::new(crate::secrets::tests::MemoryStore::default()),
                 agent_socket: None,
+                read_write_sql: false,
             },
         );
         let mut slots = Vec::new();

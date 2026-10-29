@@ -37,6 +37,8 @@ export interface ConnectionGroup {
 export interface Connection {
   mode?: 'mock'|'live';
   rootCertificatePem?: string;
+  /** Live connect choice for this session only, never persisted; omitted means read-only. */
+  access?: 'read_only' | 'read_write';
   /** Opaque native SQLite file grant; session-only, never persisted. */
   sqliteGrant?: string;
   id: string;
@@ -117,6 +119,11 @@ export interface QueryTab {
   resultPage?: number;
   resultSort?: string;
   resultDescending?: boolean;
+  /** Live read-write jobs: every result set, the selected one, and per-statement outcomes. */
+  resultSets?: Array<SqlResult & { statement: number; result: number }>;
+  resultIndex?: number;
+  jobId?: string;
+  job?: import('../services/liveConnections').LiveJobResult;
 }
 export interface Workspace {
   scope: 'server' | 'database' | 'table';

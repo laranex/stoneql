@@ -1,5 +1,45 @@
 # Migration verification
 
+## v0.1.0 Alpha (macOS) verification checklist
+
+The macOS-only platform scope of StoneQL v0.1.0 Alpha is an **Approved product decision** (2026-10-26), as is its feature scope (D022): a usable MySQL/MariaDB client with live browsing, CRUD, safe SQL execution, SSH and basic SQL/CSV import/export. This checklist separates what has run from what the alpha still needs. "Executed" rows ran locally on macOS ARM (Apple Silicon) against disposable fixtures with debug builds; none ran against a signed release artifact. Nothing here marks a milestone complete. See the [roadmap](../architecture/roadmap.md#v0-1-0-alpha-macos) and [deployment requirements](../architecture/deployment.md).
+
+### Executed — Implemented and verified (local, fixtures)
+
+| Check | Command or evidence | Limits |
+| --- | --- | --- |
+| Rust build/fmt/Clippy/tests, contract drift, crate boundaries, vendored SQLx provenance | `npm run rust:build`, `rust:fmt`, `rust:lint`, `rust:test`, `contracts:check`, `rust:boundaries`, `rust:vendor` | Local macOS; CI prepared, not remotely executed |
+| Frontend unit, build and browser scenarios (Light/Dark, live-bridge simulations) | `npm test`, `npm run build`, `npm run test:browser` | Browser shims, not the native WebView |
+| Native WebView startup smoke | `npm run desktop:smoke` (453 ms latest, debug) | Startup and mount only; unsigned debug build |
+| Native IPC ACL, exact values, protocol rejection, close cancellation | `npm run desktop:test` | Tauri test runtime |
+| MySQL/MariaDB live read-only handlers with TLS fixtures | `npm run test:native-database`, `test:lifecycle` | MockRuntime command handlers, not GUI |
+| Runtime resource profile (100,000-row workload, RSS) | `npm run test:resources` ([profiles](./resource-profiles.md)) | Runtime process only; excludes Tauri/WebView; debug |
+| SSH tunnels, host-key policy, 100 mixed cycles, Keychain references | `npm run test:ssh` ([SSH and secrets](./ssh-credentials.md)) | Per-run Keychain service, unsigned; no real prompts or picker |
+| M006 execution: BUSY ownership, cancel→terminal samples, transaction outcomes, 100 fault/transaction cycles, session-state isolation | `npm run test:execution` ([SQL execution](./sql-execution.md)) | Uncommitted 2026-10-26 implementation; Direct MySQL/MariaDB/PostgreSQL only — read-write over SSH gated off; lost-COMMIT fault injection not executed; limits Proposed |
+
+### Required — not yet executed (Unresolved release blockers)
+
+| Requirement | What must be shown |
+| --- | --- |
+| Native packaging | Release `.app`/`.dmg` built with bundling enabled, icons, explicit minimum macOS version; checksums and SBOM |
+| Signing and notarization | `codesign --verify --deep --strict`, `spctl --assess`, accepted `notarytool` submission, `stapler validate`, quarantined first launch on a clean machine |
+| Native end-to-end | Signed app driving real MySQL/MariaDB Direct and over SSH: enrollment, auth methods, TLS refusal cases, queries with exact values, disconnect, reload, quit with unsaved edits |
+| Keychain | First-save, first-use and post-upgrade prompts on the signed build; prompt within the connect timeout; denial handled |
+| Install/upgrade/uninstall | DMG install; upgrade from earlier alpha builds preserving profiles and secret references; uninstall and secret cleanup verified |
+| Credential cleanup and session lifecycle | Failed secret deletion surfaced; no orphan tunnels/pools/grants after quit, crash relaunch, sleep/wake and network change |
+| Startup and resource usage | 30 cold launches and whole-app RSS on arm64 release build against approved budgets (currently Proposed) |
+| Intel (x86_64) | Same evidence on Intel hardware, only if x86_64 is included |
+| Dependency audit | Audit result applicable to the macOS artifact, with Linux-only advisories excluded by evidence or explicitly risk-accepted |
+| SSH review blockers (D022) | Native host-key trust (renderer-supplied keys ignored), Keychain resolution inside cancellable bounded setup, dead-tunnel slot release, host/port edits invalidate trust, failed secret deletion reported |
+| Safe SQL execution (D022) | `BUSY` on a busy connection with nothing queued; cancel-to-terminal within the approved bound; unknown outcomes never retried; transaction expiry and cleanup; MySQL write cancellation and SSH cancellation-slot exhaustion resolved before unrestricted read-write SQL |
+| Live browsing and CRUD (D022) | Database/table tree, paged browse with server-side sort/filter, single-row insert/update/delete with optimistic conflict detection and database constraint errors, exact values and NULL/default distinctions, on MySQL and MariaDB Direct and over SSH |
+| SQL/CSV transfers (D022) | Export and import round trips with independent read-back, quota/cancel/disk-full cleanup, truthful partial outcomes |
+| Metadata allocation bound | Decision on the proposed driver-level result-metadata cap, and its fixtures if adopted |
+
+### Deferred (not required for the alpha)
+
+Windows and Linux native runs, credential stores, SSH agents, packaging and remote cross-OS CI remain open for later releases and are not counted as passed. Under D022, SQLite live support, advanced database objects and XLSX import are also Deferred, and PostgreSQL is optional: their existing fixture commands (`npm run test:native-postgres` and the SQLite runtime tests) keep running as regressions but are not alpha release evidence unless PostgreSQL is admitted.
+
 ## M001 foundation verification — 2026-10-25
 
 The approved Rust foundation/evaluation adds no production connectivity or frontend integration. Local checks passed: Rust workspace build/fmt/all-target Clippy, 12 Rust tests, generated TypeScript drift/strict compilation, host/driver/runtime boundary checks, 28 live driver assertions, cargo-audit with zero vulnerabilities/warnings after Tokio remediation, 128 frontend tests plus seven root tests, frontend build, 17 browser scenarios (12.9s), documentation build and workflow lint. The 73-file frontend preservation audit still passes. See [driver evaluation](../architecture/driver-evaluation.md) and [Rust development](./rust-foundation.md) for reproducible evidence, tested fixtures and limitations. Native Windows/Linux hosted CI and production TLS/pooling/transaction guarantees remain unverified; M001 completion review and M002 approval are pending. No commit or push was made for M001.

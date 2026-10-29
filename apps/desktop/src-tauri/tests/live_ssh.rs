@@ -52,6 +52,7 @@ fn ssh_commands_use_owned_fixture() {
         HostServices {
             secrets: keychain.clone(),
             agent_socket: Some(var("STONEQL_SSH_AGENT").into()),
+            read_write_sql: false,
         },
     )
     .build(tauri::generate_context!())

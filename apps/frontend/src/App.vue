@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useConnectionWorkflow } from './composables/useConnectionWorkflow';
+import { useConnectionWorkflow, reportLeaseEnd, LEASE_DISCONNECT_WARNING } from './composables/useConnectionWorkflow';
 import { hostState, resolveNativeClose } from './services/nativeHost';
 const nativeHostState = hostState();
 let liveStatusTimer: ReturnType<typeof setInterval> | undefined;
@@ -55,7 +55,9 @@ import {
   SlidersHorizontal,
   Moon,
   Sun,
+  Square,
 } from 'lucide-vue-next';
+import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -90,6 +92,12 @@ const store = useWorkspace();
 const w = computed(() => store.workspace);
 const isLive = computed(() => store.connection?.mode==='live');
 const liveSession = computed(() => store.liveSessions[store.activeId]);
+/** Read-write is chosen per connect and reported back by the native host. */
+const liveReadWrite = computed(() => isLive.value && liveSession.value?.status === 'connected' && liveSession.value.info?.access === 'read_write');
+const liveLease = computed(() => liveSession.value?.lease);
+/** Mirrors the native host's read-write gate; the renderer can never enable it itself. */
+const readWriteAvailable = nativeHostState.kind === 'desktop' && nativeHostState.info.readWriteSql === true;
+const jobSucceeded = computed(() => query.value.job?.outcome === 'succeeded');
 const table = computed(() => store.table);
 const tableMetadata = computed(() => {
   if (!table.value || (table.value.kind && table.value.kind!=='table')) return [];
@@ -531,7 +539,7 @@ const confirmation = ref<{
   message: string;
   action: () => void;
   productionName?: string;
-  kind?: 'discard' | 'destructive';
+  kind?: 'discard' | 'destructive' | 'notice';
   acceptLabel?: string;
   cancel?: () => void;
 } | null>(null);
@@ -555,6 +563,18 @@ function askDiscard(message: string, acceptLabel = 'Discard changes'): Promise<b
     };
   });
   return pendingDiscard;
+}
+/** Confirmation dialog as a promise; a PROD profile also needs the acknowledgement checkbox. */
+function askConfirm(request: { title: string; message: string; acceptLabel: string }): Promise<boolean> {
+  return new Promise((resolve) => {
+    confirmation.value = {
+      ...request,
+      kind: 'notice',
+      productionName: store.connection.environment === 'Production' ? store.connection.name : undefined,
+      action: () => resolve(true),
+      cancel: () => resolve(false),
+    };
+  });
 }
 function cancelConfirmation() {
   confirmation.value?.cancel?.();
@@ -665,7 +685,16 @@ const {
   newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
   fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
   testConnection, saveConnection, removeConnection, closeConnection,
-} = useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm: (request) => { confirmation.value = request; } });
+} = useConnectionWorkflow({
+  manager, notify, discard, askDiscard, confirm: (request) => { confirmation.value = request; },
+  confirmReadWrite: (name) => new Promise((resolve) => {
+    confirmation.value = {
+      title: 'Open read-write?', kind: 'notice', acceptLabel: 'Open read-write', productionName: name,
+      message: `Statements run in this session can change or remove data on “${name}”. This confirmation is a safeguard, not authorization: database privileges decide what is allowed.`,
+      action: () => resolve(true), cancel: () => resolve(false),
+    };
+  }),
+});
 async function closeColumnDialog() {
   if (
     JSON.stringify(columnDraft.value) !== columnDraftInitial.value &&
@@ -776,6 +805,7 @@ async function closeQuery(id: number) {
   if (w.value.queryId === id) w.value.queryId = w.value.queries[0]!.id;
 }
 async function execute() {
+  if (liveReadWrite.value) return executeJob();
   const profileId=store.activeId, live=isLive.value;
   const ws = w.value,
     q = query.value,
@@ -807,6 +837,56 @@ async function execute() {
   } finally {
     q.running = false;
   }
+}
+/** Read-write live SQL: a native job with per-statement outcomes and every result set. */
+async function executeJob() {
+  const profileId = store.activeId, ws = w.value, q = query.value, text = q.sql;
+  if (q.running) return;
+  const writes = writeKeywords(text);
+  if (writes.length && !(await askConfirm({
+    title: 'Run statements that change data?',
+    acceptLabel: 'Run statements',
+    message: `This script contains ${writes.join(', ')} and runs ${liveLease.value ? 'inside the open transaction' : 'with autocommit: each successful statement is committed immediately'} on “${store.connection.name}”. Database privileges remain the authority.`,
+  }))) return;
+  q.running = true; q.result = null; q.resultSets = []; q.job = undefined; q.error = ''; q.executedSql = text; q.resultDatabase = ws.database;
+  try {
+    const job = await store.runLiveJob(profileId, text, (jobId) => { q.jobId = jobId; });
+    q.job = job; q.resultSets = job.resultSets; q.resultIndex = 0; q.result = job.resultSets[0] ?? null;
+    q.resultPage = 1; q.resultSort = ''; q.resultDescending = false;
+    const notice = describeJob(job, job.statements.some((s) => s.inTransaction));
+    q.error = notice.kind === 'success' ? '' : notice.text;
+    ws.history.unshift({ sql: text, time: new Date().toLocaleTimeString(), status: job.outcome === 'succeeded' ? 'Success' : 'Error' });
+  } catch (error) {
+    q.error = (error as Error).message;
+    ws.history.unshift({ sql: text, time: new Date().toLocaleTimeString(), status: 'Error' });
+  } finally { q.running = false; q.jobId = undefined; }
+}
+async function cancelExecution() {
+  const jobId = query.value.jobId;
+  if (!jobId) return;
+  try { await cancelLiveJob(jobId); notify('Cancellation requested. The result shows whether it was confirmed.'); }
+  catch (error) { notify((error as Error).message, 'error'); }
+}
+function selectResultSet(index: number) {
+  const q = query.value, set = q.resultSets?.[index];
+  if (!set) return;
+  q.resultIndex = index; q.result = set; q.resultPage = 1; q.resultSort = ''; q.resultDescending = false;
+}
+async function transaction(action: 'begin' | 'commit' | 'rollback') {
+  const profileId = store.activeId;
+  try {
+    if (action === 'begin') { await store.beginLiveTransaction(profileId); notify('Transaction started. Statements run in it until you commit or roll back.'); return; }
+    if (action === 'commit' && !(await askConfirm({ title: 'Commit transaction?', acceptLabel: 'Commit', message: `Make this transaction's changes on “${store.connection.name}” permanent.` }))) return;
+    const notice = describeTransactionEnd(await store.endLiveTransaction(profileId, action));
+    notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
+  } catch (error) { notify((error as Error).message, 'error'); }
+}
+/** Disconnecting rolls back an open transaction: confirm first, then show its outcome. */
+async function disconnectLive() {
+  const profileId = store.activeId;
+  if (liveLease.value && !(await askDiscard(LEASE_DISCONNECT_WARNING, 'Disconnect and roll back'))) return;
+  try { reportLeaseEnd(await store.disconnectLiveProfile(profileId), notify); }
+  catch (error) { notify((error as Error).message, 'error'); }
 }
 const searchFilters = ref<Record<string, string>>({}),
   searchOperators = ref<Record<string, string>>({}),
@@ -1006,8 +1086,14 @@ function hasUnsavedChanges() {
     (manager.value && groupEditing.value !== null && !!groupName.value.trim()) ||
     Object.values(store.workspaces).some((ws) => ws.queries.some((q) => q.sql !== q.saved));
 }
+/** An open transaction lease or a running live job ends with the window; its outcome cannot be shown afterwards. */
+function hasOpenLiveWork() {
+  return Object.values(store.liveSessions).some((session) => session.lease) ||
+    store.connections.some((c) => c.mode === 'live' && store.workspaces[c.id]?.queries.some((q) => q.running));
+}
+const LIVE_WORK_CLOSE_WARNING = 'A live transaction is open or a live statement is running. Closing StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. The outcome will not be shown.';
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (hasUnsavedChanges()) { event.preventDefault(); event.returnValue = ''; }
+  if (hasUnsavedChanges() || hasOpenLiveWork()) { event.preventDefault(); event.returnValue = ''; }
 }
 let nativeCloseHandling = false;
 async function nativeCloseRequested() {
@@ -1015,7 +1101,7 @@ async function nativeCloseRequested() {
   if (nativeHostState.kind === 'browser') return;
   nativeCloseHandling = true;
   try {
-    const decision = hasUnsavedChanges() ? askDiscard('Close StoneQL and discard unsaved changes?', 'Close StoneQL') : Promise.resolve(true);
+    const decision = hasOpenLiveWork() ? askDiscard(`${LIVE_WORK_CLOSE_WARNING}${hasUnsavedChanges() ? ' Unsaved changes are discarded too.' : ''} Close StoneQL?`, 'Close StoneQL') : hasUnsavedChanges() ? askDiscard('Close StoneQL and discard unsaved changes?', 'Close StoneQL') : Promise.resolve(true);
     await nextTick();
     await resolveNativeClose('prompted');
     await resolveNativeClose((await decision) ? 'confirm' : 'cancel');
@@ -1655,10 +1741,26 @@ onBeforeUnmount(() => {
           >
           <template v-else-if="w.view === 'SQL'">
             <div v-if="isLive" class="editor-toolbar">
-              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file · Read-only' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · Read-only · TLS verification required` }}</span>
+              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · TLS verification required` }}</span>
+              <span class="access-badge" :class="{ 'read-write': liveReadWrite }" data-testid="live-access">{{ liveReadWrite ? 'Read-write' : 'Read-only' }}</span>
               <span class="toolbar-end">{{ liveSession?.status || 'disconnected' }}</span>
               <button v-if="liveSession?.status!=='connected'" class="button" :disabled="liveSession?.status==='connecting'" @click="newConnection(store.connection)">Connect</button>
-              <button v-else class="button" @click="store.disconnectLiveProfile(store.activeId).catch(error=>notify(error.message,'error'))">Disconnect</button>
+              <template v-else>
+                <button v-if="!liveReadWrite && store.connection?.transport.type !== 'ssh'" class="button" :disabled="!readWriteAvailable" :title="readWriteAvailable ? 'Reconnect this session with read-write access' : 'Read-write SQL is pending safety approval'" @click="newConnection(store.connection, 'read_write')">Read-write…</button>
+                <button class="button" @click="disconnectLive">Disconnect</button>
+              </template>
+            </div>
+            <div v-if="liveReadWrite" class="editor-toolbar transaction-toolbar" role="group" aria-label="Transaction">
+              <template v-if="!liveLease">
+                <span class="muted">Autocommit · each statement commits on success</span>
+                <button class="button" :disabled="running" @click="transaction('begin')">Begin transaction</button>
+              </template>
+              <template v-else>
+                <span :class="liveLease.state === 'active' ? 'accent-text' : 'danger-text'">{{ liveLease.state === 'active' ? 'Transaction open' : 'Transaction failed · rollback only' }}</span>
+                <span class="muted">Ends after 60 s idle or 15 min; outcome shown on Commit, Rollback or Disconnect</span>
+                <button class="button" :disabled="running || liveLease.state !== 'active'" @click="transaction('commit')">Commit</button>
+                <button class="button" :disabled="running" @click="transaction('rollback')">Rollback</button>
+              </template>
             </div>
             <ResultNotice v-if="isLive && liveSession?.error" kind="error" :notification-key="liveSession.error">{{ liveSession.error }}</ResultNotice>
             <div class="query-tabs">
@@ -1682,6 +1784,7 @@ onBeforeUnmount(() => {
                 <LoaderCircle v-if="running" :size="13" class="spin" /><Play v-else :size="13" />{{
                   running ? 'Executing…' : 'Run query'
                 }}</button
+              ><button v-if="running && query.jobId" class="button danger" @click="cancelExecution"><Square :size="12" /> Cancel</button
               ><span class="muted">⌘ / Ctrl + Enter</span
               ><button
                 class="button"
@@ -1695,7 +1798,7 @@ onBeforeUnmount(() => {
               ><button class="button" @click="showHistory = !showHistory">
                 <Clock3 :size="13" /> Query history
                 <span class="count">{{ w.history.length }}</span></button
-              ><span class="toolbar-end">{{ isLive ? 'Live read-only · bounded SELECT subset' : 'Mock engine · SELECT queries supported' }}</span>
+              ><span class="toolbar-end">{{ liveReadWrite ? 'Live read-write · scripts, bounded results' : isLive ? 'Live read-only · bounded SELECT subset' : 'Mock engine · SELECT queries supported' }}</span>
             </div>
             <div v-if="showHistory" class="panel history-panel">
               <h3>Query history</h3>
@@ -1711,12 +1814,22 @@ onBeforeUnmount(() => {
             <ResultNotice v-if="sqlError" kind="error" :notification-key="w.history.length">{{
               sqlError
             }}</ResultNotice>
+            <div v-if="query.job" class="statement-outcomes" aria-label="Statement outcomes">
+              <span v-for="s in query.job.statements" :key="s.index" class="statement-outcome" :class="s.status" :title="s.failure?.sqlState ? `SQLSTATE ${s.failure.sqlState}` : undefined"
+                >#{{ s.index + 1 }} {{ s.status.replace('_', ' ') }}<template v-if="s.status === 'succeeded' && s.affectedRows !== '0'"> · {{ s.affectedRows }} rows</template><template v-if="s.inTransaction && s.status === 'succeeded'"> · uncommitted</template></span>
+            </div>
+            <div v-if="(query.resultSets?.length || 0) > 1" class="query-tabs result-sets" role="tablist" aria-label="Result sets">
+              <div v-for="(set, i) in query.resultSets" :key="`${set.statement}:${set.result}`" :class="{ active: i === (query.resultIndex || 0) }">
+                <button role="tab" :aria-selected="i === (query.resultIndex || 0)" @click="selectResultSet(i)">Result {{ i + 1 }} · statement {{ set.statement + 1 }}</button>
+              </div>
+            </div>
+            <ResultNotice v-if="query.job && jobSucceeded && !result" :notification-key="w.history.length">{{ describeJob(query.job, query.job.statements.some((s) => s.inTransaction)).text }}</ResultNotice>
             <template v-if="result"
               ><ResultNotice :notification-key="w.history.length"
-                >{{ result.rows.length }} rows returned. Query executed successfully ({{ isLive ? 'live, read-only' : 'simulated' }},
-                {{ query.resultDatabase }}).</ResultNotice
+                >{{ result.rows.length }} rows returned<template v-if="query.job && !jobSucceeded"> by statement {{ (query.resultSets?.[query.resultIndex || 0]?.statement ?? 0) + 1 }} (job {{ query.job.outcome }}; see the outcome above)</template><template v-else>. Query executed successfully ({{ liveReadWrite ? 'live, read-write' : isLive ? 'live, read-only' : 'simulated' }},
+                {{ query.resultDatabase }})</template>.</ResultNotice
               >
-              <ResultNotice v-if="result.truncated" kind="warning" :notification-key="w.history.length">Result limited to 1,000 rows or 1 MiB. Individual values were not truncated.</ResultNotice>
+              <ResultNotice v-if="result.truncated" kind="warning" :notification-key="w.history.length">{{ query.job ? 'Result limited by the configured row or byte bounds.' : 'Result limited to 1,000 rows or 1 MiB.' }} Individual values were not truncated.</ResultNotice>
               <div class="data-grid-wrap">
                 <table class="data-grid" v-grid-resize="resultGridOptions">
                   <thead>
@@ -2064,7 +2177,7 @@ onBeforeUnmount(() => {
       <span class="footer-session"
         ><Terminal :size="12" /><strong>StoneQL</strong><span class="footer-divider">|</span
         ><span class="session-detail"
-          >{{ isLive ? `Live read-only · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
+          >{{ isLive ? `Live ${liveReadWrite ? 'read-write' : 'read-only'} · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
         ></span
       >
       <div class="footer-controls">
@@ -2311,7 +2424,8 @@ onBeforeUnmount(() => {
         </header>
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
-            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live read-only (desktop · Direct/SSH server or SQLite file)</option></select></label>
+            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
+            <label v-if="connectionDraft.mode==='live'" class="form-label">Session access<select :disabled="testing" :value="connectionDraft.access || 'read_only'" aria-label="Session access" @change="connectionDraft.access = ($event.target as HTMLSelectElement).value === 'read_write' ? 'read_write' : undefined"><option value="read_only">Read-only (default)</option><option value="read_write" :disabled="!readWriteAvailable || connectionDraft.transport.type==='ssh'">{{ !readWriteAvailable ? 'Read-write — pending safety approval' : `Read-write — this session only${connectionDraft.transport.type==='ssh' ? ' (not available over SSH yet)' : ''}` }}</option></select><span class="muted">{{ connectionDraft.access==='read_write' ? `Scripts and transactions can change data. Not saved; the next connection starts read-only.${connectionDraft.environment==='Production' ? ' PROD requires confirmation.' : ''}` : 'Engine-enforced read-only SELECT subset.' }}</span></label>
             <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">
               <label class="form-label"
@@ -2611,7 +2725,7 @@ onBeforeUnmount(() => {
           <div v-if="confirmationError" class="notice error" role="alert">
             {{ confirmationError }}
           </div>
-          <p v-if="confirmation.kind !== 'discard'" class="muted">
+          <p v-if="confirmation.kind !== 'discard' && confirmation.kind !== 'notice'" class="muted">
             This action cannot be undone in this session.
           </p>
           <label v-if="confirmation.productionName" class="checkbox-label production-confirm"

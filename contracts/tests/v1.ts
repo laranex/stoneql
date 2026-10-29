@@ -1,4 +1,4 @@
-import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto, SqliteConnectionRequest, SqliteFileGrant, DirectConnectionRequest, SshTunnelRequest, StoreSecretRequest } from '../generated/v1.js';
+import type { Envelope, QueryRequest, LiveQueryRequest, QueryResult, CellValue, InputValue, ErrorDto, SqliteConnectionRequest, SqliteFileGrant, DirectConnectionRequest, SshTunnelRequest, StoreSecretRequest, SubmitJobRequest, JobUpdate, TransactionEnd, EndTransactionRequest } from '../generated/v1.js';
 const value: CellValue = { kind: 'integer', text: '18446744073709551615' };
 const request: Envelope<QueryRequest> = { version: 1, requestId: 'r', payload: { connectionId: 'c', database: null, sql: "SELECT 'unchanged'", maxRows: 200, maxBytes: 262144 } };
 const result: Envelope<QueryResult> = { version: 1, requestId: 'r', payload: { resultSets: [{ index: 0, columns: [{name: 'n', databaseType: 'BIGINT', nullable: null}], rows: [[value]], affectedRows: '0', truncated: false }] } };
@@ -24,4 +24,22 @@ const pastedKey: SshTunnelRequest = {...tunnel, auth: {method: 'key_file', priva
 const nullHostKey: SshTunnelRequest = {...tunnel, hostKey: null};
 const remember: StoreSecretRequest = {sessionId: 's', purpose: 'database_password', target: {engine: 'mysql', host: 'db', port: 3306, username: 'u'}, secret: 'x'};
 const hostKeyChanged: ErrorDto = {...error, code: 'SSH_HOST_KEY_CHANGED'};
+const job: SubmitJobRequest = {sessionId: 's', handle: 'h', sql: 'UPDATE t SET a = 1', leaseId: 'l'};
+// @ts-expect-error omitted job options are absent, not null
+const nullLease: SubmitJobRequest = {...job, leaseId: null};
+const page: JobUpdate = {jobId: 'j', state: 'finished', outcome: 'unknown', cancellation: 'confirmed', serverCancelSent: true, deadlineExceeded: false, statements: [], batch: null, lease: null, done: true};
+const interrupted: JobUpdate = {...page, statements: [{index: 0, status: 'unknown', inTransaction: false, affectedRows: '0', resultSets: 1, failure: null, resultsWithheld: true}]};
+// @ts-expect-error resultsWithheld is required
+const unflagged: JobUpdate = {...page, statements: [{index: 0, status: 'unknown', inTransaction: false, affectedRows: '0', resultSets: 1, failure: null}]};
+// @ts-expect-error jobs are never queued
+const queued: JobUpdate = {...page, state: 'queued'};
+// @ts-expect-error a cancelled write is unknown; cancellation is a separate fact
+const writeCancelled: JobUpdate = {...page, cancellation: 'cancelled'};
+const ended: TransactionEnd = {outcome: 'unknown', reason: 'connection_lost', commitSent: false, rollbackSent: false};
+// @ts-expect-error rollbackSent is required
+const endedWithoutRollbackFact: TransactionEnd = {outcome: 'unknown', reason: 'closed', commitSent: false};
+// @ts-expect-error savepoints are not offered
+const savepoint: EndTransactionRequest = {sessionId: 's', leaseId: 'l', action: 'savepoint'};
+const busy: ErrorDto = {...error, code: 'BUSY'};
+void [job, nullLease, page, interrupted, unflagged, queued, writeCancelled, ended, endedWithoutRollbackFact, savepoint, busy];
 void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull, sqliteOpen, sqlitePath, pickerCancelled, overSsh, pastedKey, nullHostKey, remember, hostKeyChanged];

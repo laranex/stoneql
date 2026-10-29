@@ -1,0 +1,1325 @@
+//! Execution service tests on temporary SQLite files (no Docker). Network engines are covered
+//! by the disposable-fixture example `examples/execution.rs`.
+use super::*;
+use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
+use stoneql_contracts::v1::ExecutionOutcomeDto;
+
+struct Fixture(PathBuf);
+impl Fixture {
+    async fn new() -> Self {
+        let root = std::env::temp_dir().join(format!("stoneql-exec-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let fixture = Self(std::fs::canonicalize(root).unwrap());
+        let mut writer = fixture.observer().await;
+        writer
+            .execute(
+                "CREATE TABLE parent(id INTEGER PRIMARY KEY);
+                 CREATE TABLE item(id INTEGER PRIMARY KEY, parent INTEGER REFERENCES parent(id), email TEXT UNIQUE, n INTEGER, amount TEXT, at TEXT, note TEXT);
+                 INSERT INTO parent VALUES (1);",
+            )
+            .await
+            .unwrap();
+        writer.close().await.unwrap();
+        fixture
+    }
+    fn file(&self) -> PathBuf {
+        self.0.join("fixture.sqlite")
+    }
+    async fn observer(&self) -> SqliteConnection {
+        SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(self.file())
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap()
+    }
+    async fn count(&self, sql: &'static str) -> i64 {
+        let mut observer = self.observer().await;
+        let value = sqlx::query_scalar(sql)
+            .fetch_one(&mut observer)
+            .await
+            .unwrap();
+        observer.close().await.unwrap();
+        value
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+async fn open(fixture: &Fixture, access: Access) -> (Connections, OwnerId, ConnectionId) {
+    let connections =
+        Connections::new(4, Duration::from_secs(3), Duration::from_secs(600)).unwrap();
+    let owner = OwnerId::new();
+    let grant = connections
+        .grant_sqlite_file(owner, &fixture.file())
+        .unwrap();
+    let handle = connections
+        .connect_sqlite_with_access(owner, &grant, access)
+        .await
+        .unwrap();
+    (connections, owner, handle)
+}
+/// Fetches until done, returning every page and the final update.
+async fn drain(
+    connections: &Connections,
+    owner: OwnerId,
+    id: JobId,
+) -> (Vec<ResultBatch>, JobUpdate) {
+    let mut batches = Vec::new();
+    for _ in 0..600 {
+        let update = connections
+            .fetch_job(owner, id, Duration::from_secs(1))
+            .await
+            .unwrap();
+        if let Some(batch) = update.batch.clone() {
+            batches.push(batch);
+        }
+        if update.done {
+            return (batches, update);
+        }
+    }
+    panic!("job did not finish");
+}
+async fn run(
+    connections: &Connections,
+    owner: OwnerId,
+    handle: ConnectionId,
+    options: JobOptions,
+) -> (Vec<ResultBatch>, JobUpdate) {
+    let (id, _) = connections.submit_job(owner, handle, options).unwrap();
+    drain(connections, owner, id).await
+}
+fn statuses(update: &JobUpdate) -> Vec<StatementStatusDto> {
+    update
+        .statements
+        .iter()
+        .map(|report| report.status)
+        .collect()
+}
+/// A statement that keeps SQLite's VM busy until interrupted.
+const SLOW: &str =
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT max(x) FROM c";
+
+#[tokio::test]
+async fn read_only_handles_refuse_jobs_and_transactions_and_keep_concurrent_reads() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadOnly).await;
+    assert_eq!(connections.access(owner, handle), Ok(Access::ReadOnly));
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::ReadOnlyHandle
+    );
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::ReadOnlyHandle
+    );
+    let limits = crate::QueryLimits {
+        rows: 10,
+        bytes: 4096,
+        deadline: Duration::from_secs(3),
+    };
+    let (first, second) = tokio::join!(
+        connections.read_only(owner, handle, "SELECT 1", limits),
+        connections.read_only(owner, handle, "SELECT 2", limits)
+    );
+    assert!(first.is_ok() && second.is_ok());
+}
+
+#[tokio::test]
+async fn jobs_transactions_and_pages_are_owner_scoped() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let other = OwnerId::new();
+    assert_eq!(
+        connections
+            .submit_job(other, handle, JobOptions::new("SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert_eq!(
+        connections
+            .begin_transaction(other, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    let (id, _) = connections
+        .submit_job(owner, handle, JobOptions::new(SLOW))
+        .unwrap();
+    assert_eq!(
+        connections
+            .fetch_job(other, id, Duration::ZERO)
+            .await
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert_eq!(
+        connections.cancel_job(other, id).unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert!(connections.cancel_job(owner, id).unwrap());
+    drain(&connections, owner, id).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    assert_eq!(
+        connections
+            .end_transaction(other, lease, true)
+            .await
+            .unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    let mut options = JobOptions::new("SELECT 1");
+    options.lease = Some(lease);
+    assert_eq!(
+        connections.submit_job(other, handle, options).unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert_eq!(
+        connections
+            .end_transaction(owner, lease, false)
+            .await
+            .unwrap()
+            .outcome,
+        Outcome::RolledBack
+    );
+    // Forged identifiers are refused, not interpreted.
+    assert_eq!(
+        JobId::parse("../job").unwrap_err(),
+        ExecutionError::Forbidden
+    );
+}
+
+#[tokio::test]
+async fn scripts_report_each_statement_and_stop_at_an_authoritative_constraint_failure() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let (batches, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new(
+            "INSERT INTO item(id, parent, email, n, amount, at, note) VALUES (1, 1, 'a@x', 9223372036854775807, '123456789012345678901234567890.4500', '2024-02-29 12:34:56.123456', NULL);
+             SELECT id, n, amount, at, note FROM item; SELECT 2 AS second WHERE 0;
+             INSERT INTO item(id, email) VALUES (2, 'a@x');
+             INSERT INTO item(id) VALUES (3)",
+        ),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Failed));
+    assert_eq!(
+        statuses(&update),
+        [
+            StatementStatusDto::Succeeded,
+            StatementStatusDto::Succeeded,
+            StatementStatusDto::Succeeded,
+            StatementStatusDto::Failed,
+            StatementStatusDto::NotRun
+        ]
+    );
+    assert_eq!(update.statements[0].affected_rows, "1");
+    assert_eq!(
+        update.statements[3].failure.as_ref().unwrap().constraint,
+        Some(ConstraintKindDto::Unique)
+    );
+    assert_eq!(update.cancellation, CancellationDto::None);
+    // Exact values and NULL survive; a zero-row result set keeps its columns.
+    let first = batches.iter().find(|batch| batch.statement == 1).unwrap();
+    assert_eq!(first.columns.as_ref().unwrap().len(), 5);
+    assert_eq!(
+        first.rows,
+        [vec![
+            CellValue::Integer { text: "1".into() },
+            CellValue::Integer {
+                text: "9223372036854775807".into()
+            },
+            CellValue::Text {
+                text: "123456789012345678901234567890.4500".into()
+            },
+            CellValue::Text {
+                text: "2024-02-29 12:34:56.123456".into()
+            },
+            CellValue::Null,
+        ]]
+    );
+    let empty = batches.iter().find(|batch| batch.statement == 2).unwrap();
+    assert!(
+        empty.rows.is_empty() && empty.last && empty.columns.as_ref().unwrap()[0].name == "second"
+    );
+    // Autocommit: the successful insert is durable; the refused and unsent ones are absent.
+    assert_eq!(fixture.count("SELECT count(*) FROM item").await, 1);
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO item(id, parent) VALUES (4, 99)"),
+    )
+    .await;
+    assert_eq!(
+        update.statements[0].failure.as_ref().unwrap().constraint,
+        Some(ConstraintKindDto::ForeignKey)
+    );
+}
+
+#[tokio::test]
+async fn policy_refusals_send_nothing() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    for (sql, index, error) in [
+        (
+            "INSERT INTO parent VALUES (2); COMMIT",
+            1,
+            ScriptError::TransactionControl,
+        ),
+        ("ATTACH 'other.db' AS other", 0, ScriptError::FileAccess),
+        (
+            "INSERT INTO parent VALUES (3); SAVEPOINT a",
+            1,
+            ScriptError::TransactionControl,
+        ),
+    ] {
+        assert_eq!(
+            connections
+                .submit_job(owner, handle, JobOptions::new(sql))
+                .unwrap_err(),
+            ExecutionError::Script(index, error)
+        );
+    }
+    assert_eq!(fixture.count("SELECT count(*) FROM parent").await, 1);
+    let mut options = JobOptions::new("SELECT 1");
+    options.statement_deadline = ExecutionLimits::MAX_STATEMENT_DEADLINE + Duration::from_secs(1);
+    assert_eq!(
+        connections.submit_job(owner, handle, options).unwrap_err(),
+        ExecutionError::InvalidLimits
+    );
+}
+
+#[tokio::test]
+async fn busy_handles_refuse_instead_of_queueing() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let (id, _) = connections
+        .submit_job(owner, handle, JobOptions::new(SLOW))
+        .unwrap();
+    assert_eq!(
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (5)")
+            )
+            .unwrap_err(),
+        ExecutionError::Busy
+    );
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::Busy
+    );
+    let limits = crate::QueryLimits {
+        rows: 10,
+        bytes: 4096,
+        deadline: Duration::from_secs(3),
+    };
+    assert_eq!(
+        connections
+            .read_only(owner, handle, "SELECT 1", limits)
+            .await
+            .unwrap_err(),
+        ReadError::Busy
+    );
+    connections.cancel_job(owner, id).unwrap();
+    drain(&connections, owner, id).await;
+    // The refused insert was never sent, and the handle is free again.
+    assert_eq!(fixture.count("SELECT count(*) FROM parent").await, 1);
+    assert!(
+        connections
+            .read_only(owner, handle, "SELECT 1", limits)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn cancel_interrupts_a_running_statement_and_reports_unknown_effects() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let mut samples = Vec::new();
+    for _ in 0..5 {
+        let (id, _) = connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new(format!("{SLOW}; INSERT INTO parent VALUES (7)")),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let requested = std::time::Instant::now();
+        assert!(connections.cancel_job(owner, id).unwrap());
+        let (_, update) = drain(&connections, owner, id).await;
+        samples.push(requested.elapsed());
+        assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+        assert_eq!(update.cancellation, CancellationDto::Confirmed);
+        assert!(update.server_cancel_sent);
+        assert_eq!(
+            statuses(&update),
+            [StatementStatusDto::Unknown, StatementStatusDto::NotRun]
+        );
+        assert!(
+            !connections
+                .cancel_job(owner, id)
+                .is_ok_and(|requested| requested)
+        );
+    }
+    assert!(
+        samples
+            .iter()
+            .all(|sample| *sample < Duration::from_secs(2)),
+        "{samples:?}"
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 7")
+            .await,
+        0
+    );
+    // The statement deadline takes the same path.
+    let mut options = JobOptions::new(SLOW);
+    options.statement_deadline = Duration::from_millis(300);
+    let (_, update) = run(&connections, owner, handle, options).await;
+    assert!(update.deadline_exceeded);
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert_eq!(update.cancellation, CancellationDto::Confirmed);
+}
+
+#[tokio::test]
+async fn leases_commit_and_roll_back_only_as_the_server_confirms() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let in_lease = |lease, sql: &str| {
+        let mut options = JobOptions::new(sql);
+        options.lease = Some(lease);
+        options
+    };
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::Busy
+    );
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::Busy
+    );
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        in_lease(
+            lease,
+            "INSERT INTO parent VALUES (10); CREATE TABLE made_in_lease(x)",
+        ),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert!(update.statements.iter().all(|report| report.in_transaction));
+    assert_eq!(update.lease, Some(LeaseStateDto::Active));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 10")
+            .await,
+        0
+    );
+    let end = connections
+        .end_transaction(owner, lease, true)
+        .await
+        .unwrap();
+    assert_eq!((end.outcome, end.commit_sent), (Outcome::Committed, true));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 10")
+            .await,
+        1
+    );
+    // A failed statement makes the lease rollback-only; rollback is confirmed.
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        in_lease(
+            lease,
+            "INSERT INTO parent VALUES (11); INSERT INTO parent VALUES (1)",
+        ),
+    )
+    .await;
+    assert_eq!(update.lease, Some(LeaseStateDto::RollbackOnly));
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, in_lease(lease, "SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::RollbackOnly
+    );
+    assert_eq!(
+        connections
+            .end_transaction(owner, lease, true)
+            .await
+            .unwrap_err(),
+        ExecutionError::RollbackOnly
+    );
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.outcome, end.commit_sent, end.rollback_sent),
+        (Outcome::RolledBack, false, true)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 11")
+            .await,
+        0
+    );
+    // B-2: a repeated end (for example after a lost reply) reports the recorded outcome and
+    // sends nothing; it is never a second COMMIT/ROLLBACK and never FORBIDDEN.
+    for commit in [false, true] {
+        assert_eq!(
+            connections.end_transaction(owner, lease, commit).await,
+            Ok(end)
+        );
+    }
+    // A cancelled statement inside a lease is unknown until a confirmed rollback.
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let (id, _) = connections
+        .submit_job(
+            owner,
+            handle,
+            in_lease(lease, &format!("INSERT INTO parent VALUES (12); {SLOW}")),
+        )
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    connections.cancel_job(owner, id).unwrap();
+    let (_, update) = drain(&connections, owner, id).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert_eq!(update.lease, Some(LeaseStateDto::RollbackOnly));
+    assert_eq!(
+        connections
+            .end_transaction(owner, lease, false)
+            .await
+            .unwrap()
+            .outcome,
+        Outcome::RolledBack
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 12")
+            .await,
+        0
+    );
+    assert_eq!(connections.open_transactions(), 0);
+}
+
+#[tokio::test]
+async fn disconnect_rolls_back_open_leases_and_expiry_is_recorded() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (20)");
+    options.lease = Some(lease);
+    run(&connections, owner, handle, options).await;
+    connections.disconnect(owner, handle).await.unwrap();
+    let end = connections
+        .end_transaction(owner, lease, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.outcome, end.reason),
+        (Outcome::RolledBack, EndReason::Closed)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 20")
+            .await,
+        0
+    );
+    // Expiry uses the same confirmed-rollback path; driven here without waiting LEASE_IDLE.
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let entry = connections.0.execution.leases.lock().unwrap()[&lease].clone();
+    entry.state.lock().unwrap().last_used =
+        Instant::now() - ExecutionLimits::LEASE_IDLE - Duration::from_secs(1);
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        expire(
+            Arc::downgrade(&connections.0),
+            lease,
+            Arc::downgrade(&entry),
+        ),
+    )
+    .await
+    .unwrap();
+    drop(entry);
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.outcome, end.reason),
+        (Outcome::RolledBack, EndReason::Expired)
+    );
+    assert!(
+        connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .is_ok()
+    );
+}
+
+/// V-1: a release cut off by `RELEASE_BOUND` (here: the lease connection is held, so its
+/// ROLLBACK cannot even be sent) still leaves a recorded `unknown` outcome for the lease, on
+/// disconnect, reset (renderer reload) and shutdown alike. Never FORBIDDEN, never rolled back.
+#[tokio::test]
+async fn a_release_cut_off_by_its_bound_records_unknown_instead_of_losing_the_outcome() {
+    let fixture = Fixture::new().await;
+    for (index, path) in ["disconnect", "reset", "shutdown"].into_iter().enumerate() {
+        let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+        let lease = connections.begin_transaction(owner, handle).await.unwrap();
+        let mut options = JobOptions::new(format!("INSERT INTO parent VALUES ({})", 30 + index));
+        options.lease = Some(lease);
+        run(&connections, owner, handle, options).await;
+        let slot = connections.0.execution.leases.lock().unwrap()[&lease]
+            .slot
+            .clone();
+        let held = slot.lock_owned().await;
+        let started = std::time::Instant::now();
+        match path {
+            "disconnect" => connections.disconnect(owner, handle).await.unwrap(),
+            "reset" => connections.reset().await,
+            _ => connections.shutdown().await,
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= ExecutionLimits::RELEASE_BOUND
+                && elapsed < ExecutionLimits::RELEASE_BOUND + Duration::from_secs(3),
+            "{path}: {elapsed:?}"
+        );
+        let expected = TransactionEnd {
+            outcome: Outcome::Unknown,
+            reason: EndReason::Closed,
+            commit_sent: false,
+            rollback_sent: false,
+        };
+        for commit in [true, false] {
+            assert_eq!(
+                connections.end_transaction(owner, lease, commit).await,
+                Ok(expected),
+                "{path}"
+            );
+        }
+        assert_eq!(connections.open_transactions(), 0);
+        // Dropping the abandoned connection lets SQLite discard the transaction; this is the
+        // observed data state, not a claimed rollback.
+        drop(held);
+        assert_eq!(
+            fixture
+                .count("SELECT count(*) FROM parent WHERE id >= 30")
+                .await,
+            0,
+            "{path}"
+        );
+    }
+}
+
+/// V-1: every bounded path records `unknown` (with what is about to be sent) before COMMIT or
+/// ROLLBACK is sent, and replaces it only with the server-confirmed outcome.
+#[tokio::test]
+async fn conclude_records_unknown_before_sending_commit_or_rollback() {
+    let fixture = Fixture::new().await;
+    for commit in [true, false] {
+        let mut physical = Target::Sqlite(fixture.file()).open().await.unwrap();
+        physical.begin().await.unwrap();
+        let seen = Mutex::new(Vec::new());
+        let end = physical
+            .conclude(commit, EndReason::Closed, false, |end| {
+                seen.lock().unwrap().push(end)
+            })
+            .await;
+        let unknown = TransactionEnd {
+            outcome: Outcome::Unknown,
+            reason: EndReason::Closed,
+            commit_sent: commit,
+            rollback_sent: !commit,
+        };
+        let confirmed = TransactionEnd {
+            outcome: if commit {
+                Outcome::Committed
+            } else {
+                Outcome::RolledBack
+            },
+            ..unknown
+        };
+        assert_eq!(*seen.lock().unwrap(), [unknown, confirmed]);
+        assert_eq!(end, confirmed);
+    }
+}
+
+/// B-1: a submit or begin racing a disconnect is refused or released; after both finish no job
+/// is still running and no transaction is open on the closed handle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn disconnect_racing_submit_and_begin_never_leaves_untracked_work() {
+    let fixture = Fixture::new().await;
+    let mut refused = 0;
+    for round in 0..60 {
+        let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let (closer, racer) = (connections.clone(), connections.clone());
+        let gate = barrier.clone();
+        let close = tokio::spawn(async move {
+            gate.wait().await;
+            closer.disconnect(owner, handle).await
+        });
+        let gate = barrier.clone();
+        let race = tokio::spawn(async move {
+            gate.wait().await;
+            if round % 2 == 0 {
+                racer
+                    .submit_job(owner, handle, JobOptions::new(SLOW))
+                    .map(|_| ())
+            } else {
+                racer.begin_transaction(owner, handle).await.map(|_| ())
+            }
+        });
+        close.await.unwrap().unwrap();
+        let raced = race.await.unwrap();
+        if let Err(error) = raced {
+            assert!(
+                matches!(error, ExecutionError::Forbidden | ExecutionError::Busy),
+                "{error:?}"
+            );
+            refused += 1;
+        }
+        // Whatever was admitted before the close has been released by it.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(connections.open_transactions(), 0, "round {round}");
+        assert!(
+            connections
+                .0
+                .execution
+                .jobs
+                .lock()
+                .unwrap()
+                .values()
+                .all(|entry| entry.job.is_finished()),
+            "round {round}"
+        );
+        // After the close, new work on the handle is refused.
+        assert_eq!(
+            connections
+                .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+                .unwrap_err(),
+            ExecutionError::Forbidden
+        );
+        assert_eq!(
+            connections
+                .begin_transaction(owner, handle)
+                .await
+                .unwrap_err(),
+            ExecutionError::Forbidden
+        );
+    }
+    assert!(refused > 0, "the race never reached the close");
+}
+
+#[tokio::test]
+async fn session_state_never_reaches_the_next_job_across_fault_cycles() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    for cycle in 0..100 {
+        let lease = connections.begin_transaction(owner, handle).await.unwrap();
+        let mut options = JobOptions::new(format!(
+            "CREATE TEMP TABLE leak(x); PRAGMA cache_size = 100; INSERT INTO parent VALUES ({}){}",
+            1000 + cycle,
+            if cycle % 2 == 0 {
+                "; INSERT INTO parent VALUES (1)"
+            } else {
+                ""
+            }
+        ));
+        options.lease = Some(lease);
+        run(&connections, owner, handle, options).await;
+        let commit = cycle % 4 == 1;
+        let end = connections
+            .end_transaction(owner, lease, commit)
+            .await
+            .unwrap();
+        assert_eq!(
+            end.outcome,
+            if commit {
+                Outcome::Committed
+            } else {
+                Outcome::RolledBack
+            }
+        );
+        let (batches, _) = run(
+            &connections,
+            owner,
+            handle,
+            JobOptions::new("SELECT count(*) FROM sqlite_temp_master; PRAGMA cache_size"),
+        )
+        .await;
+        assert_eq!(
+            batches[0].rows,
+            [vec![CellValue::Integer { text: "0".into() }]],
+            "cycle {cycle}"
+        );
+        assert_ne!(
+            batches[1].rows,
+            [vec![CellValue::Integer { text: "100".into() }]],
+            "cycle {cycle}"
+        );
+    }
+    // Only odd cycles where cycle % 4 == 1 committed (no failing statement there).
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id >= 1000")
+            .await,
+        25
+    );
+    assert_eq!(connections.open_transactions(), 0);
+    assert_eq!(connections.retained_jobs(), 0);
+}
+
+#[tokio::test]
+async fn large_results_apply_backpressure_and_bounds() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let mut options = JobOptions::new(
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 100000) SELECT x, 'payload-payload' FROM c",
+    );
+    options.max_rows_per_result = ExecutionLimits::MAX_ROWS_PER_RESULT;
+    let (id, _) = connections.submit_job(owner, handle, options).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The worker is parked on the full page buffer: only BUFFERED_PAGES pages exist.
+    let pages = connections.0.execution.jobs.lock().unwrap()[&id]
+        .pages
+        .clone();
+    assert_eq!(pages.lock().await.len(), ExecutionLimits::BUFFERED_PAGES);
+    assert_eq!(
+        connections
+            .fetch_job(owner, id, Duration::ZERO)
+            .await
+            .unwrap()
+            .statements[0]
+            .status,
+        StatementStatusDto::Running
+    );
+    let (batches, update) = drain(&connections, owner, id).await;
+    let rows: usize = batches.iter().map(|batch| batch.rows.len()).sum();
+    assert!(
+        batches
+            .iter()
+            .all(|batch| batch.rows.len() <= ExecutionLimits::PAGE_ROWS)
+    );
+    assert!(rows > 1000 && rows < 100_000, "{rows}");
+    assert!(batches.last().unwrap().truncated && batches.last().unwrap().last);
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+}
+
+/// Models a splitter miss: the whole text reaches the runtime as one checked statement.
+fn unsplit(sql: &str) -> Statement {
+    Statement {
+        sql: sql.into(),
+        words: vec!["CREATE".into()],
+        compound: false,
+        semicolon: false,
+        label: false,
+    }
+}
+async fn start(
+    connections: &Connections,
+    owner: OwnerId,
+    handle: ConnectionId,
+    statements: Vec<Statement>,
+    lease: Option<LeaseId>,
+) -> JobUpdate {
+    let mut options = JobOptions::new("");
+    options.lease = lease;
+    let (id, _) = connections
+        .start_job(owner, handle, statements, options)
+        .unwrap();
+    drain(connections, owner, id).await.1
+}
+/// The fixed review input (R-1): `begin`/`end` identifiers inside a trigger body.
+const SMUGGLE: &str = "CREATE TEMP TRIGGER rv AFTER INSERT ON parent BEGIN SELECT 1 AS begin; END; COMMIT; BEGIN; SELECT 1 AS end, 2 AS end";
+
+/// R-1: SQLx's SQLite driver runs every statement in the text it is given, so a statement the
+/// splitter mis-split must be refused before anything in it runs, whatever the splitter did.
+#[tokio::test]
+async fn r1_sqlite_text_with_more_than_one_statement_never_runs() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    // Inside a lease: refused before execution; the rollback is then truthful.
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (77)");
+    options.lease = Some(lease);
+    run(&connections, owner, handle, options).await;
+    // The hardened splitter already separates the smuggled COMMIT (policy refusal) …
+    let mut options = JobOptions::new(SMUGGLE);
+    options.lease = Some(lease);
+    assert_eq!(
+        connections.submit_job(owner, handle, options).unwrap_err(),
+        ExecutionError::Script(1, ScriptError::TransactionControl)
+    );
+    // … and the runtime refuses the text even when the splitter missed it.
+    let update = start(
+        &connections,
+        owner,
+        handle,
+        vec![unsplit(SMUGGLE)],
+        Some(lease),
+    )
+    .await;
+    assert_eq!(statuses(&update), [StatementStatusDto::Failed]);
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Failed));
+    assert_eq!(update.lease, Some(LeaseStateDto::RollbackOnly));
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.outcome, end.commit_sent, end.rollback_sent),
+        (Outcome::RolledBack, false, true)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 77")
+            .await,
+        0
+    );
+    // Outside a lease: refused, never Succeeded, and the smuggled insert did not run.
+    let autocommit = "CREATE TEMP TRIGGER rv AFTER INSERT ON parent BEGIN SELECT 1 AS begin; END; BEGIN; INSERT INTO parent VALUES (78); SELECT 1 AS end, 2 AS end";
+    assert!(
+        connections
+            .submit_job(owner, handle, JobOptions::new(autocommit))
+            .is_err()
+    );
+    let update = start(&connections, owner, handle, vec![unsplit(autocommit)], None).await;
+    assert_eq!(statuses(&update), [StatementStatusDto::Failed]);
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Failed));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 78")
+            .await,
+        0
+    );
+    // Other smuggling shapes: a plain second statement, a NUL byte, a `;` in a comment (refused
+    // conservatively: SQLite would accept the prefix).
+    for sql in [
+        "INSERT INTO parent VALUES (79); INSERT INTO parent VALUES (80)",
+        "INSERT INTO parent VALUES (79)\0; ATTACH 'x' AS x",
+        "INSERT INTO parent VALUES (79) /* ; */",
+    ] {
+        let update = start(&connections, owner, handle, vec![unsplit(sql)], None).await;
+        assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Failed), "{sql:?}");
+    }
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id >= 79")
+            .await,
+        0
+    );
+    // A `;` inside strings, identifiers and trigger bodies is still one statement.
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new(
+            "INSERT INTO item(id, parent, note) VALUES (5, 1, 'a;b'); SELECT 1 AS [x;y], \"p;q\"; CREATE TRIGGER tr AFTER INSERT ON parent BEGIN UPDATE item SET n = 1 WHERE note = 'a;b'; SELECT 1 AS end; END; INSERT INTO parent VALUES (81)",
+        ),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM item WHERE id = 5 AND n = 1")
+            .await,
+        1
+    );
+}
+
+/// R-3: an outcome is reported only when the session's transaction state still matches the
+/// model. The divergent statements are injected past the policy to model any future miss.
+#[tokio::test]
+async fn r3_a_diverged_session_is_never_reported_committed_or_rolled_back() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let parts = |sql: &str| script::split(sql, crate::read_only::Dialect::Sqlite).unwrap();
+    // Outside a lease: a transaction left open is discarded with the connection.
+    let update = start(
+        &connections,
+        owner,
+        handle,
+        parts("INSERT INTO parent VALUES (90); BEGIN; INSERT INTO parent VALUES (91)"),
+        None,
+    )
+    .await;
+    assert!(
+        update
+            .statements
+            .iter()
+            .all(|report| report.status == StatementStatusDto::Succeeded)
+    );
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id IN (90, 91)")
+            .await,
+        1
+    );
+    // Inside a lease: the transaction was committed by a statement, not by StoneQL.
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let update = start(
+        &connections,
+        owner,
+        handle,
+        parts("INSERT INTO parent VALUES (92); COMMIT"),
+        Some(lease),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert_eq!(update.lease, Some(LeaseStateDto::RollbackOnly));
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!(
+        (end.outcome, end.commit_sent, end.rollback_sent),
+        (Outcome::Unknown, false, false)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 92")
+            .await,
+        1
+    );
+    // A matching session keeps its outcomes.
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (93)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+}
+
+/// Waits (bounded) until `condition` holds.
+async fn eventually(condition: impl Fn() -> bool, what: &str) {
+    for _ in 0..500 {
+        if condition() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("{what}");
+}
+
+/// L-8: when the server interrupt is still in flight at the end of the cancel grace (written,
+/// no reply), it may reach the session later and hit whatever runs next. The lease connection
+/// is then discarded and the lease ended `unknown`, never kept for ROLLBACK or another job.
+#[tokio::test]
+async fn l8_an_interrupt_still_in_flight_never_leaves_its_lease_connection_in_use() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (60)");
+    options.lease = Some(lease);
+    run(&connections, owner, handle, options).await;
+    let slot = connections.0.execution.leases.lock().unwrap()[&lease]
+        .slot
+        .clone();
+    {
+        let mut guard = slot.lock().await;
+        let physical = guard.as_mut().unwrap();
+        let Interrupt::Sqlite(flag) = &physical.interrupt else {
+            unreachable!()
+        };
+        physical.interrupt = Interrupt::Stalled(flag.clone());
+    }
+    let mut options = JobOptions::new(SLOW);
+    options.lease = Some(lease);
+    let (id, _) = connections.submit_job(owner, handle, options).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(connections.cancel_job(owner, id).unwrap());
+    let (_, update) = drain(&connections, owner, id).await;
+    assert_eq!(statuses(&update), [StatementStatusDto::Unknown]);
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert!(!update.server_cancel_sent);
+    assert_eq!(update.lease, Some(LeaseStateDto::Ended));
+    let lost = TransactionEnd {
+        outcome: Outcome::Unknown,
+        reason: EndReason::ConnectionLost,
+        commit_sent: false,
+        rollback_sent: false,
+    };
+    assert_eq!(
+        connections.end_transaction(owner, lease, false).await,
+        Ok(lost)
+    );
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (61)");
+    options.lease = Some(lease);
+    assert_eq!(
+        connections.submit_job(owner, handle, options).unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert_eq!(connections.open_transactions(), 0);
+}
+
+/// L-4: the per-owner lease count is reserved before the connection is opened, so concurrent
+/// begins on different handles never exceed `MAX_LEASES_PER_OWNER`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn l4_concurrent_begins_never_exceed_the_per_owner_lease_count() {
+    let fixture = Fixture::new().await;
+    let connections =
+        Connections::new(4, Duration::from_secs(3), Duration::from_secs(600)).unwrap();
+    let owner = OwnerId::new();
+    let grant = connections
+        .grant_sqlite_file(owner, &fixture.file())
+        .unwrap();
+    let mut handles = Vec::new();
+    for _ in 0..=ExecutionLimits::MAX_LEASES_PER_OWNER {
+        handles.push(
+            connections
+                .connect_sqlite_with_access(owner, &grant, Access::ReadWrite)
+                .await
+                .unwrap(),
+        );
+    }
+    for round in 0..20 {
+        let barrier = Arc::new(tokio::sync::Barrier::new(handles.len()));
+        let begins: Vec<_> = handles
+            .iter()
+            .map(|&handle| {
+                let (connections, barrier) = (connections.clone(), barrier.clone());
+                tokio::spawn(async move {
+                    barrier.wait().await;
+                    connections.begin_transaction(owner, handle).await
+                })
+            })
+            .collect();
+        let mut opened = Vec::new();
+        for begin in begins {
+            match begin.await.unwrap() {
+                Ok(lease) => opened.push(lease),
+                Err(error) => assert_eq!(error, ExecutionError::Capacity, "round {round}"),
+            }
+        }
+        assert_eq!(
+            opened.len(),
+            ExecutionLimits::MAX_LEASES_PER_OWNER,
+            "round {round}"
+        );
+        assert_eq!(
+            connections.open_transactions(),
+            ExecutionLimits::MAX_LEASES_PER_OWNER
+        );
+        for lease in opened {
+            connections
+                .end_transaction(owner, lease, false)
+                .await
+                .unwrap();
+        }
+        assert!(connections.0.execution.opening.lock().unwrap().is_empty());
+    }
+}
+
+/// B-7: finished jobs whose pages were never fetched count against the owner's bound (8,
+/// PROPOSED), which bounds the bytes an owner can leave buffered: the 9th is refused, and
+/// fetching one to the end frees its slot.
+#[tokio::test]
+async fn b7_undrained_jobs_beyond_the_owner_bound_are_refused() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let mut ids = Vec::new();
+    for _ in 0..8 {
+        let (id, _) = connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .unwrap();
+        let job = connections.0.execution.jobs.lock().unwrap()[&id]
+            .job
+            .clone();
+        job.wait_finished().await;
+        // The permit is released just after the job finishes.
+        eventually(|| handle_idle(&connections, handle), "permit released").await;
+        ids.push(id);
+    }
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::Capacity
+    );
+    drain(&connections, owner, ids[0]).await;
+    let (id, _) = connections
+        .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+        .unwrap();
+    drain(&connections, owner, id).await;
+}
+fn handle_idle(connections: &Connections, handle: ConnectionId) -> bool {
+    connections.0.entries.lock().unwrap()[&handle]
+        .work
+        .available_permits()
+        == ExecutionLimits::RUNNING_JOBS_PER_HANDLE
+}
+
+/// R-6: ended-lease outcomes are kept per owner, so many ends by one owner (or many owners)
+/// never evict another owner's recent outcome; all owners together stay bounded.
+#[test]
+fn r6_ended_lease_records_are_kept_per_owner_and_bounded_overall() {
+    let state = ExecutionState::new();
+    let end = TransactionEnd::unknown(EndReason::Requested);
+    let (a, b) = (OwnerId::new(), OwnerId::new());
+    let kept = LeaseId(Uuid::new_v4());
+    state.record_end(kept, a, end);
+    let ids: Vec<_> = (0..40).map(|_| LeaseId(Uuid::new_v4())).collect();
+    for &id in &ids {
+        state.record_end(id, b, end);
+    }
+    assert_eq!(state.recorded(kept, a), Some(end));
+    let evicted = ids.len() - ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER;
+    assert!(
+        ids[..evicted]
+            .iter()
+            .all(|&id| state.recorded(id, b).is_none())
+    );
+    assert!(
+        ids[evicted..]
+            .iter()
+            .all(|&id| state.recorded(id, b) == Some(end))
+    );
+    // Replacing a record (unknown → confirmed) never evicts anything.
+    let confirmed = TransactionEnd {
+        outcome: Outcome::RolledBack,
+        ..end
+    };
+    state.record_end(kept, a, confirmed);
+    assert_eq!(state.recorded(kept, a), Some(confirmed));
+    assert_eq!(
+        state.ended.lock().unwrap().len(),
+        1 + ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER
+    );
+    for _ in 0..ExecutionLimits::MAX_ENDED_LEASES {
+        state.record_end(LeaseId(Uuid::new_v4()), OwnerId::new(), end);
+    }
+    assert_eq!(
+        state.ended.lock().unwrap().len(),
+        ExecutionLimits::MAX_ENDED_LEASES
+    );
+    assert_eq!(
+        state.recorded(kept, a),
+        None,
+        "the oldest record overall goes first"
+    );
+}
+
+/// B-1: disconnect and the handle-lifetime watcher make the handle unreachable **before** they
+/// release its work. The lease connection is held, so the release is parked while the
+/// registry is inspected; with the old order the handle would still be registered.
+#[tokio::test]
+async fn b1_disconnect_and_handle_expiry_remove_the_handle_before_releasing_its_work() {
+    let fixture = Fixture::new().await;
+    for path in ["disconnect", "expiry"] {
+        let lifetime = if path == "expiry" { 2 } else { 600 };
+        let connections =
+            Connections::new(4, Duration::from_secs(3), Duration::from_secs(lifetime)).unwrap();
+        let owner = OwnerId::new();
+        let grant = connections
+            .grant_sqlite_file(owner, &fixture.file())
+            .unwrap();
+        let handle = connections
+            .connect_sqlite_with_access(owner, &grant, Access::ReadWrite)
+            .await
+            .unwrap();
+        let lease = connections.begin_transaction(owner, handle).await.unwrap();
+        let slot = connections.0.execution.leases.lock().unwrap()[&lease]
+            .slot
+            .clone();
+        let held = slot.lock_owned().await;
+        let closer = connections.clone();
+        let close = tokio::spawn(async move {
+            if path == "disconnect" {
+                closer.disconnect(owner, handle).await.unwrap();
+            }
+        });
+        // Release has taken the lease and is parked on its held connection.
+        for _ in 0..600 {
+            if connections.open_transactions() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(connections.open_transactions(), 0, "{path}");
+        assert!(
+            !connections.0.entries.lock().unwrap().contains_key(&handle),
+            "{path}: the handle is still registered while its work is released"
+        );
+        drop(held);
+        close.await.unwrap();
+        assert_eq!(
+            connections
+                .end_transaction(owner, lease, false)
+                .await
+                .unwrap()
+                .reason,
+            EndReason::Closed,
+            "{path}"
+        );
+    }
+}
+
+/// B-11: rows and pages read after an interrupt are discarded, and the statement says so.
+#[tokio::test]
+async fn b11_results_read_after_an_interrupt_are_flagged_withheld() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let rows = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 100000) SELECT x FROM c";
+    let mut options = JobOptions::new(rows);
+    options.max_rows_per_result = ExecutionLimits::MAX_ROWS_PER_RESULT;
+    let (id, _) = connections.submit_job(owner, handle, options).unwrap();
+    let pages = connections.0.execution.jobs.lock().unwrap()[&id]
+        .pages
+        .clone();
+    eventually(
+        || {
+            pages
+                .try_lock()
+                .is_ok_and(|pages| pages.len() == ExecutionLimits::BUFFERED_PAGES)
+        },
+        "worker parked on a full buffer",
+    )
+    .await;
+    assert!(connections.cancel_job(owner, id).unwrap());
+    let (batches, update) = drain(&connections, owner, id).await;
+    assert_eq!(batches.len(), ExecutionLimits::BUFFERED_PAGES);
+    assert!(!batches.iter().any(|batch| batch.last || batch.truncated));
+    assert!(update.statements[0].results_withheld);
+    // Without an interrupt nothing is withheld.
+    let mut options = JobOptions::new(rows);
+    options.max_rows_per_result = ExecutionLimits::MAX_ROWS_PER_RESULT;
+    let (_, update) = run(&connections, owner, handle, options).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert!(!update.statements[0].results_withheld);
+}

@@ -31,7 +31,7 @@ pub(crate) fn authorize(path: &Path) -> Result<PathBuf, LifecycleError> {
 }
 /// Re-run at every open: a granted path later replaced by a symlink or directory is refused.
 /// SQLite still opens by path, so a same-user race between this check and open remains.
-fn verify(path: &Path) -> Result<(), LifecycleError> {
+pub(crate) fn verify(path: &Path) -> Result<(), LifecycleError> {
     let metadata = std::fs::symlink_metadata(path).map_err(|_| LifecycleError::Forbidden)?;
     let canonical = std::fs::canonicalize(path).map_err(|_| LifecycleError::Forbidden)?;
     if !metadata.file_type().is_file() || canonical != path {
@@ -52,6 +52,22 @@ pub(crate) fn options(path: &Path) -> SqliteConnectOptions {
         .busy_timeout(BUSY_TIMEOUT)
         .statement_cache_capacity(0)
         .pragma("query_only", "ON")
+        .pragma("trusted_schema", "OFF")
+        .pragma("cell_size_check", "ON")
+        .pragma("mmap_size", "0")
+        .disable_statement_logging()
+}
+
+/// Explicit read-write profiles only: the same hardening without the read-only open.
+/// SQLite may create `-journal`/`-wal`/`-shm` files beside the granted database.
+pub(crate) fn write_options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(false)
+        .create_if_missing(false)
+        .immutable(false)
+        .busy_timeout(crate::ExecutionLimits::SQLITE_WRITE_BUSY_TIMEOUT)
+        .statement_cache_capacity(0)
         .pragma("trusted_schema", "OFF")
         .pragma("cell_size_check", "ON")
         .pragma("mmap_size", "0")

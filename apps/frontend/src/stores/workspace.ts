@@ -1,6 +1,6 @@
-import { openLive, closeLive, queryLive, liveStatus } from '../services/liveConnections';
+import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd } from '../services/liveConnections';
 import {NativeOperationError} from '../services/nativeHost';
-import type {LiveConnection} from '../../../../contracts/generated/v1';
+import type {AccessModeDto, LiveConnection, TransactionActionDto, TransactionEnd} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
@@ -27,6 +27,7 @@ import {
   connectionSnapshot,
   CONNECTION_STORAGE_KEY,
 } from '../services/connectionPreferences';
+export const LEASE_OUTCOME_UNREADABLE = 'The open transaction was ended by disconnecting, but its outcome could not be read. Treat it as unknown and verify on the server.';
 export const useWorkspace = defineStore('workspace', () => {
   const loaded = loadConnectionPreferences(localStorage, samples);
   const connections = ref<Connection[]>(loaded.connections);
@@ -93,20 +94,34 @@ export const useWorkspace = defineStore('workspace', () => {
     if (i < 0 || !other) return;
     [groups.value[i], groups.value[i + direction]] = [other, groups.value[i]!];
   }
-  const liveSessions = ref<Record<string,{status:'connecting'|'connected'|'disconnected'|'error';info?:LiveConnection;error?:string}>>({});
+  const liveSessions = ref<Record<string,{status:'connecting'|'connected'|'disconnected'|'error';info?:LiveConnection;error?:string;lease?:{id:string;state:'active'|'rollback_only'}}>>({});
   const liveGenerations = new Map<string,number>();
-  async function disconnectLiveProfile(id:string) {
+  /**
+   * Closes the live handle. An open transaction is ended natively by the close; its recorded
+   * outcome is then read by lease id (an outcome query: nothing is sent again). Returns that
+   * outcome, null when it could not be read, or undefined when no transaction was open.
+   * When the close itself fails, the transaction is still ended by lease id and its outcome is
+   * appended to the thrown error and the session error.
+   */
+  async function disconnectLiveProfile(id:string):Promise<TransactionEnd|null|undefined> {
+    const lease=liveSessions.value[id]?.lease;
     liveGenerations.set(id,(liveGenerations.get(id)||0)+1);
     const handle=liveSessions.value[id]?.info?.handle;
     liveSessions.value[id]={status:'disconnected'};
-    if(handle) { try { await closeLive(handle); } catch(error) { if(!(error instanceof NativeOperationError && error.code==='FORBIDDEN')) {liveSessions.value[id]={status:'error',error:(error as Error).message};throw error;} } }
+    const leaseEnd=async()=>lease?endLiveTransaction(lease.id,'rollback').catch(()=>null):undefined;
+    if(handle) { try { await closeLive(handle); } catch(error) { if(!(error instanceof NativeOperationError && error.code==='FORBIDDEN')) {
+      const end=await leaseEnd();
+      if(end!==undefined)(error as Error).message+=` ${end?describeTransactionEnd(end).text:LEASE_OUTCOME_UNREADABLE}`;
+      liveSessions.value[id]={status:'error',error:(error as Error).message};throw error;
+    } } }
+    return leaseEnd();
   }
-  async function connectLiveProfile(profile:Connection, attemptId?:string) {
+  async function connectLiveProfile(profile:Connection, attemptId?:string, access?:AccessModeDto) {
     await disconnectLiveProfile(profile.id);
     const generation=liveGenerations.get(profile.id)!;
     liveSessions.value[profile.id]={status:'connecting'};
     try {
-      const info=await openLive(profile, attemptId);
+      const info=await openLive(profile, attemptId, access);
       if(liveGenerations.get(profile.id)!==generation){await closeLive(info.handle);throw new Error('Connection configuration changed during startup.');}
       liveSessions.value[profile.id]={status:'connected',info};
     }catch(error){
@@ -139,6 +154,39 @@ export const useWorkspace = defineStore('workspace', () => {
         try{await disconnectLiveProfile(id);}catch{};
         liveSessions.value[id]={status:'error',error:error.message};
       }
+      throw error;
+    }
+  }
+  /** Read-write job on the live handle, inside the open transaction lease when there is one. */
+  async function runLiveJobFor(id:string,sql:string,onJob?:(jobId:string)=>void) {
+    const current=liveSessions.value[id];
+    if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile before running SQL.');
+    const generation=liveGenerations.get(id);
+    const result=await runLiveJob(current.info.handle,sql,{leaseId:current.lease?.id,onJob});
+    if(liveGenerations.get(id)!==generation)throw new Error('Results were discarded because the connection changed. Outcomes of sent statements are unknown to this view.');
+    const session=liveSessions.value[id];
+    if(session?.lease&&result.lease){
+      if(result.lease==='ended'){session.lease=undefined;session.error='The transaction connection was lost. Its outcome is unknown: COMMIT was never sent, but the rollback was not confirmed.';}
+      else session.lease.state=result.lease;
+    }
+    return result;
+  }
+  async function beginLiveTransaction_(id:string) {
+    const current=liveSessions.value[id];
+    if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile first.');
+    const lease=await beginLiveTransaction(current.info.handle);
+    current.lease={id:lease.leaseId,state:'active'};
+  }
+  async function endLiveTransaction_(id:string,action:TransactionActionDto) {
+    const current=liveSessions.value[id];
+    if(!current?.lease)throw new Error('No transaction is open.');
+    try {
+      const end=await endLiveTransaction(current.lease.id,action);
+      current.lease=undefined;
+      return end;
+    } catch(error) {
+      // The host removed the lease before sending COMMIT/ROLLBACK; only its outcome is unknown.
+      if(error instanceof NativeOperationError && error.code==='DEADLINE_EXCEEDED')current.lease=undefined;
       throw error;
     }
   }
@@ -305,6 +353,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
     liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus,
+    runLiveJob: runLiveJobFor, beginLiveTransaction: beginLiveTransaction_, endLiveTransaction: endLiveTransaction_,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,
     connections,
     groups,

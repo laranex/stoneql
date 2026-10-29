@@ -65,16 +65,26 @@ const nativeMessages: Record<string,string> = {
   SSH_AUTHENTICATION_FAILED: 'SSH authentication failed. Check the SSH username, password, key file or passphrase.',
   SSH_AGENT_UNAVAILABLE: 'The SSH agent is unavailable. Start an agent with your key loaded, or choose another method.',
   SECRET_UNAVAILABLE: 'The saved credential is unavailable or belongs to a different target. Enter it again.',
+  BUSY: 'This connection is busy with another statement or an open transaction. Nothing was queued or sent.',
+  CONFLICT: 'A statement in this transaction failed; only rollback is possible.',
 };
-export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret';
+// The host's own fixed text is more specific for these codes (it never contains SQL or values).
+const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT']);
+/**
+ * Renderer waits never end before the native worst case: end_transaction is COMMIT (10 s) +
+ * ROLLBACK (2 s) + close (2 s); disconnect releases jobs/leases (5 s) then closes the pool and tunnel.
+ */
+export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000 };
+export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction';
 export async function nativeDatabase<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
   try {
     // Native pickers and the OS credential store may wait for the user; database work is bounded.
     const interactive = ['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret'].includes(command);
-    return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, interactive ? 120_000 : 8000);
+    return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, interactive ? 120_000 : nativeWaitMs[command] ?? 8000);
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : error instanceof Error && error.message === 'Native host timeout' ? 'DEADLINE_EXCEEDED' : 'INTERNAL';
-    throw new NativeOperationError(code, nativeMessages[code] || 'Native operation failed. No mock fallback was used.');
+    const hostMessage = hostMessages.has(code) && error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : undefined;
+    throw new NativeOperationError(code, hostMessage || nativeMessages[code] || 'Native operation failed. No mock fallback was used.');
   }
 }

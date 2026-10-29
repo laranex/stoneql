@@ -31,6 +31,8 @@ pub enum ReadError {
     Database,
     ResultTooWide,
     PacketTooLarge,
+    /// A read-write handle is running a job or holds an open transaction.
+    Busy,
 }
 impl std::fmt::Display for ReadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,6 +44,7 @@ impl std::fmt::Display for ReadError {
             Self::Database => "The database rejected or could not complete the query.",
             Self::PacketTooLarge => "The database response exceeded the incoming packet limit; its connection was discarded.",
             Self::ResultTooWide => "Result metadata exceeds the configured byte limit.",
+            Self::Busy => "The connection is busy with another statement or an open transaction.",
         })
     }
 }
@@ -75,14 +78,10 @@ impl Connections {
         let pool = self
             .owned_pool(owner, id)
             .ok_or(ReadError::Connection(LifecycleError::Forbidden))?;
-        validate_select(
-            sql,
-            match pool {
-                EnginePool::MySql(_) => Dialect::MySql,
-                EnginePool::Postgres(_) => Dialect::Postgres,
-                EnginePool::Sqlite(_) => Dialect::Sqlite,
-            },
-        )?;
+        // Read-only handles are unchanged; read-write handles never run this beside a job or
+        // an open transaction (one physical session of work per handle).
+        let _exclusive = self.exclusive_read(owner, id)?;
+        validate_select(sql, pool.dialect())?;
         tokio::time::timeout(limits.deadline, async {
             match pool {
                 EnginePool::MySql(pool) => {
@@ -187,7 +186,7 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Dialect {
+pub(crate) enum Dialect {
     MySql,
     Postgres,
     Sqlite,

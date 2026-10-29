@@ -39,6 +39,7 @@
     "test:native-database": "node tools/test-connection-lifecycle.mjs --native-ipc",
     "test:native-postgres": "node tools/test-postgres-fixture.mjs",
     "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile",
-    "test:ssh": "node tools/test-ssh-fixture.mjs"
+    "test:ssh": "node tools/test-ssh-fixture.mjs",
+    "test:execution": "node tools/test-connection-lifecycle.mjs --execution && node tools/test-postgres-fixture.mjs --execution"
   }
 }

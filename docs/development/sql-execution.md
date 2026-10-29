@@ -1,0 +1,155 @@
+# Read-write SQL execution
+
+**Status: M006 execution half — local implementation and fixture evidence recorded; not accepted. Read-write is disabled in builds pending safety approval** (see [Gates](#gates)). Follow-up pass 2026-10-29: PostgreSQL session check and checked COMMIT, PostgreSQL `statement_timeout` backstop, in-flight interrupt handling, `resultsWithheld`, per-owner bounds, and lost-COMMIT/ROLLBACK fixtures at n = 50 on all three network engines. Every limit below is **PROPOSED**, implemented as a working default under the user's 2026-10-26 continuation instruction and awaiting review. Read-write over SSH is **disabled** separately. Schema metadata, caches, object management and live browse/CRUD are separate, pending work. Browser/default profiles remain mocks.
+
+Read-write execution is an explicit, per-session opt-in on desktop Live profiles. The M003 read-only path ([read-only safety](./read-only-safety.md)) is unchanged and remains the default for every connection.
+
+## Access mode
+
+**Native gate (implemented, default OFF).** The desktop host refuses `access: read_write` with `UNSUPPORTED_CAPABILITY` ("Read-write SQL is disabled in this build pending safety approval") for every engine and route, before any Keychain lookup or network I/O. The gate is the single constant `READ_WRITE_SQL_ENABLED = false` (`apps/desktop/src-tauri/src/lib.rs`), carried in `HostServices.read_write_sql`. Only trusted host code can enable it: tests inject it through `app_builder_with`; there is no renderer input or environment variable for it. `HostInfo.readWriteSql` reports the gate so the UI can show the read-write option disabled with a "pending safety approval" note; the renderer only mirrors the host. The runtime service (`stoneql-runtime`) itself is not gated, so the fixture harness and unit tests exercise it directly. Everything below describes behaviour once the gate is enabled.
+
+- **Read-only (default):** `read_only_query` only, with the engine-enforced read-only boundary. Job and transaction commands are refused (`UNSUPPORTED_CAPABILITY`).
+- **Read-write:** chosen in the connection dialog's **Session access** select for one connection. It is not saved; the next connection is read-only again. A PROD-tagged profile needs the "PROD — I understand" acknowledgement before connecting read-write. That acknowledgement, and the confirmation shown before running scripts containing `DELETE`, `UPDATE`, `DROP`, `TRUNCATE`, `ALTER`, `REPLACE`, `RENAME`, `GRANT` or `REVOKE`, are **UX safeguards, not authorization**. Database privileges decide what is allowed.
+- The environment tag is not sent to the native host; there is no host-side PROD check.
+
+## Jobs
+
+`submit_job` starts a script now or refuses it. **Nothing is queued:** while a read-write handle runs a job or holds a transaction, another job, a read-only query on that handle or a new transaction gets `BUSY`. A refused request was never sent.
+
+1. The script is split into statements client-side ([splitter](#statement-splitting)) and checked against the [policy](#statement-policy). A refusal rejects the whole script before anything is sent.
+2. Outside a transaction, the job opens a **dedicated physical connection** from the handle's verified options (same TLS identity). It is never taken from or returned to a pool, and is closed when the job ends. Session state (`SET`, `USE`, temporary tables, locks) therefore cannot reach another job or the read-only path.
+3. Statements run one at a time and stop at the first that does not succeed. MySQL/MariaDB, PostgreSQL and SQLite statements are prepared, so results use the reviewed lossless binary decoders; MySQL statements that cannot be prepared (`USE`, routine DDL, `LOCK TABLES`; error 1295) use the text protocol with server-rendered text values.
+   - **SQLite single statement (R-1, implemented and unit-tested).** SQLx's SQLite driver runs *every* statement in the text it is given (it keeps preparing the tail SQLite leaves), so before a statement is sent the runtime checks with SQLite itself that the text is exactly one statement: for every `;` that has text after it, the prefix up to it is prepared (never executed). The statement runs only if each prefix fails with a parse error (`incomplete input` inside a trigger body, an unterminated token, a syntax error), which depends only on the text. A prefix that prepares, or fails for another reason, refuses the statement (`failed`, nothing sent, later statements not sent; inside a transaction the lease becomes rollback-only). Statements with a NUL byte or more than 256 `;` are refused. Conservative effect: a `;` inside a comment refuses the statement.
+4. Results stream in bounded **pages**. The worker parks while two unread pages are buffered, without reading the database stream (backpressure). `fetch_job` long-polls up to 1 s for the next page. A finished job is released after its final page.
+5. **After an interrupt** (cancel, deadline, close) no further page is delivered, even if the consumer frees a slot; the statement is only driven to its end. Every statement whose rows, pages or result sets were read but not delivered reports `resultsWithheld: true` (B-11), and the renderer marks that statement's result sets truncated and says the rows shown are incomplete. This matters when a statement still completes after the interrupt: MySQL's killed `SLEEP()` returns success, and a last statement that completes within the grace period leaves the job `succeeded`.
+
+Multiple result sets (scripts, PostgreSQL `CALL`) are kept in order with their statement index. MySQL/MariaDB `CALL` is refused in read-write scripts (see [policy](#statement-policy)).
+
+### Outcomes
+
+Each statement reports exactly one status: `not_run` (never sent), `succeeded` or `failed` (the server replied), or `unknown`. The job reports one outcome:
+
+| Outcome | Meaning |
+| --- | --- |
+| `succeeded` | Every statement returned a server success **and** the session's transaction state matched afterwards ([session check](#session-transaction-state)). Outside a transaction each success is committed (autocommit). |
+| `failed` | The server rejected a statement (confirmed failure), or StoneQL refused a SQLite statement that is not exactly one statement. Earlier statements keep their status; later ones were not sent. Constraint kind (`unique`, `foreign_key`, `not_null`, `check`) and SQLSTATE are reported; database message text is withheld because it can contain row values. On MySQL non-transactional tables (MyISAM) a rejected multi-row statement can leave partial rows. |
+| `cancelled` | Stopped **before** a statement was sent: nothing ran after the request. |
+| `unknown` | A statement was sent and then interrupted, lost or abandoned. Its effects cannot be excluded, even when its end was observed. A server-terminated session (PostgreSQL SQLSTATE class `08` or `57P*`, MySQL/MariaDB 1053/1927) also counts as lost, not as a statement failure. Also `unknown` when every statement replied but the session's transaction state did not match afterwards, or could not be checked within 2 s. |
+
+Separately, `cancellation` is `none`, `requested` (cancel or deadline raised) or `confirmed` (the work was observed to stop), and `serverCancelSent` records that a best-effort server interrupt was delivered. None of these says that effects were undone. **Nothing is retried automatically**, including reads.
+
+### Session transaction state
+
+**Implemented (R-3, PostgreSQL added 2026-10-29); MySQL/MariaDB checks verified on real 8.4.6 and 11.4.8 fixtures, PostgreSQL on a real 17.6 fixture, SQLite in unit tests.** After every job whose outcome is not already `unknown`, before its connection is discarded or returned to the lease, the runtime checks the server session:
+
+| Engine | Check | Expected outside a transaction | Expected inside a lease |
+| --- | --- | --- | --- |
+| MySQL, MariaDB | `SELECT @@autocommit`, then `SET TRANSACTION READ WRITE` (refused with ER 1568 exactly while a transaction is active; it only sets the next transaction's access mode on a connection that is never reused) | autocommit 1 and `SET TRANSACTION` accepted | ER 1568 |
+| SQLite | `BEGIN` (rolled back at once when it succeeds) | accepted | "cannot start a transaction within a transaction" |
+| PostgreSQL | `SAVEPOINT stoneql_state`, released at once when it succeeds (no side effect: no transaction id is assigned, nothing is written) | refused with SQLSTATE 25P01 (no transaction block) | accepted; or refused with 25P02 (aborted block), which matches only after a job with a failed statement (the lease is rollback-only anyway) |
+
+A mismatch, error or timeout makes the job `unknown`. Inside a lease it also marks the lease **diverged**: it becomes rollback-only, and ending it sends neither COMMIT nor ROLLBACK; the connection is discarded and the end is `unknown` with `commitSent: false`, `rollbackSent: false`. Nothing runs on a lease session between a job's check and COMMIT/ROLLBACK, so the end itself is not re-checked (a check there would also replace the COMMIT as the first statement a lost reply can hit). Known conservative case: a MySQL deadlock (ER 1213) rolls back the whole transaction, so the lease is reported diverged and its end `unknown` even though the server rolled it back.
+
+The UI's success text is "N statements executed successfully (autocommit)" or "(in the open transaction)"; it no longer says "(committed)".
+
+### Cancellation and deadlines
+
+On cancel, statement deadline (default 30 s, maximum 300 s) or job deadline (600 s), the runtime sends a best-effort server interrupt and keeps driving the statement for up to 1.5 s:
+
+| Engine | Interrupt | Observed end |
+| --- | --- | --- |
+| MySQL, MariaDB | `KILL QUERY <connection id>` over a separate short-lived connection (1 s connect bound) | Error 1317, or the statement's normal completion |
+| PostgreSQL | `pg_cancel_backend(<pid>)` over a separate connection | SQLSTATE 57014 |
+| SQLite | Progress-handler interrupt flag | `SQLITE_INTERRUPT` |
+
+The client connection is abandoned only after the interrupt was attempted, so a MySQL autocommit write is not left running merely because the client dropped its socket. If the statement does not end within the grace period, the connection is discarded and cancellation stays `requested`.
+
+- **Interrupt still in flight (L-8).** If the KILL/`pg_cancel_backend` has not answered by the end of the grace period it may still reach the session later and hit whatever runs next on it. The connection is then never used again: outside a lease it is discarded, and a lease ends `unknown` (`connection_lost`, neither COMMIT nor ROLLBACK sent). A job that sent any statement is then `unknown`. An interrupt that answered is harmless: a `KILL QUERY` on an idle MySQL 8.4.6 / MariaDB 11.4.8 session and a `pg_cancel_backend` on an idle PostgreSQL 17.6 backend did not affect the next statement (probed on disposable containers). Residual: `pg_cancel_backend` returns once the signal is sent, so a signal handled after the next command was read could still cancel it; after any interrupt the lease is rollback-only, so that command is the session check or ROLLBACK, and either failing is reported `unknown`.
+- **PostgreSQL server backstop (L-3, PROPOSED).** Every PostgreSQL job first sets `statement_timeout` to its statement deadline + 2 s. The client path (interrupt, then 1.5 s grace) normally ends a statement first; the server ends one the client had to abandon (for example when no cancel connection could be opened). This deliberately differs from safety contract 5's "server timeout < client deadline": a server-first timeout would turn every PostgreSQL deadline into a confirmed `failed` (57014) and the client cancel path would never run. If the `SET` is refused or the session is lost, no user statement is sent and the job is `failed`; in a lease the block may be aborted, so the lease becomes rollback-only (or ends `unknown` when the session is gone). Residual: a script's own `SET statement_timeout = 0` disables it for the rest of that job (PostgreSQL `SET` is not refused). MySQL/MariaDB have no backstop: `max_execution_time` applies to `SELECT` only and MariaDB `max_statement_time` was not evaluated.
+
+## Transactions
+
+`begin_transaction` opens a lease: one dedicated physical connection with an open transaction, scoped to the owner and handle. The lease holds the handle exclusively.
+
+- Scripts submitted with the lease ID run on that connection. If any statement fails or is interrupted, the lease becomes **rollback-only**: further statements and COMMIT are refused (`CONFLICT`), ROLLBACK is accepted.
+- `end_transaction` commits or rolls back and always discards the connection. **`committed`/`rolled_back` are reported only when the server confirmed COMMIT/ROLLBACK on a lease whose session state matched after every job.** On PostgreSQL and SQLite a COMMIT refused with a database error aborts the transaction, so ROLLBACK follows and is reported as rolled back only if confirmed. On MySQL/MariaDB that abort is not proven, so a refused COMMIT is `unknown` (`commitSent: true`, no ROLLBACK sent; fixture: ER 1290 under `read_only`). Everything else is `unknown`, with `commitSent` and `rollbackSent` saying whether COMMIT or ROLLBACK was ever **attempted** (set just before sending, so a connection lost before the bytes left still reports it; neither says the server received it).
+- **PostgreSQL COMMIT (R-10).** A plain `COMMIT` on an aborted transaction block is answered OK with command tag `ROLLBACK`, which SQLx reports as success. StoneQL therefore sends `SAVEPOINT stoneql_commit; COMMIT` as one simple-query message: on an aborted block the savepoint fails (25P02), PostgreSQL skips the rest of the message, and the ROLLBACK that follows is reported only if confirmed; outside a block (25P01) COMMIT never runs and no ROLLBACK is sent (PostgreSQL would answer it OK with a warning), so the end is `unknown`. Being one message, COMMIT is still the first statement a lost reply can hit.
+- **Outcomes are recorded before anything is sent.** Every end path (user request, expiry, disconnect, handle expiry, renderer reload, shutdown, lost connection) records `unknown` for the lease, with the sent facts, at the moment the lease is removed and again just before COMMIT or ROLLBACK is sent. Only a server confirmation replaces that record. A release cut off by its 5 s bound therefore leaves `unknown`, never a missing outcome.
+- A lease idle for 60 s, or open for 15 min, is rolled back (`reason: expired`). Disconnect, renderer reload, handle expiry and shutdown interrupt running jobs and roll back open leases (2 s rollback deadline, 5 s overall bound; `reason: closed`). A lost lease connection ends it with `unknown`/`connection_lost`, `commitSent: false`, `rollbackSent: false`.
+- `end_transaction` on a lease that already ended returns the recorded outcome on **every** later call (`unknown` while an end is still in progress) and sends nothing; it is never a second COMMIT. Ended outcomes are kept **per owner**: the newest 32 of each owner, so one owner's ends never evict another's, and at most 256 across all owners (owners change at every renderer reload; the oldest record overall goes first). An evicted outcome is answered `FORBIDDEN`, which the renderer reports as "treat as unknown" (R-6). After a renderer reload the new session can still query an old lease id it knows; the renderer does not keep ids across a reload, so post-reload reporting (safety contract 4.5) is not implemented.
+- Disconnect and handle expiry remove the handle from the registry **before** releasing its work (the same order as reset and shutdown). A job or transaction submitted concurrently either is released by the close or is refused (`FORBIDDEN`); it never runs untracked. A job interrupted before it opened its connection never opens one. The order is tested deterministically: with the lease connection held, the release is parked while the registry is inspected (B-1).
+- The per-owner transaction count is reserved atomically before the lease connection is opened, so concurrent `begin_transaction` calls on different handles never exceed 2 (L-4).
+- The renderer waits up to 20 s for `end_transaction` (the native worst case is COMMIT 10 s + ROLLBACK 2 s + close 2 s). If that wait times out on a commit, it reports "commit outcome unknown", not a cancellation. Disconnecting with an open transaction asks first and then shows the recorded outcome.
+
+## Statement splitting
+
+Statements are split on `;` outside quotes, identifiers and comments. The splitter never rewrites statement text.
+
+- MySQL/MariaDB: `'…'`/`"…"` strings with backslash escapes, backtick identifiers, `#` and `-- ` comments; `/*! … */` executable comments are lexed as code. The client `DELIMITER` directive is honoured for routine bodies, as in the mysql CLI and phpMyAdmin.
+- PostgreSQL: `$tag$…$tag$` dollar quoting, `E''` escapes, nested block comments; SQL-standard `BEGIN ATOMIC … END` bodies stay whole.
+- SQLite: `[…]` and backtick identifiers; a `CREATE [TEMP] TRIGGER` body ends only at `; END ;`, as in SQLite's grammar and `sqlite3_complete`, so `begin`/`end` used as identifiers cannot move the boundary. The splitter is not the authority: the runtime's [single-statement check](#jobs) is.
+- At most 100 statements and 64 KiB per script.
+
+## Statement policy
+
+Refused before anything is sent (`UNSUPPORTED_SQL`, with the statement index known to the runtime):
+
+- Transaction control anywhere: `BEGIN` (including MariaDB `BEGIN NOT ATOMIC`), `START TRANSACTION`, `COMMIT`/`ROLLBACK` (including `AND CHAIN`/`RELEASE`), `END`, `ABORT`, `XA`, `PREPARE TRANSACTION`, and any `SET` statement that names `autocommit` in any position, case, quoting (`` `autocommit` ``, `"autocommit"`), comment layout or scope (`SESSION`, `GLOBAL`, `@@session.`). The scan covers every word of the statement, not a leading window. Use the transaction controls.
+- MySQL/MariaDB wrappers, in and out of a transaction (R-2): MariaDB `SET STATEMENT … FOR <statement>` (whatever the inner statement); compound statements outside a stored program (`CASE`, `IF`, `LOOP`, `WHILE`, `REPEAT`, `FOR`, and any statement starting with a label `name:`); and `CALL`, because a procedure can `SET autocommit`, `START TRANSACTION`, `COMMIT` or `PREPARE` internally (R-3). PostgreSQL `CALL` is unchanged.
+- MySQL/MariaDB `PREPARE`, `EXECUTE` (including MariaDB `EXECUTE IMMEDIATE`), `DEALLOCATE PREPARE`/`DROP PREPARE`, in and out of a transaction, also inside the wrappers above: the prepared text (for example `COMMIT`, DDL or `SET autocommit`) would be invisible to this policy.
+- MySQL/MariaDB statements that contain a further `;` outside a `BEGIN … END` body under a custom `DELIMITER`. SQLx enables multi-statements, so a text-protocol fallback would otherwise run the hidden statement unchecked. Routine bodies in `CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT` are still accepted outside a transaction.
+- Savepoints (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): not offered in this slice.
+- **Inside a MySQL/MariaDB transaction, an allowlist** of leading keywords replaces the earlier implicit-commit denylist. Accepted: `SELECT`, `WITH`, `VALUES`, `TABLE`, `SHOW`, `DESCRIBE`/`DESC`, `EXPLAIN` (reads); `INSERT`, `UPDATE`, `DELETE`, `REPLACE` (transactional row changes); `USE` (changes only the default schema); `CREATE TEMPORARY TABLE`/`DROP TEMPORARY TABLE` (documented as not committing implicitly); and `SET` whose every assignment target is a user variable `@name` (no comments allowed in it). None commits implicitly or changes autocommit, and a stored function or trigger they invoke cannot COMMIT (the server refuses it). The statement must not contain `;` anywhere. Everything else is refused, including DDL, `LOCK`, `SET TRANSACTION`, `SET SESSION …`, `SET NAMES`, `HANDLER`, `DO`, `LOAD`, MariaDB `ANALYZE <statement>`. PostgreSQL DDL is transactional and allowed.
+- SQLite: `ATTACH`, `DETACH` and `VACUUM INTO`, which reach files outside the granted database.
+- Residual (documented, covered by the session check): outside a transaction, a MySQL/MariaDB routine-DDL statement whose `BEGIN … END` nesting the splitter misjudges (for example `begin` used as an alias) could, on the text-protocol fallback, run a further statement unchecked. The prepared protocol rejects multi-statement text (ER 1064, checked on both servers), so this needs a statement the server refuses to prepare (ER 1295) as a whole; any transaction state it leaves is caught by the session check.
+
+Read-write SQLite connections open the granted file without `SQLITE_OPEN_READONLY`/`query_only`, keep `trusted_schema=OFF`, `cell_size_check=ON`, `mmap_size=0`, re-verify the canonical grant at every open and wait up to 5 s on locks. SQLite may create `-journal`/`-wal`/`-shm` files beside the database.
+
+## Limits
+
+All values are **PROPOSED**, defined once in `ExecutionLimits` (`crates/stoneql-runtime/src/execution.rs`).
+
+| Limit | Value |
+| --- | --- |
+| Running jobs per handle / queue depth | 1 / 0 (BUSY) |
+| Job records per owner (running + unread) | 8; finished records released after 300 s (B-7). This also bounds buffered bytes per owner: a record holds at most 2 unread pages plus the page its worker is about to send, so typically 8 × 3 × 256 KiB = 6 MiB, and 24 MiB when single rows fill 1 MiB pages. No separate byte cap. |
+| Open transactions | 1 per handle, 2 per owner |
+| Statements / script size | 100 / 64 KiB |
+| Statement deadline | 30 s default, 300 s maximum |
+| Job deadline | 600 s |
+| Rows per result set | 1,000 default, 100,000 maximum |
+| Bytes per result set / per job | 1 MiB / 4 MiB serialized rows; later sets truncated and flagged |
+| Result sets per job | 16 (further sets reported without data) |
+| Result metadata | 256 KiB per result set |
+| Page | 500 rows or 256 KiB; 2 buffered pages |
+| Fetch long-poll | 1 s |
+| Abandoned consumer | 60 s parked on a full buffer → interrupted |
+| Cancel grace / cancel connect | 1.5 s / 1 s |
+| Lease idle / maximum lifetime | 60 s / 15 min |
+| Ended-lease outcomes kept | 32 per owner, 256 overall |
+| PostgreSQL `statement_timeout` backstop | statement deadline + 2 s |
+| COMMIT / ROLLBACK deadline | 10 s / 2 s |
+| Release on close/reset/shutdown | 5 s overall |
+| SQLite read-write busy timeout | 5 s |
+
+The handle lifetime (3600 s) is still defined in two places (desktop `NativeSession` and the `expires_after_seconds` reply); not changed here.
+
+## Verification
+
+| Command | Covers |
+| --- | --- |
+| `npm run rust:test` | Splitter/policy units (autocommit anywhere, PREPARE/EXECUTE, custom-DELIMITER smuggling, MariaDB `SET STATEMENT`/compound/`CALL` refusals, in-lease allowlist, SQLite trigger `begin`/`end` identifiers); R-1 text with more than one SQLite statement never runs, in and out of a lease (including the review's trigger input fed past the splitter); R-3 a diverged SQLite session is `unknown` and its lease end sends nothing; release cut off by its 5 s bound records `unknown` (disconnect, reset, shutdown); `unknown` recorded before COMMIT/ROLLBACK is sent; disconnect racing submit/begin (60 rounds); removal-before-release order for disconnect and handle expiry (B-1, held lease connection); concurrent begins never exceed 2 leases per owner (L-4); an interrupt still in flight never leaves its lease connection in use (L-8, test-only stalled interrupt); the 9th undrained job is refused (B-7); ended outcomes kept per owner (R-6); rows read after an interrupt flagged `resultsWithheld` (B-11); SQLite owner isolation, BUSY, constraint failures, exact values, cancel/deadline (5 latency samples < 2 s), commit/rollback/rollback-only, close and expiry rollback, 100 lease/fault cycles with no session-state leak, backpressure buffer bound |
+| `npm run desktop:test` | Native gate: production builder refuses `read_write` for MySQL, MariaDB, PostgreSQL, SSH and SQLite before Keychain/network and reports `readWriteSql: false`. With the gate enabled by test injection: job and transaction commands through the Tauri handlers on SQLite (strict decoding, ownership, BUSY, cancel, commit/rollback, repeat end returns the recorded outcome, disconnect and reload rollback queryable by lease id) |
+| `npm run test:execution` | Disposable TLS MySQL 8.4.6, MariaDB 11.4.8 and PostgreSQL 17.6 fixtures, each with a test-owned loopback fault relay (`tools/tcp-fault-relay.mjs`) and a server statement log (MySQL/MariaDB `general_log`; PostgreSQL csvlog with `log_statement = all` for the writer role only). All three engines: 30 blocked-`UPDATE` cancels (interrupt delivered, connection discarded, executed once), bulk `INSERT…SELECT` cancel, failed interrupt connection (PostgreSQL: `statement_timeout` backstop ends the abandoned statement), lost COMMIT/ROLLBACK replies at n = 50 for `sever_on_reply` (Contract 7.1) and `sever` (7.2) plus n = 3 `drop_s2c` (each waits out the 10 s COMMIT deadline), never re-sent. MySQL/MariaDB: COMMIT refused with ER 1290 under `read_only` is `unknown` with no ROLLBACK. PostgreSQL: session check and checked COMMIT on real sessions (healthy, aborted, outside a block; plain COMMIT on an aborted block answered OK as the positive control). Also: exact values, scripts and procedure result sets, DDL partial outcome, unique/FK failures, commit/rollback/rollback-only, connection killed mid-transaction, 100 cancel samples (p50/p95/max), statement deadline, 100 fault/transaction cycles with session-state probes and server session count back to baseline, backpressure, real 60 s lease expiry. MySQL/MariaDB also: `SET STATEMENT … FOR COMMIT`/`CREATE TABLE`/`PREPARE`, `CASE … COMMIT; END CASE`, `CASE … SET …; END CASE` and `CALL` of procedures doing `SET autocommit = 0`/`START TRANSACTION` refused in and out of a lease with zero general-log rows (all command types); the runtime's session check reports a mismatch for real sessions left by those procedures (whose `INSERT` reported 1 row and was gone after close) and for a transaction committed behind a lease; and MySQL's killed `SLEEP()` reported succeeded with its row flagged withheld. Reports in `artifacts/m006/` (ignored); copies in `.ref/planning/m006-evidence/execution/` |
+| `npm run test:browser` | Read-write UI in both themes against a stubbed host: gate off shows the option disabled; failed job never says "executed successfully"; disconnect with an open transaction confirms and shows its outcome |
+| `npm test` (`liveJobs.test.ts`) | A statement with `resultsWithheld` marks its result sets truncated and the notice says the rows shown are incomplete; autocommit success says "(autocommit)", never "(committed)"; `unknown` with every statement succeeded is described as a session-state mismatch; unknown transaction ends say COMMIT/ROLLBACK "may have been sent" |
+
+## Gates
+
+- **Read-write gate:** off in builds (`READ_WRITE_SQL_ENABLED = false`) until the critical safety tests pass and the user approves. Enabling it is a reviewed code change, not a setting.
+- **SSH:** read-write is refused for SSH-tunnelled handles before any network access (and before Keychain resolution in the desktop host). Cancel connections need a forwarding channel and the tunnel admits four; cancellation under slot exhaustion is not yet implemented or fixture-tested.
+- No reviewer approval of the limits, outcome taxonomy, lease model or contract additions.
+- Measured on macOS ARM only; Linux/Windows and GUI-driven native runs are unexecuted.
+- PostgreSQL/SQLite per-message allocation bounds remain as in M004; the 2 MiB packet cap applies to MySQL/MariaDB only.
+- MySQL `KILL QUERY` on `SLEEP()` returns success rather than an error; such a statement reports `succeeded`, with `resultsWithheld` because its row was read after the interrupt.
+- When the cancel connection cannot be opened, the statement is abandoned after the 1.5 s grace and reported `unknown` with cancellation `requested`. Fixture evidence shows the server keeps running such a statement (MySQL and MariaDB did not notice the dropped client), so it may still apply later; the UI says so. PostgreSQL's `statement_timeout` backstop ends it server-side after the statement deadline + 2 s (fixture); MySQL/MariaDB have no backstop.

@@ -3,6 +3,12 @@
 ## Status
 Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
+## v0.1.0 Alpha slice (D022, Approved product decision 2026-10-26)
+- **Required:** basic SQL and CSV import/export for MySQL/MariaDB with bounded streaming and native file grants. Task breakdown, acceptance and quotas: `.ref/planning/v0.1.0-alpha-plan.md` workstream (d) (Proposed).
+- **Deferred (approved deferral):** XLSX import. **Proposed deferrals:** XLSX and JSON export, ZIP, GZIP import (unless quotas apply to decompressed bytes with a tested expansion cap). **Proposed to keep:** GZIP export.
+- SQL import depends on the M006 gate for unrestricted read-write SQL (MySQL write cancellation and SSH cancellation-slot exhaustion resolved, D022); CSV import depends on M006 owned transactions.
+- PostgreSQL/SQLite transfers follow those engines' alpha status (optional / Deferred). The full M007 scope below remains for later releases.
+
 ## Objective and scope
 Stream SQL/CSV/JSON/XLSX and ZIP/GZIP with accurate progress, file authorization and failure outcomes. Reuse format configuration and mock UX.
 

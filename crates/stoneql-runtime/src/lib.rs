@@ -1,10 +1,17 @@
 //! Host-independent connection lifecycle. No renderer/HTTP access or credential persistence.
+mod execution;
 mod mysql;
 mod postgres;
 mod read_only;
+mod script;
 mod sqlite;
 mod ssh;
+pub use execution::{
+    Access, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, TransactionEnd,
+    mysql_state_matches, postgres_commit, postgres_state_matches,
+};
 pub use read_only::{QueryLimits, ReadError};
+pub use script::ScriptError;
 use sqlx::{MySqlPool, PgPool, SqlitePool};
 pub use ssh::{ENDPOINT_PREFIX, HostKey, SshAuth, SshConfig, endpoint_root};
 use std::{
@@ -158,11 +165,28 @@ impl EnginePool {
             Self::Sqlite(pool) => pool.is_closed(),
         }
     }
+    fn dialect(&self) -> read_only::Dialect {
+        match self {
+            Self::MySql(_) => read_only::Dialect::MySql,
+            Self::Postgres(_) => read_only::Dialect::Postgres,
+            Self::Sqlite(_) => read_only::Dialect::Sqlite,
+        }
+    }
+}
+/// What a registered handle reports about itself.
+struct Details {
+    engine_version: String,
+    access: Access,
 }
 struct Entry {
     engine_version: String,
     owner: OwnerId,
     pool: EnginePool,
+    /// Read-write is an explicit connect-time choice; read-only handles refuse jobs/leases.
+    access: Access,
+    /// Exclusive work permit (one job or one transaction) for read-write handles; the
+    /// connections it guards are dedicated and never pooled.
+    work: Arc<Semaphore>,
     /// SSH transport owned by this handle; closed after its pool, never shared.
     tunnel: Option<ssh::Tunnel>,
     expires: Instant,
@@ -206,6 +230,7 @@ struct Inner {
     slots: Arc<Semaphore>,
     deadline: Duration,
     lifetime: Duration,
+    execution: execution::ExecutionState,
 }
 /// Removes a pending setup on every exit path, including a dropped (cancelled) future.
 struct AttemptGuard(Arc<Inner>, u64);
@@ -242,6 +267,7 @@ impl Connections {
             slots: Arc::new(Semaphore::new(capacity)),
             deadline,
             lifetime,
+            execution: execution::ExecutionState::new(),
         })))
     }
     /// Opens a verified-TLS MySQL, MariaDB or PostgreSQL handle.
@@ -262,7 +288,26 @@ impl Connections {
         tunnel: Option<SshConfig>,
         attempt: Option<&str>,
     ) -> Result<ConnectionId, LifecycleError> {
+        self.connect_with_access(owner, config, tunnel, attempt, Access::ReadOnly)
+            .await
+    }
+    /// As [`Connections::connect_with`], with an explicit access mode. Database privileges
+    /// remain authoritative; read-write only enables the job and transaction APIs.
+    pub async fn connect_with_access(
+        &self,
+        owner: OwnerId,
+        config: DirectServer,
+        tunnel: Option<SshConfig>,
+        attempt: Option<&str>,
+        access: Access,
+    ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
+        // Gate: read-write over SSH stays unavailable until best-effort cancellation through a
+        // tunnel with exhausted forwarding slots is implemented and fixture-tested. Refused
+        // before any network access.
+        if tunnel.is_some() && access == Access::ReadWrite {
+            return Err(LifecycleError::Unsupported);
+        }
         if let Some(tunnel) = &tunnel {
             tunnel.validate()?;
         }
@@ -312,8 +357,18 @@ impl Connections {
             }
             _ = cancelled => return Err(LifecycleError::Cancelled),
         };
-        self.register_or_close(owner, pool, tunnel, permit, version, generation)
-            .await
+        self.register_or_close(
+            owner,
+            pool,
+            tunnel,
+            permit,
+            Details {
+                engine_version: version,
+                access,
+            },
+            generation,
+        )
+        .await
     }
     fn begin_attempt(
         &self,
@@ -447,6 +502,17 @@ impl Connections {
         owner: OwnerId,
         grant: &str,
     ) -> Result<ConnectionId, LifecycleError> {
+        self.connect_sqlite_with_access(owner, grant, Access::ReadOnly)
+            .await
+    }
+    /// Read-write SQLite handles keep the read-only pool for `read_only`; jobs and leases open
+    /// separate read-write connections to the same re-verified canonical file.
+    pub async fn connect_sqlite_with_access(
+        &self,
+        owner: OwnerId,
+        grant: &str,
+        access: Access,
+    ) -> Result<ConnectionId, LifecycleError> {
         let path = self.granted_path(owner, grant, GrantKind::Sqlite)?;
         let generation = self.0.generation.load(Ordering::SeqCst);
         let permit = self.permit()?;
@@ -456,7 +522,10 @@ impl Connections {
             EnginePool::Sqlite(pool),
             None,
             permit,
-            version,
+            Details {
+                engine_version: version,
+                access,
+            },
             generation,
         )
         .await
@@ -474,7 +543,7 @@ impl Connections {
         pool: EnginePool,
         tunnel: Option<ssh::Tunnel>,
         permit: OwnedSemaphorePermit,
-        version: String,
+        details: Details,
         generation: u64,
     ) -> Result<ConnectionId, LifecycleError> {
         let mut tunnel = tunnel;
@@ -483,7 +552,7 @@ impl Connections {
             pool.clone(),
             &mut tunnel,
             permit,
-            version,
+            details,
             generation,
         ) {
             Ok(id) => Ok(id),
@@ -503,9 +572,13 @@ impl Connections {
         pool: EnginePool,
         tunnel: &mut Option<ssh::Tunnel>,
         permit: OwnedSemaphorePermit,
-        engine_version: String,
+        details: Details,
         generation: u64,
     ) -> Result<ConnectionId, LifecycleError> {
+        let Details {
+            engine_version,
+            access,
+        } = details;
         let id = ConnectionId(Uuid::new_v4());
         let (cancel, cancelled) = oneshot::channel();
         let expires = Instant::now() + self.0.lifetime;
@@ -523,6 +596,8 @@ impl Connections {
                     engine_version,
                     owner,
                     pool,
+                    access,
+                    work: Arc::new(Semaphore::new(ExecutionLimits::RUNNING_JOBS_PER_HANDLE)),
                     tunnel: tunnel.take(),
                     expires,
                     _permit: permit,
@@ -536,14 +611,18 @@ impl Connections {
                 _ = tokio::time::sleep_until(expires) => {},
                 _ = cancelled => return,
             }
-            let entry = registry.upgrade().and_then(|inner| {
-                inner
-                    .entries
-                    .lock()
-                    .expect("connection registry lock")
-                    .remove(&id)
-            });
+            let Some(inner) = registry.upgrade() else {
+                return;
+            };
+            // Same order as disconnect/reset/shutdown: the handle becomes unusable first, so no
+            // job or transaction can start on it while its work is released.
+            let entry = inner
+                .entries
+                .lock()
+                .expect("connection registry lock")
+                .remove(&id);
             if let Some(entry) = entry {
+                execution::release(&inner, Some(id)).await;
                 entry.close().await;
             }
         });
@@ -572,10 +651,22 @@ impl Connections {
             .map(|entry| entry.engine_version.clone())
             .ok_or(LifecycleError::Forbidden)
     }
+    pub fn access(&self, owner: OwnerId, id: ConnectionId) -> Result<Access, LifecycleError> {
+        self.0
+            .entries
+            .lock()
+            .expect("connection registry lock")
+            .get(&id)
+            .filter(|entry| entry.usable(owner))
+            .map(|entry| entry.access)
+            .ok_or(LifecycleError::Forbidden)
+    }
     pub fn is_connected(&self, owner: OwnerId, id: ConnectionId) -> bool {
         self.owned_pool(owner, id).is_some()
     }
     pub async fn disconnect(&self, owner: OwnerId, id: ConnectionId) -> Result<(), LifecycleError> {
+        // The handle is removed first, so a racing submit/begin sees it gone and refuses;
+        // then jobs are cancelled and leases rolled back before the pool and tunnel close.
         let entry = {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
             if !entries.get(&id).is_some_and(|entry| entry.owner == owner) {
@@ -583,6 +674,7 @@ impl Connections {
             }
             entries.remove(&id).expect("checked entry")
         };
+        execution::release(&self.0, Some(id)).await;
         entry.close().await;
         Ok(())
     }
@@ -597,6 +689,7 @@ impl Connections {
             entries.drain().map(|(_, entry)| entry).collect()
         };
         self.cancel_all_attempts();
+        execution::release(&self.0, None).await;
         for entry in entries {
             entry.close().await;
         }
@@ -615,6 +708,7 @@ impl Connections {
             .drain()
             .map(|(_, entry)| entry)
             .collect();
+        execution::release(&self.0, None).await;
         for entry in entries {
             entry.close().await;
         }
@@ -657,6 +751,12 @@ mod tests {
             root_certificate_pem: None,
         }
     }
+    fn details() -> Details {
+        Details {
+            engine_version: "fixture".into(),
+            access: Access::ReadOnly,
+        }
+    }
     fn register(connections: &Connections, owner: OwnerId) -> ConnectionId {
         let permit = connections.0.slots.clone().try_acquire_owned().unwrap();
         let pool = lazy_pool();
@@ -666,7 +766,7 @@ mod tests {
                 pool,
                 &mut None,
                 permit,
-                "fixture".into(),
+                details(),
                 connections.0.generation.load(Ordering::SeqCst),
             )
             .unwrap()
@@ -737,7 +837,7 @@ mod tests {
                 pool.clone(),
                 &mut None,
                 permit,
-                "fixture".into(),
+                details(),
                 0
             ),
             Err(LifecycleError::Capacity)
@@ -782,7 +882,7 @@ mod tests {
                 pool.clone(),
                 &mut None,
                 permit,
-                "fixture".into(),
+                details(),
                 generation
             ),
             Err(LifecycleError::Forbidden)
@@ -893,6 +993,31 @@ mod tests {
             connections.read_key_file(owner, &key),
             Err(LifecycleError::Forbidden)
         );
+    }
+    #[tokio::test]
+    async fn read_write_over_ssh_is_refused_before_network_access() {
+        let connections =
+            Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let tunnel = SshConfig {
+            host: "192.0.2.1".into(),
+            port: 22,
+            username: "fixture".into(),
+            host_key: None,
+            auth: SshAuth::Agent(None),
+        };
+        assert_eq!(
+            connections
+                .connect_with_access(
+                    OwnerId::new(),
+                    config(),
+                    Some(tunnel),
+                    None,
+                    Access::ReadWrite
+                )
+                .await,
+            Err(LifecycleError::Unsupported)
+        );
+        assert_eq!(connections.pending_setups(), 0);
     }
     #[test]
     fn protocol_identifiers_reject_embedded_nuls_instead_of_truncating() {

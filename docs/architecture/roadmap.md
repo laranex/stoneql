@@ -2,6 +2,10 @@
 
 **Status: revised roadmap and continuation through milestones authorized on 2026-10-25.** M001 is committed. M002's macOS development host is implemented, with Linux dependency-audit and cross-OS gates open. M003 lifecycle/read-only evaluation passes local fixtures; the user approved the scoped SQLx receive-limit patch. Explicit native live SQL binding is implemented; full native GUI interaction and broader driver/OS/release acceptance remain open. M004 PostgreSQL/SQLite read-only adapters are implemented locally with owned-fixture evidence; cross-OS, native picker/GUI and budget gates remain open. M005 desktop SSH tunnels and OS secret references are implemented locally (macOS) with owned-fixture evidence; cross-OS keychain/agent, GUI, transport-budget and decision-review gates remain open. Other milestones are pending, not completed by this authorization. Signing, publishing and deployment remain separate decisions.
 
+**Approved product decision (2026-10-26, D021):** the first release is **StoneQL v0.1.0 Alpha for macOS only**. Apple Silicon (arm64) is the primary target; Intel (x86_64) is optional pending verification; Windows and Linux desktop are deferred; the Axum server is a separate future release. See [v0.1.0 Alpha (macOS)](#v0-1-0-alpha-macos) below. No release work is complete.
+
+**Approved product decision (2026-10-26, D022):** the alpha is a **usable MySQL/MariaDB client** on macOS Apple Silicon — live browsing, CRUD, safe SQL execution, SSH and basic SQL/CSV import/export. PostgreSQL is optional for the first alpha; Windows, Linux, SQLite, advanced database objects and XLSX import are deferred. Deferred is not removed: implemented PostgreSQL/SQLite code and tests stay, outside alpha support claims unless admitted.
+
 ## Milestones and dependencies
 
 Existing IDs and specification paths are retained. M009 now covers Desktop Release only; M011 adds Server Release. M010 supplies independently verifiable desktop/server evidence, not a shared completion barrier.
@@ -10,15 +14,15 @@ Existing IDs and specification paths are retained. M009 now covers Desktop Relea
 | --- | --- | --- |
 | M000 | Monorepo, website and architecture audit | Existing prototype preserved; 17 browser scenarios passed with approved elevation; live docs/Mermaid checks remain separate |
 | M001 | Core/contracts and isolated SQLx evaluation implemented; completion review pending | Startup approved; [executed evidence and limitations](./driver-evaluation.md) |
-| M002 | Secure Tauri host integration | M001 contracts; native capability review; browser mode stays independent |
+| M002 | Secure Tauri host integration | M001 contracts; native capability review; browser mode stays independent. For v0.1.0 Alpha only macOS native gates block; Windows/Linux native runs are **Deferred** |
 | M003 | MySQL/MariaDB direct lifecycle plus basic read-only SQL | M001; M002 for the desktop UI binding; approved engine/TLS/limits profile |
-| M004 | PostgreSQL and SQLite adapters | M003 connection pattern; engine-specific security/type/file gates; can run alongside M005 |
+| M004 | PostgreSQL and SQLite adapters | M003 connection pattern; engine-specific security/type/file gates; can run alongside M005. For v0.1.0 Alpha: PostgreSQL **optional** (admitted only if its alpha gates pass), SQLite **Deferred** (code kept, not claimed) — D022 |
 | M005 | Desktop credentials and SSH | Verified **M003-L lifecycle checkpoint**, D005 desktop and D006 trust policy; no M004/Axum/server-vault prerequisite |
-| M006 | Advanced SQL jobs, transactions, cancellation, object management and schema metadata/cache | M003/M004; D003/D004 and engine-specific capability evidence; M005 only for SSH integration tests |
-| M007 | Streaming SQL/CSV/JSON/XLSX, ZIP/GZIP | M006; approved file/secret/format/snapshot limits; M005 only for SSH/desktop-credential integration |
+| M006 | Advanced SQL jobs, transactions, cancellation, object management and schema metadata/cache | M003 (M004 only for engines admitted to a release); D003/D004 and engine-specific capability evidence; M005 only for SSH integration tests. Alpha slice (D022): safe SQL execution, database/table tree, paged browse, single-row CRUD for MySQL/MariaDB; advanced objects **Deferred** |
+| M007 | Streaming SQL/CSV/JSON/XLSX, ZIP/GZIP | M006; approved file/secret/format/snapshot limits; M005 only for SSH/desktop-credential integration. Alpha slice (D022): SQL and CSV import/export for MySQL/MariaDB; XLSX import **Deferred**; JSON/XLSX export, ZIP and GZIP import proposed deferred |
 | M008 | Future authenticated Axum host and HTTP adapter | M001/M006; server-specific identity, vault, target-policy and quota approval |
-| M009 | **Desktop Release**: signed macOS/Windows/Linux packages | M002–M007 for the declared desktop scope; **M010-D** release evidence; no M008/M011 or M010-S dependency |
-| M010 | Continuous hardening and release evidence | Incremental from M001; M010-D uses desktop implementation, M010-S uses server implementation; neither requires a completed release |
+| M009 | **Desktop Release**: first release is v0.1.0 Alpha, signed and notarized macOS arm64 (x86_64 optional); Windows/Linux packages **Deferred** to later desktop releases | M002, M003 and M005 macOS acceptance; the D022 alpha slices of M006 and M007; M004 PostgreSQL only if admitted; **M010-D (macOS)** evidence; no M008/M011 or M010-S dependency |
+| M010 | Continuous hardening and release evidence | Incremental from M001; M010-D uses desktop implementation (macOS-only evidence set for the alpha), M010-S uses server implementation; neither requires a completed release |
 | M011 | **Server Release**: Linux binary/systemd, optional Docker | M008 plus applicable M005–M007 capabilities and **M010-S** evidence; independent of M009 distribution |
 
 M003-L is a checkpoint inside M003, not a new milestone: verified connect/failure/disconnect/expiry cleanup, isolated bounded pools, TLS verification, redacted errors and repeated lifecycle tests. It can be accepted before M003's SQL/UI work and unlocks M005 without waiting for M002 UI binding or M004 adapters. Basic timeouts and cleanup belong to this lifecycle; execution cancellation and transaction APIs belong to M006.
@@ -32,7 +36,7 @@ flowchart TD
   L --> M005["M005 credentials and SSH"]
   M003 --> M004["M004 PostgreSQL and SQLite"]
   M003 --> M006["M006 advanced execution and metadata"]
-  M004 --> M006
+  M004 -.->|engines admitted to a release| M006
   M006 --> M007["M007 streaming transfers"]
   M006 --> M008["M008 future Axum host"]
   M005 --> D["M010-D desktop evidence"]
@@ -45,7 +49,76 @@ flowchart TD
   S --> M011["M011 Server Release"]
 ```
 
-The diagram shows sequencing, not a requirement to implement every future capability for the first release. Any reduced engine/feature release scope needs explicit approval, capability gating and documented omissions; it cannot silently waive acceptance criteria. Teleport and AWS SSM remain transport extension points and later investigations. Axum remains a future adapter; do not build it to unblock desktop work.
+The diagram shows sequencing, not a requirement to implement every future capability for the first release. Any reduced engine/feature release scope needs explicit approval, capability gating and documented omissions; it cannot silently waive acceptance criteria. D022 is that approval for v0.1.0 Alpha. Teleport and AWS SSM remain transport extension points and later investigations. Axum remains a future adapter; do not build it to unblock desktop work.
+
+## v0.1.0 Alpha (macOS)
+
+Statements in this section carry one label: **Approved product decision**, **Implemented and verified** (executed locally, evidence recorded), **Proposed technical decision** (awaiting approval), **Deferred** (not required for v0.1.0 Alpha, open for later releases) or **Unresolved release blocker**.
+
+### Platform scope
+
+| Item | Label |
+| --- | --- |
+| macOS Apple Silicon (arm64) is the primary v0.1.0 Alpha target | Approved product decision (D021, 2026-10-26) |
+| macOS Intel (x86_64) ships only if separately verified; otherwise the alpha is arm64-only | Approved product decision; the inclusion decision itself is unresolved |
+| Windows desktop, Linux desktop | Deferred; their implementation and testing must not block the alpha |
+| Axum server (M008/M011) | Deferred to a separate future release; unchanged independent track |
+| Cross-platform architecture: shared Rust crates stay host- and OS-independent; macOS-only code stays in the desktop host behind target gates (as `security-framework` is today) | Approved product decision; current boundary checks are Implemented and verified locally |
+
+### Required for the alpha
+
+The approved decision lists nine release requirements. Their current state:
+
+| Requirement | Current state | Label |
+| --- | --- | --- |
+| Native Tauri packaging (.app, distributable image) | `bundle.active` is `false`, `bundle.icon` is empty; only debug development builds exist | Unresolved release blocker |
+| macOS Keychain integration | Login-Keychain secret references through actual command handlers (MockRuntime) with fixture cleanup | Implemented and verified (fixtures only); real Keychain prompts, prompt-vs-8 s renderer timeout and behavior after signing are Unresolved release blockers |
+| SSH authentication and tunnel reliability | Agent/password/key-file tunnels, enrolled host keys, 100 mixed cycles with zero orphans on macOS ARM fixtures | Implemented and verified (fixtures); graphical end-to-end and approved transport budget are Unresolved release blockers |
+| Real MySQL/MariaDB workflows | Bounded read-only SQL against MySQL 8.4.6 / MariaDB 11.4.8 fixtures through command handlers | Implemented and verified (fixtures) for read-only SQL only; browsing, CRUD, safe read-write SQL and SQL/CSV transfers are Unresolved release blockers (see feature scope below) |
+| Application signing and notarization | No signing identity, entitlements or notarization configured | Unresolved release blocker; credentials need human approval |
+| Install/upgrade/uninstall behavior | Never executed; no upgrade/data-migration or uninstall cleanup policy | Unresolved release blocker |
+| Native end-to-end testing | Never executed: tests use MockRuntime handlers, browser shims and a startup-only WebView smoke | Unresolved release blocker |
+| Resource usage and startup performance | Debug WebView smoke (453–609 ms) and runtime-only RSS profiles; no release-build, whole-app profile | Unresolved release blocker; budgets are Proposed technical decisions |
+| Secure credential cleanup and session lifecycle | Profile removal deletes Keychain references best-effort (errors ignored); pools/tunnels close on disconnect/reset/shutdown; no purge-all and uninstall leaves Keychain items | Partially implemented; cleanup policy is an Unresolved release blocker |
+
+### Feature scope (D022)
+
+| Capability | Alpha treatment | Current state |
+| --- | --- | --- |
+| Live browsing: database/table tree, paged browse with server-side sort and filter | Approved product decision (required) | Unresolved release blocker; live UI shows only the SQL workspace today |
+| CRUD: single-row insert/update/delete with primary-key-based optimistic checks and authoritative constraint errors; tables without a primary key browse-only | Approved (required); slice details are Proposed | Unresolved release blocker; CRUD is mock-only |
+| Safe SQL execution: background jobs, `BUSY` instead of queuing, best-effort cancellation, no automatic retry of uncertain writes, outcomes reported as confirmed success, failure, cancellation or unknown, owned and expiring transactions | Approved principles; numeric limits and contract details Proposed | Read-only SQL implemented and verified; execution jobs and writes are in progress, not verified. Unrestricted read-write SQL stays disabled until MySQL write cancellation and SSH cancellation-slot exhaustion are resolved |
+| SSH and saved credentials | Approved (required); native host-key trust ownership approved; four review findings plus secret-deletion error handling are alpha blockers | Implemented and verified on fixtures; blockers open |
+| SQL and CSV import/export (MySQL/MariaDB) | Approved (required); GZIP export proposed, GZIP import proposed deferred | Unresolved release blocker; transfers are simulated |
+| PostgreSQL | Optional; admitted only if its alpha gates pass | Read-only adapter implemented and verified on fixtures |
+| SQLite | **Deferred** (code kept, outside support claims) | Read-only adapter implemented and verified on fixtures |
+| Advanced objects (routines, triggers, events, materialized views, object DDL editing), XLSX import | **Deferred** | Mock screens only |
+| Windows, Linux | **Deferred** | — |
+
+Anything excluded must be capability-gated and listed as an omission; acceptance criteria are not waived silently.
+
+### Alpha dependency view
+
+```mermaid
+flowchart TD
+  M002["M002 Tauri host (macOS gates)"] --> E2E["Native macOS E2E with real MySQL/MariaDB and SSH"]
+  L["M003-L lifecycle"] --> M003["M003 read-only SQL (macOS)"]
+  M003 --> M005["M005 SSH and Keychain (macOS)"]
+  M003 --> E2E
+  M005 --> E2E
+  M006A["M006 alpha slice: safe SQL, browse, CRUD"] --> E2E
+  M007A["M007 alpha slice: SQL/CSV transfers"] --> E2E
+  M006A --> M007A
+  M003 --> M006A
+  PG["M004 PostgreSQL — optional"] -.-> E2E
+  PKG["Signed, notarized, stapled .app/.dmg"] --> D["M010-D macOS evidence"]
+  E2E --> D
+  D --> A["M009: StoneQL v0.1.0 Alpha (macOS)"]
+  WL["Windows / Linux desktop — deferred"] -.->|does not block| A
+  SRV["M008 / M011 server — separate release"] -.->|does not block| A
+```
+
+Deferred items keep their open gates for later releases: SQLite live support, advanced database objects, XLSX import, Linux GTK dependency advisories, Windows SSH endpoint and agent, Windows/Linux credential stores, Windows SQLite path handling, and executed cross-OS CI. The internal decision register records them as deferred non-blockers for the alpha, never as passed; a deferred security advisory still needs an explicit human risk acceptance before sign-off.
 
 ## Initial slice and shared contracts
 
@@ -78,7 +151,7 @@ These are reviewable starting budgets, not existing product guarantees. Local M0
 | Basic SQL | 100 indexed SELECTs, 200 rows of at most 1 KiB each from a 100,000-row fixture; request-to-final-bounded-response p95 at most 500 ms; peak additional RSS at most 64 MiB above connected idle | M003; repeat M004/M006 |
 | Advanced execution | Accepted cancel request to terminal client state p95 at most 2 s; unconfirmed server termination reported explicitly; 100 fault/transaction cycles, 0 dirty connections returned to pools | M006 |
 | Transfers | 1 million 1-KiB rows with a slow consumer; additional RSS at most 256 MiB; configured quotas never exceeded; temporary resources removed within 30 s after cancellation | M007 |
-| Desktop candidate | 30 launches per supported OS; cold-launch-to-interactive p95 at most 3 s; 100 lifecycle/upgrade smoke cycles, 0 crashes/data-loss incidents | M009/M010-D |
+| Desktop candidate | v0.1.0 Alpha: 30 launches of the signed release artifact on macOS arm64 (and x86_64 if shipped); cold-launch-to-interactive p95 at most 3 s; idle and 8-connection RSS of the whole app (host + WebView processes) recorded; 100 lifecycle/upgrade smoke cycles, 0 crashes/data-loss incidents. Windows/Linux runs deferred to their releases | M009/M010-D |
 | Server candidate | 10 principals, 2 concurrent queries each, 30-minute reference workload; no cross-principal access, quota breaches or process crashes; same bounded SELECT p95 at most 1 s | M008/M010-S/M011 |
 
 Before implementation, approve or replace the relevant profile; before release, execute it on the declared matrix. First releases additionally require zero unsupported-protocol acceptance, zero silent value corruption and successful packaging/security checks for **every** shipped artifact. A missing target, fixture, owner or result blocks that scope's sign-off. No approved server uptime/SLO, RPO/RTO, installer-size or production throughput target exists; server availability and recovery objectives must be set before M011 rather than invented here. Baseline startup/reliability metrics are not HA guarantees.
@@ -98,6 +171,6 @@ Before implementation, approve or replace the relevant profile; before release, 
 - M005: desktop secret provider, host-key enrollment/rotation and agent policy; server vault approval is separate.
 - M006/M007: job framing, transaction leases, cancellation/unknown outcomes, schema revisions, transfer libraries and snapshot/quota guarantees.
 - M008/M011: authentication/authorization, server vault and target restrictions, deployment/recovery/SLO ownership.
-- M009: desktop artifact formats, signing/update custody, offline behavior and M010-D sign-off; it must not wait for server design approval.
+- M009: desktop artifact formats, signing/update custody, offline behavior and M010-D sign-off; it must not wait for server design approval. For v0.1.0 Alpha (macOS) this means (feature scope already approved by D022): Apple Developer ID identity and notarization credential custody, bundle identifier (currently `app.dbadmin.desktop`; proposed to be decided before the first signed build because a later change strands WebView profile data and, if the service constant changes too, Keychain items), minimum macOS version, x86_64 inclusion, distribution format, updater stance, App Sandbox yes/no and risk acceptance for deferred Linux-only advisories.
 
 **Approval record:** the user explicitly approved the revised roadmap and M001 startup on 2026-10-25, including foundation, generated DTOs, pinned tooling/fixtures and isolated SQLx evaluation. That scope is implemented; review [results](./driver-evaluation.md) before completion sign-off. The subsequent instruction “commit and continue all ms” authorizes local milestone implementation and commits. M002 development integration and M003 evaluations have progressed as recorded above. Production driver adoption, unresolved security/release gates, signing, push/publication and deployment are not approved by inference.

@@ -313,3 +313,26 @@ test('remembered secrets become bound OS references; profiles persist references
   await remove();
   assert.deepEqual(native.calls.filter((c) => c.command === 'delete_secret').map((c) => c.payload.reference), [saved.passwordRef, saved.transport.passphraseRef]);
 });
+test('R-7: a failed close with an open transaction still queries and shows its outcome', async () => {
+  const native = nativeFixture();
+  const invoke = native.global.__TAURI__.core.invoke;
+  native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
+    const request = JSON.parse(args.message);
+    if (command === 'disconnect_database') { native.calls.push({ command, payload: request.payload }); throw { code: 'INTERNAL', message: 'close failed' }; }
+    if (command === 'end_transaction') { native.calls.push({ command, payload: request.payload }); return { version: 1, requestId: request.requestId, payload: { outcome: 'rolled_back', reason: 'closed', commitSent: false, rollbackSent: true } }; }
+    return invoke(command, args);
+  };
+  const { store, flow, notices, asked } = await setup(native.global);
+  liveDraft(flow);
+  await flow.saveConnection();
+  const id = flow.connectionDraft.value.id;
+  store.liveSessions[id].lease = { id: 'lease_1', state: 'active' };
+  native.calls.length = 0;
+  await flow.closeConnection(id);
+  assert.match(asked.at(-1)!, /open transaction/);
+  assert.deepEqual(native.calls.map(c => c.command), ['disconnect_database', 'end_transaction']);
+  assert.equal(native.calls[1]!.payload.leaseId, 'lease_1');
+  assert.match(notices.at(-1)!, /^error:.*Transaction rolled back \(confirmed by the server\)\. Its connection was closed\./);
+  assert.match(store.liveSessions[id].error, /Transaction rolled back \(confirmed by the server\)/);
+  assert.ok(store.opened.includes(id), 'the workspace stays open after a failed close');
+});

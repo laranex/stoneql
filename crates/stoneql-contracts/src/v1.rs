@@ -1,5 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use stoneql_core::{CoreError, ErrorCode, Outcome};
+use stoneql_core::{CoreError, ErrorCode, ExecutionOutcome, Outcome};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +186,7 @@ pub enum ErrorCodeDto {
     SshAuthenticationFailed,
     SshAgentUnavailable,
     SecretUnavailable,
+    Busy,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +225,7 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::SshAuthenticationFailed => ErrorCodeDto::SshAuthenticationFailed,
             ErrorCode::SshAgentUnavailable => ErrorCodeDto::SshAgentUnavailable,
             ErrorCode::SecretUnavailable => ErrorCodeDto::SecretUnavailable,
+            ErrorCode::Busy => ErrorCodeDto::Busy,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -282,6 +284,9 @@ pub struct HostInfo {
     pub session_id: String,
     pub nonce: String,
     pub simulated: bool,
+    // Whether this host accepts `access: read_write` connections. A native build-time gate
+    // (off until the M006 safety tests pass and the user approves); the renderer only mirrors it.
+    pub read_write_sql: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -346,6 +351,10 @@ pub struct DirectConnectionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub attempt_id: Option<String>,
+    // Omitted means read-only. Read-write is an explicit per-session opt-in for the handle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub access: Option<AccessModeDto>,
 }
 /// SSH endpoint plus an enrolled OpenSSH public host key. Deliberately does not implement
 /// Debug: authentication may carry a session-only secret.
@@ -488,6 +497,7 @@ pub struct LiveConnection {
     pub engine_version: String,
     pub database: String,
     pub expires_after_seconds: u32,
+    pub access: AccessModeDto,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -533,6 +543,215 @@ pub struct SqliteFileGrant {
 pub struct SqliteConnectionRequest {
     pub session_id: String,
     pub grant: String,
+    // Omitted means read-only (SQLITE_OPEN_READONLY for every connection of the handle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub access: Option<AccessModeDto>,
+}
+
+/// Handle-level execution permission chosen at connect time. Database privileges remain the
+/// authority; read-only additionally keeps M003's engine read-only enforcement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessModeDto {
+    ReadOnly,
+    ReadWrite,
+}
+/// Starts a bounded SQL job on a read-write handle. The script is split into statements and
+/// executed one at a time; it is never retried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitJobRequest {
+    pub session_id: String,
+    pub handle: String,
+    pub sql: String,
+    // Runs inside this owned transaction lease; omitted means each statement autocommits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lease_id: Option<String>,
+    // Omitted limits use the runtime defaults; explicit values are bounds-checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_rows_per_result: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub deadline_seconds: Option<u32>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JobAccepted {
+    pub job_id: String,
+    pub statement_count: u32,
+}
+/// Fetches the next bounded page of a job, or requests its cancellation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JobRequest {
+    pub session_id: String,
+    pub job_id: String,
+    // Long-poll wait for new data, capped by the runtime; omitted means do not wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wait_ms: Option<u32>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionOutcomeDto {
+    Succeeded,
+    Failed,
+    Cancelled,
+    Unknown,
+}
+impl From<ExecutionOutcome> for ExecutionOutcomeDto {
+    fn from(outcome: ExecutionOutcome) -> Self {
+        match outcome {
+            ExecutionOutcome::Succeeded => Self::Succeeded,
+            ExecutionOutcome::Failed => Self::Failed,
+            ExecutionOutcome::Cancelled => Self::Cancelled,
+            ExecutionOutcome::Unknown => Self::Unknown,
+        }
+    }
+}
+/// `not_run` statements were never sent to the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum StatementStatusDto {
+    NotRun,
+    Running,
+    Succeeded,
+    Failed,
+    // Sent, but no definitive reply (interrupted, lost or abandoned): effects may exist.
+    Unknown,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstraintKindDto {
+    Unique,
+    ForeignKey,
+    NotNull,
+    Check,
+}
+/// Authoritative database refusal without its message text, which can contain row values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementFailure {
+    pub constraint: Option<ConstraintKindDto>,
+    pub sql_state: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StatementReport {
+    pub index: u32,
+    pub status: StatementStatusDto,
+    // True inside a transaction lease: success is durable only after a confirmed commit.
+    pub in_transaction: bool,
+    pub affected_rows: String,
+    pub result_sets: u32,
+    pub failure: Option<StatementFailure>,
+    // Result data of this statement (rows, pages or whole result sets) was read but not
+    // delivered because the job was interrupted (cancel, deadline, close): the delivered
+    // result sets of this statement are incomplete, even when not marked `truncated`.
+    pub results_withheld: bool,
+}
+/// One bounded page of one result set. `columns` is present on the first page of each set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResultBatch {
+    pub statement: u32,
+    pub result: u32,
+    pub columns: Option<Vec<Column>>,
+    pub rows: Vec<Vec<CellValue>>,
+    pub last: bool,
+    pub truncated: bool,
+}
+// Jobs are never queued: a busy handle refuses submission with BUSY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStateDto {
+    Running,
+    Finished,
+}
+// `requested`: a cancel or deadline interrupt was raised; `confirmed`: the work was observed to
+// stop (nothing in flight, or the running statement ended within the grace period). Neither
+// says anything about effects: see the statement status and job outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationDto {
+    None,
+    Requested,
+    Confirmed,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseStateDto {
+    Active,
+    // A statement in the transaction failed or was cancelled: only rollback is accepted.
+    RollbackOnly,
+    Ended,
+}
+/// `done` means the job finished and no further pages exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct JobUpdate {
+    pub job_id: String,
+    pub state: JobStateDto,
+    pub outcome: Option<ExecutionOutcomeDto>,
+    pub cancellation: CancellationDto,
+    // A best-effort server interrupt (KILL QUERY, pg_cancel_backend, SQLite interrupt) was
+    // delivered. It is not proof that anything stopped.
+    pub server_cancel_sent: bool,
+    pub deadline_exceeded: bool,
+    pub statements: Vec<StatementReport>,
+    pub batch: Option<ResultBatch>,
+    pub lease: Option<LeaseStateDto>,
+    pub done: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelJobResult {
+    pub cancel_requested: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionLease {
+    pub lease_id: String,
+    pub idle_seconds: u32,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionActionDto {
+    Commit,
+    Rollback,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct EndTransactionRequest {
+    pub session_id: String,
+    pub lease_id: String,
+    pub action: TransactionActionDto,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionEndReasonDto {
+    Requested,
+    Expired,
+    ConnectionLost,
+    Closed,
+}
+/// `committed`/`rolled_back` only when the server confirmed COMMIT/ROLLBACK; otherwise unknown.
+/// `commitSent`/`rollbackSent` say whether COMMIT/ROLLBACK was attempted on the lease's session
+/// (set just before sending, so a connection lost before the bytes left still reports it); an
+/// unknown outcome with either set means the server may have applied it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionEnd {
+    pub outcome: OutcomeDto,
+    pub reason: TransactionEndReasonDto,
+    // COMMIT was attempted: set just before it is written, so it is also set when the
+    // connection failed before any byte left. It never says the server received COMMIT.
+    pub commit_sent: bool,
+    // ROLLBACK was attempted, with the same meaning as `commitSent`.
+    pub rollback_sent: bool,
 }
 
 pub fn typescript() -> String {
@@ -560,6 +779,26 @@ pub fn typescript() -> String {
         SqliteFileRequest::decl(&config),
         SqliteFileGrant::decl(&config),
         SqliteConnectionRequest::decl(&config),
+        AccessModeDto::decl(&config),
+        SubmitJobRequest::decl(&config),
+        JobAccepted::decl(&config),
+        JobRequest::decl(&config),
+        ExecutionOutcomeDto::decl(&config),
+        StatementStatusDto::decl(&config),
+        ConstraintKindDto::decl(&config),
+        StatementFailure::decl(&config),
+        StatementReport::decl(&config),
+        ResultBatch::decl(&config),
+        JobStateDto::decl(&config),
+        CancellationDto::decl(&config),
+        LeaseStateDto::decl(&config),
+        JobUpdate::decl(&config),
+        CancelJobResult::decl(&config),
+        TransactionLease::decl(&config),
+        TransactionActionDto::decl(&config),
+        EndTransactionRequest::decl(&config),
+        TransactionEndReasonDto::decl(&config),
+        TransactionEnd::decl(&config),
         CloseAction::decl(&config),
         CloseDecision::decl(&config),
         CloseResult::decl(&config),

@@ -3,6 +3,11 @@
 ## Status
 Local implementation and evidence recorded (2026-10-26, under the user's continuation instruction); not complete. Open gates: approved engine/version/OS matrix (only PostgreSQL 17.6 and bundled SQLite 3.51.3 on macOS ARM were executed; Windows/Linux, including Windows verbatim SQLite paths, unverified); real native file-picker and graphical WebView-to-database interaction (tests use Tauri MockRuntime and a trusted grant); approved G4/G5 lifecycle/basic-query numerical budgets and the 100,000-row resource profile for the new engines; PostgreSQL/SQLite per-message allocation bounds (the receive-limit patch is MySQL-only); SQLite WAL files in read-only directories and network filesystems; same-user SQLite path-replacement race; PostgreSQL extensions/arrays/ranges/interval text (explicit unknown today); hostile database definitions/operators; review of decisions D011–D015. No push, publication or deployment is authorized.
 
+## v0.1.0 Alpha treatment (D022, Approved product decision 2026-10-26)
+- **PostgreSQL — optional.** Admitted to the alpha only if, by the feature freeze, it passes the same alpha gates as MySQL/MariaDB for the capabilities it would advertise (read-only SQL at minimum; browse/CRUD/transfers are not planned for PostgreSQL in the alpha) on the signed artifact, including SSH parity and D011–D013 review. Otherwise it is capability-gated off in the alpha build and listed as an omission. It never blocks the alpha. Go/no-go: Proposed, decision pending.
+- **SQLite — Deferred.** Implemented code, grants (D014/D015) and fixtures stay and must keep passing as regressions; the adapter is outside alpha support claims. The alpha UI must hide or clearly label it (Proposed: hidden behind a non-default flag). No writable-SQLite policy (M006 prerequisite 5) is needed for the alpha.
+- Nothing here is complete; the open gates above remain for the release that ships each engine.
+
 ## Objective and scope
 Extend the verified lifecycle/basic read-only slice to PostgreSQL and SQLite. Preserve engine-specific capabilities and typed values; advanced schema/object workflows remain M006.
 

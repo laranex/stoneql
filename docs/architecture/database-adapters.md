@@ -1,6 +1,6 @@
 # Database adapters
 
-**Status: scoped M003/M004 read-only adapters implemented locally; broader capabilities remain gated.** M001 isolated SQLx experiments, the [M003 MySQL/MariaDB runtime](../development/connection-lifecycle.md) and the [M004 PostgreSQL/SQLite adapters](../development/postgres-sqlite.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
+**Status: scoped M003/M004 read-only adapters implemented locally; broader capabilities remain gated.** For v0.1.0 Alpha (D022, approved 2026-10-26) MySQL and MariaDB are the primary supported engines; PostgreSQL is optional and SQLite is deferred — their implemented adapters stay and keep their tests, but are outside alpha support claims unless admitted. M001 isolated SQLx experiments, the [M003 MySQL/MariaDB runtime](../development/connection-lifecycle.md) and the [M004 PostgreSQL/SQLite adapters](../development/postgres-sqlite.md) are implemented; [evidence](./driver-evaluation.md) is separate from mock UI behavior and production capability adoption.
 
 ## Adapter contract
 
@@ -8,12 +8,14 @@ An engine adapter should discover server version/capabilities, open connections 
 
 Keep transport establishment separate: an SSH tunnel produces an endpoint; the MySQL adapter still owns MySQL protocol and TLS semantics. SQLite uses an authorized local file handle/path, not a network tunnel.
 
-| Engine | Discovery and capability concerns |
-| --- | --- |
-| MySQL | Version, storage engine, collation, routines, triggers, events, Fulltext/Spatial support |
-| MariaDB | Distinct version/features despite shared protocol; do not infer MySQL parity |
-| PostgreSQL | Schemas, native ENUM, functions/procedures, materialized views, extension/index methods and operator classes |
-| SQLite | Dynamic affinity, strict tables, file locking, PRAGMA introspection, virtual tables; no stored routines/events |
+| Engine | Discovery and capability concerns | v0.1.0 Alpha |
+| --- | --- | --- |
+| MySQL | Version, storage engine, collation, routines, triggers, events, Fulltext/Spatial support | Primary (Approved). Alpha discovery: databases, tables/views, columns, primary/unique keys; routines/triggers/events Deferred |
+| MariaDB | Distinct version/features despite shared protocol; do not infer MySQL parity | Primary (Approved); same alpha discovery slice, verified separately |
+| PostgreSQL | Schemas, native ENUM, functions/procedures, materialized views, extension/index methods and operator classes | Optional; read-only adapter implemented, browse/CRUD not planned for the alpha unless admitted |
+| SQLite | Dynamic affinity, strict tables, file locking, PRAGMA introspection, virtual tables; no stored routines/events | Deferred; read-only adapter implemented, not claimed |
+
+Alpha CRUD (Proposed slice) edits one row at a time through parameterized statements keyed by the primary key with an optimistic check on the previous values; zero affected rows is a conflict, never a silent overwrite, and constraint errors come from the database. Tables without a primary key and views are browse-only. Advanced objects are Deferred.
 
 Indexes retain ordered columns, uniqueness, method, expression/predicate and engine-specific attributes. Unsupported edits are disabled or rejected explicitly. View snapshots in the current UI are not native introspection. Database-object DDL must preserve definitions and use engine-aware quoting; never concatenate user values as SQL literals.
 

@@ -323,6 +323,7 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
         stoneql_desktop::HostServices {
             secrets: store.clone(),
             agent_socket: None,
+            read_write_sql: false,
         },
     ));
     let webview = window(&app, "main");
@@ -423,4 +424,83 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
         "tauri://localhost",
     );
     assert_eq!(stale.unwrap_err()["code"], "FORBIDDEN");
+}
+/// Requirement: unrestricted read-write SQL stays disabled natively until approved. The
+/// production builder reports the gate off and refuses `access: read_write` for every engine
+/// and route before credential lookup or network I/O; read-only connects are unaffected.
+#[test]
+fn read_write_is_refused_natively_while_the_gate_is_off() {
+    // Flipping the gate must be a deliberate, reviewed change to this test too.
+    const { assert!(!stoneql_desktop::READ_WRITE_SQL_ENABLED) };
+    assert!(!stoneql_desktop::HostServices::system().read_write_sql);
+    let app = app();
+    let webview = window(&app, "main");
+    let info = bootstrap(&webview);
+    assert!(!info.payload.read_write_sql);
+    let session = info.payload.session_id;
+    let call = |command: &str, payload: Value| {
+        let mut payload = payload;
+        payload["sessionId"] = json!(session);
+        invoke(
+            &webview,
+            command,
+            json!({"version":1,"requestId":"gate","payload":payload}),
+            "tauri://localhost",
+        )
+    };
+    // TEST-NET-1 (unroutable): a refusal that reached the network would time out instead.
+    let direct = json!({"engine":"mysql","host":"192.0.2.1","port":3306,"username":"writer","password":"","database":"app","rootCertificatePem":null,"access":"read_write"});
+    // A password reference proves the refusal precedes the secret store (no SECRET_UNAVAILABLE).
+    let mut referenced = direct.clone();
+    referenced["passwordRef"] = json!(uuid::Uuid::new_v4().to_string());
+    let mut ssh = direct.clone();
+    ssh["ssh"] =
+        json!({"host":"192.0.2.2","port":22,"username":"deploy","auth":{"method":"agent"}});
+    let mut postgres = direct.clone();
+    postgres["engine"] = json!("postgresql");
+    for payload in [direct, referenced, ssh, postgres] {
+        let started = std::time::Instant::now();
+        let error = call("connect_direct", payload).unwrap_err();
+        assert_eq!(error["code"], "UNSUPPORTED_CAPABILITY");
+        assert_eq!(error["outcome"], "rejected");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("pending safety approval")
+        );
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+    let root = std::env::temp_dir().join(format!("stoneql-gate-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let file = std::fs::canonicalize(&root).unwrap().join("gate.sqlite");
+    std::fs::write(&file, b"").unwrap();
+    let grant = stoneql_desktop::authorize_sqlite_file(app.handle(), &file)
+        .unwrap()
+        .grant
+        .unwrap();
+    assert_eq!(
+        call(
+            "connect_sqlite",
+            json!({"grant":grant,"access":"read_write"})
+        )
+        .unwrap_err()["code"],
+        "UNSUPPORTED_CAPABILITY"
+    );
+    // Read-only (omitted or explicit) still connects.
+    for extra in [json!({}), json!({"access":"read_only"})] {
+        let mut payload = json!({"grant":grant});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let connection = call("connect_sqlite", payload).unwrap()["payload"].clone();
+        assert_eq!(connection["access"], "read_only");
+        call(
+            "disconnect_database",
+            json!({"handle":connection["handle"]}),
+        )
+        .unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

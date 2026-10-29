@@ -269,3 +269,74 @@ fn ssh_requests_are_strict_and_carry_references_or_grants_never_key_material() {
         json!("SSH_HOST_KEY_CHANGED")
     );
 }
+#[test]
+fn execution_requests_decode_strictly_and_omit_absent_options() {
+    let submit = json!({"version":1,"requestId":"r","payload":{"sessionId":"s","handle":"h","sql":"UPDATE t SET a = 1; SELECT 1"}});
+    let decoded: Envelope<SubmitJobRequest> = decode_envelope(&submit.to_string()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), submit);
+    let mut with_options = submit.clone();
+    with_options["payload"]["leaseId"] = json!("l");
+    with_options["payload"]["maxRowsPerResult"] = json!(10);
+    with_options["payload"]["deadlineSeconds"] = json!(5);
+    assert!(decode_envelope::<SubmitJobRequest>(&with_options.to_string()).is_ok());
+    for (field, value) in [
+        ("leaseId", json!(null)),
+        ("maxRowsPerResult", json!(-1)),
+        ("retry", json!(true)),
+    ] {
+        let mut invalid = submit.clone();
+        invalid["payload"][field] = value;
+        assert!(
+            decode_envelope::<SubmitJobRequest>(&invalid.to_string()).is_err(),
+            "{field}"
+        );
+    }
+    let end = json!({"version":1,"requestId":"r","payload":{"sessionId":"s","leaseId":"l","action":"commit"}});
+    assert!(decode_envelope::<EndTransactionRequest>(&end.to_string()).is_ok());
+    let mut savepoint = end.clone();
+    savepoint["payload"]["action"] = json!("savepoint");
+    assert!(decode_envelope::<EndTransactionRequest>(&savepoint.to_string()).is_err());
+    let read_write = json!({"version":1,"requestId":"r","payload":{"sessionId":"s","grant":"g","access":"read_write"}});
+    assert!(decode_envelope::<SqliteConnectionRequest>(&read_write.to_string()).is_ok());
+    let mut admin = read_write.clone();
+    admin["payload"]["access"] = json!("admin");
+    assert!(decode_envelope::<SqliteConnectionRequest>(&admin.to_string()).is_err());
+}
+#[test]
+fn execution_replies_keep_outcomes_cancellation_and_exact_values_distinct() {
+    let update = json!({"jobId":"j","state":"finished","outcome":"unknown","cancellation":"confirmed","serverCancelSent":true,"deadlineExceeded":false,
+        "statements":[{"index":0,"status":"succeeded","inTransaction":true,"affectedRows":"18446744073709551615","resultSets":1,"failure":null,"resultsWithheld":true},
+                      {"index":1,"status":"failed","inTransaction":true,"affectedRows":"0","resultSets":0,"failure":{"constraint":"foreign_key","sqlState":"23503"},"resultsWithheld":false},
+                      {"index":2,"status":"not_run","inTransaction":true,"affectedRows":"0","resultSets":0,"failure":null,"resultsWithheld":false}],
+        "batch":{"statement":0,"result":0,"columns":[{"name":"n","databaseType":"NUMERIC","nullable":null}],"rows":[[{"kind":"decimal","text":"123456789012345678901234567890.4500"}]],"last":true,"truncated":false},
+        "lease":"rollback_only","done":false});
+    let decoded: JobUpdate = serde_json::from_value(update.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), update);
+    assert!(serde_json::from_value::<JobUpdate>(json!({"state":"queued"})).is_err());
+    let mut unflagged = update.clone();
+    unflagged["statements"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("resultsWithheld");
+    assert!(
+        serde_json::from_value::<JobUpdate>(unflagged).is_err(),
+        "resultsWithheld is required so an interrupted statement's missing rows are always stated"
+    );
+    let end = json!({"outcome":"unknown","reason":"connection_lost","commitSent":false,"rollbackSent":true});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<TransactionEnd>(end.clone()).unwrap())
+            .unwrap(),
+        end
+    );
+    assert!(
+        serde_json::from_value::<TransactionEnd>(
+            json!({"outcome":"unknown","reason":"closed","commitSent":false})
+        )
+        .is_err(),
+        "rollbackSent is required so an unknown outcome always states what was sent"
+    );
+    assert_eq!(
+        ErrorDto::from(CoreError::rejected(ErrorCode::Busy)).code,
+        ErrorCodeDto::Busy
+    );
+}

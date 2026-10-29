@@ -1,11 +1,11 @@
 import { ref, type Ref } from 'vue';
-import { useWorkspace } from '../stores/workspace';
-import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, cancelConnect, storeSecret, deleteSecret } from '../services/liveConnections';
+import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
+import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
 import type { Connection, Transport } from '../types';
-import type { SecretPurpose, SshHostKey } from '../../../../contracts/generated/v1';
+import type { SecretPurpose, SshHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
 type SshTransport = Extract<Transport, { type: 'ssh' }>;
 /** Opaque OS secret references held by a profile. */
 function secretReferences(connection?: Connection): string[] {
@@ -20,6 +20,16 @@ function clearTransientSecrets(connection: Connection) {
     connection.transport.passphrase = undefined;
     connection.transport.privateKey = undefined;
   }
+  // The read-write choice is per session too: the next connect starts read-only again.
+  connection.access = undefined;
+}
+export const LEASE_DISCONNECT_WARNING = 'This connection has an open transaction. Disconnecting rolls it back; the outcome is shown afterwards.';
+/** Shows the outcome of a transaction ended by a disconnect (null: it could not be read). */
+export function reportLeaseEnd(end: TransactionEnd | null | undefined, notify: (message: string, type?: string) => void) {
+  if (end === undefined) return;
+  if (end === null) { notify(LEASE_OUTCOME_UNREADABLE, 'error'); return; }
+  const notice = describeTransactionEnd(end);
+  notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
 }
 export interface ConnectionWorkflowOptions {
   manager: Ref<boolean>;
@@ -27,9 +37,11 @@ export interface ConnectionWorkflowOptions {
   discard: () => Promise<boolean>;
   askDiscard: (message: string, acceptLabel?: string) => Promise<boolean>;
   confirm: (request: { title: string; acceptLabel: string; message: string; action: () => void | Promise<void> }) => void;
+  /** PROD-tagged profiles confirm before opening read-write (a UX safeguard, not authorization). */
+  confirmReadWrite: (profileName: string) => Promise<boolean>;
 }
 /** Connection dialog plus mock/live test, save, close and removal orchestration. */
-export function useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm }: ConnectionWorkflowOptions) {
+export function useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm, confirmReadWrite }: ConnectionWorkflowOptions) {
   const store = useWorkspace();
   const nativeHostState = hostState();
   const connectionDraftInitial = ref(''),
@@ -44,9 +56,18 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     attemptId = ref('');
   const sshOf = (draft = connectionDraft.value): SshTransport | undefined => draft?.transport.type === 'ssh' ? draft.transport : undefined;
   const liveSsh = (draft = connectionDraft.value) => draft?.mode === 'live' && draft.engine !== 'SQLite' ? sshOf(draft) : undefined;
-  async function disconnectIfLive(id: string) {
+  /** An open transaction is rolled back by disconnecting: ask first (unless already asked). */
+  async function confirmLeaseDiscard(id: string) {
+    return !store.liveSessions[id]?.lease || askDiscard(LEASE_DISCONNECT_WARNING, 'Disconnect and roll back');
+  }
+  /** Disconnects and reports the open transaction's recorded outcome, if there was one. */
+  async function disconnectReporting(id: string) {
+    reportLeaseEnd(await store.disconnectLiveProfile(id), notify);
+  }
+  async function disconnectIfLive(id: string, askLease = true) {
     if (store.connections.find((c) => c.id === id)?.mode !== 'live') return true;
-    try { await store.disconnectLiveProfile(id); return true; }
+    if (askLease && !(await confirmLeaseDiscard(id))) return false;
+    try { await disconnectReporting(id); return true; }
     catch (error) { notify((error as Error).message, 'error'); return false; }
   }
   async function closeConnection(id: string) {
@@ -67,7 +88,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       else manager.value = true;
     }
   }
-  function newConnection(existing?: Connection) {
+  function newConnection(existing?: Connection, access?: Connection['access']) {
     connectionEditing.value = !!existing;
     connectionDraft.value = existing
       ? JSON.parse(JSON.stringify(existing))
@@ -88,6 +109,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           transport: { type: 'direct' },
         };
     connectionDraft.value!.mode ||= 'mock';
+    // Read-write over SSH is gated off until tunnelled cancellation is fixture-tested.
+    connectionDraft.value!.access = connectionDraft.value!.mode === 'live' && connectionDraft.value!.transport.type !== 'ssh' ? access : undefined;
     // Remember toggles mirror existing references; they are draft-only and never persisted.
     if (connectionDraft.value!.mode === 'live') {
       connectionDraft.value!.rememberPassword = !!connectionDraft.value!.passwordRef;
@@ -244,11 +267,13 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
+    if(connectNow&&draft.access==='read_write'&&draft.environment==='Production'&&!(await confirmReadWrite(draft.name)))return;
+    if(old?.mode==='live'&&!(await confirmLeaseDiscard(draft.id)))return;
     testing.value=true;
     try {
-      if(old?.mode==='live')await store.disconnectLiveProfile(draft.id);
+      if(old?.mode==='live')await disconnectReporting(draft.id);
       const obsolete=await persistSecrets(draft, old);
-      const saved:Connection={...draft,password:undefined,rememberPassword:undefined,transport:ssh?{...ssh,password:undefined,passphrase:undefined,privateKey:undefined,rememberPassword:undefined,rememberPassphrase:undefined}:draft.transport};
+      const saved:Connection={...draft,password:undefined,rememberPassword:undefined,access:undefined,transport:ssh?{...ssh,password:undefined,passphrase:undefined,privateKey:undefined,rememberPassword:undefined,rememberPassphrase:undefined}:draft.transport};
       const index=store.connections.findIndex(c=>c.id===draft.id);
       if(index<0)store.connections.push(saved);else store.connections[index]=saved;
       if(old?.mode!=='live')delete store.workspaces[draft.id];
@@ -256,10 +281,12 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       const workspace=store.workspaces[draft.id];
       if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
       for(const reference of obsolete)await deleteSecret(reference).catch(()=>undefined);
-      if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value);}
+      const access=ssh?undefined:draft.access;
+      if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value, access);}
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
-      notify(connectNow?(draft.engine==='SQLite'?'Live read-only SQLite file opened.':ssh?'Live read-only connection opened over SSH and verified TLS.':'Live read-only connection opened over verified TLS.'):'Live profile saved; connect explicitly before executing SQL.');
+      const mode=access==='read_write'?'read-write':'read-only';
+      notify(connectNow?(draft.engine==='SQLite'?`Live ${mode} SQLite file opened.`:ssh?`Live ${mode} connection opened over SSH and verified TLS.`:`Live ${mode} connection opened over verified TLS.`):'Live profile saved; connect explicitly before executing SQL.');
     }catch(error){connectionError.value=(error as Error).message;}
     finally{testing.value=false;attemptId.value='';}
   }
@@ -275,7 +302,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     if(previous?.mode==='live') {
       if(store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
       if(store.activeId===draft.id && !(await discard()))return;
-      try{await store.disconnectLiveProfile(draft.id);}catch(error){connectionError.value=(error as Error).message;return;}
+      if(!(await confirmLeaseDiscard(draft.id)))return;
+      try{await disconnectReporting(draft.id);}catch(error){connectionError.value=(error as Error).message;return;}
       delete store.workspaces[draft.id];
     }
     if (connectNow) {
@@ -297,9 +325,10 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     confirm({
       title: 'Remove connection?',
       acceptLabel: 'Remove connection',
-      message: 'The connection and its session data will be removed.',
+      message: `The connection and its session data will be removed.${store.liveSessions[id]?.lease ? ` ${LEASE_DISCONNECT_WARNING}` : ''}`,
       action: async () => {
-        if (!(await disconnectIfLive(id))) return;
+        // The lease warning is part of this confirmation; no second dialog.
+        if (!(await disconnectIfLive(id, false))) return;
         // Forget saved credentials with the profile; a failure leaves only an unreachable item.
         if (nativeHostState.kind === 'desktop') for (const reference of secretReferences(store.connections.find((c) => c.id === id))) await deleteSecret(reference).catch(() => undefined);
         store.connections = store.connections.filter((c) => c.id !== id);

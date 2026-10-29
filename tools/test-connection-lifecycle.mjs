@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,14 +12,17 @@ const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
 const resourceEvaluation = process.argv.slice(2).includes('--resource-profile');
 if(resourceEvaluation && !['darwin','linux'].includes(process.platform))throw Error('Resource profiling requires macOS or Linux');
 const nativeEvaluation = process.argv.slice(2).includes('--native-ipc');
-if([packetEvaluation,nativeEvaluation,resourceEvaluation].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
+// M006 read-write execution harness (examples/execution.rs): jobs, cancellation, leases, faults.
+const executionEvaluation = process.argv.slice(2).includes('--execution');
+if([packetEvaluation,nativeEvaluation,resourceEvaluation,executionEvaluation].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
 let nativeBinary;
-if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile'].includes(argument))) throw Error('Unknown fixture option');
+if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile','--execution'].includes(argument))) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
-  const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 240_000 });
+  // The execution harness waits for a real lease idle expiry and 100 cancel/fault cycles.
+  const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: executionEvaluation ? 1_800_000 : 240_000 });
   if (result.status !== 0 || result.error) {
     // The fixture binary emits only static errors/codes and synthetic assertion values.
-    const message = (nativeEvaluation && command===nativeBinary || command.endsWith('/examples/lifecycle') || command.endsWith('/examples/live_packet_limits'))
+    const message = (nativeEvaluation && command===nativeBinary || command.endsWith('/examples/lifecycle') || command.endsWith('/examples/execution') || command.endsWith('/examples/live_packet_limits'))
       ? result.stderr.replaceAll(env.STONEQL_FIXTURE_PASSWORD, '[redacted]')
       : `${command} fixture operation failed; credentials and raw errors withheld`;
     throw Error(message);
@@ -29,6 +32,8 @@ function run(command, args, env = base) {
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
 if(resourceEvaluation){
   run('cargo',['build','--locked','-p','stoneql-runtime','--example','resources']);
+} else if(executionEvaluation){
+  run('cargo',['build','--locked','-p','stoneql-runtime','--example','execution']);
 } else if(nativeEvaluation){
   const artifacts=run('cargo',['test','--locked','-p','stoneql-desktop','--features','custom-protocol','--test','live_database','--no-run','--message-format=json']);
   nativeBinary=artifacts.split('\n').map(line=>JSON.parse(line)).find(message=>message.reason==='compiler-artifact'&&message.target.name==='live_database'&&message.executable)?.executable;
@@ -38,7 +43,7 @@ if(resourceEvaluation){
 } else {
   run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', 'lifecycle']);
 }
-const output = resolve(root, 'artifacts/m003');
+const output = resolve(root, executionEvaluation ? 'artifacts/m006' : 'artifacts/m003');
 mkdirSync(output, { recursive: true });
 for (const engine of ['mysql', 'mariadb']) {
   const temp = mkdtempSync(join(tmpdir(), 'stoneql-lifecycle-'));
@@ -85,6 +90,7 @@ for (const engine of ['mysql', 'mariadb']) {
     Object.assign(env, { STONEQL_LIFECYCLE_PORT: port.split(':')[1], STONEQL_LIFECYCLE_CA: join(tls, 'ca.pem'), STONEQL_LIFECYCLE_BAD_CA: join(tls, 'bad-ca.pem') });
   }
   let started = false;
+  let relay;
   const cleanup = { attempted: false, remainingContainers: null, remainingNetworks: null, temporaryRemoved: false };
   try {
     writeFileSync(join(tls, 'root.cnf'), `[req]
@@ -102,7 +108,7 @@ authorityKeyIdentifier = keyid:always
     run('openssl', ['req', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(tls, 'server-key.pem'), '-out', join(tls, 'server.csr'), '-subj', '/CN=localhost']);
     writeFileSync(join(tls, 'extensions.cnf'), 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n');
     run('openssl', ['x509', '-req', '-in', join(tls, 'server.csr'), '-CA', join(tls, 'ca.pem'), '-CAkey', join(tls, 'ca-key.pem'), '-CAcreateserial', '-out', join(tls, 'server.pem'), '-days', '1', '-extfile', join(tls, 'extensions.cnf')]);
-    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation) {
+    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation && !executionEvaluation) {
       mkdirSync(join(tls, 'issued'));
       writeFileSync(join(tls, 'index.txt'), '');
       writeFileSync(join(tls, 'serial'), '1000\n');
@@ -150,6 +156,20 @@ CREATE SQL SECURITY INVOKER VIEW trust_safe_view AS SELECT id,txt FROM raw_value
 CREATE SQL SECURITY DEFINER VIEW trust_lock_view AS SELECT GET_LOCK('stoneql_${marker}',0) AS acquired;
 CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
+    if(executionEvaluation){
+      writeFileSync(join(init,'003-execution.sql'),`GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, EXECUTE, CREATE ROUTINE, ALTER ROUTINE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
+CREATE TABLE exec_parent(id INT PRIMARY KEY) ENGINE=InnoDB; INSERT INTO exec_parent VALUES (1);
+CREATE TABLE exec_item(id INT PRIMARY KEY, parent INT, FOREIGN KEY (parent) REFERENCES exec_parent(id)) ENGINE=InnoDB;
+CREATE TABLE exec_cycle(n INT PRIMARY KEY) ENGINE=InnoDB;
+CREATE TABLE exec_lock(id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB; INSERT INTO exec_lock VALUES (1, 0);
+CREATE TABLE exec_digit(n INT PRIMARY KEY) ENGINE=InnoDB; INSERT INTO exec_digit VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE exec_bulk(n INT NOT NULL) ENGINE=InnoDB;
+DELIMITER //
+CREATE PROCEDURE exec_multi() SQL SECURITY INVOKER BEGIN SELECT 1 AS a; SELECT 'two' AS b, 2 AS c; END//
+CREATE PROCEDURE exec_autocommit_off() SQL SECURITY INVOKER BEGIN SET autocommit = 0; END//
+CREATE PROCEDURE exec_start_txn() SQL SECURITY INVOKER BEGIN START TRANSACTION; END//
+DELIMITER ;`);
+    }
     if(resourceEvaluation){
       writeFileSync(join(init,'002-resource.sql'),`CREATE TABLE resource_digit(n INT PRIMARY KEY); INSERT INTO resource_digit VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 CREATE TABLE resource_rows(id INT PRIMARY KEY,payload VARCHAR(1024) NOT NULL) ENGINE=InnoDB;
@@ -158,16 +178,26 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     started = true;
     run('docker', [...args, 'up', '-d', engine], env);
     await waitForFixture();
-    const binary = resourceEvaluation ? 'target/debug/examples/resources' : nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
+    if (executionEvaluation) {
+      // Test-owned loopback relay for lost-reply and failed-KILL injection (examples/execution.rs).
+      relay = spawn(process.execPath, [resolve(root, 'tools/tcp-fault-relay.mjs'), env.STONEQL_LIFECYCLE_PORT], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'] });
+      const ports = await new Promise((done, fail) => {
+        let text = '';
+        relay.stdout.on('data', chunk => { text += chunk; if (text.includes('\n')) done(JSON.parse(text.split('\n')[0])); });
+        relay.on('exit', () => fail(Error('Fault relay exited')));
+      });
+      Object.assign(env, { STONEQL_RELAY_PORT: String(ports.relayPort), STONEQL_RELAY_CONTROL: String(ports.controlPort) });
+    }
+    const binary = executionEvaluation ? 'target/debug/examples/execution' : resourceEvaluation ? 'target/debug/examples/resources' : nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
     const measured = resourceEvaluation ? spawnSync('/usr/bin/time',[process.platform==='darwin'?'-l':'-v',resolve(root,binary)],{cwd:root,env,encoding:'utf8',timeout:240000}) : null;
     if(measured && (measured.status!==0||measured.error))throw Error('Resource fixture execution failed; credentials and raw errors withheld');
     const result = measured ? measured.stdout.trim() : run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
     const report = JSON.parse(nativeEvaluation ? result.split('\n').find(line=>line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null' : result);
     if(!report)throw Error('Fixture report missing');
     if(measured){report.processMaxRssBytes=parseMaximumRss(measured.stderr,process.platform);report.machine={platform:process.platform,arch:arch(),osRelease:release(),cpu:cpus()[0]?.model,logicalCpus:cpus().length,totalMemoryBytes:totalmem()};}
-    writeFileSync(join(output, `${resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
-    console.log(resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
-    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation) {
+    writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
+    console.log(executionEvaluation ? `${engine}: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)` : resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
+    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation && !executionEvaluation) {
       run('docker', [...args, 'stop', engine], env);
       writeFileSync(join(exposed, 'server.pem'), readFileSync(join(tls, 'expired-server.pem')));
       run('docker', [...args, 'up', '-d', '--force-recreate', engine], env);
@@ -178,6 +208,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     }
 
   } finally {
+    relay?.kill();
     try {
       if (started) {
         cleanup.attempted = true;
@@ -193,7 +224,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
         rmSync(temp, { recursive: true, force: true });
       } finally {
         cleanup.temporaryRemoved = !existsSync(temp);
-        writeFileSync(join(output, `${resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
+        writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
       }
     }
   }

@@ -1,16 +1,72 @@
 # Deployment proposal
 
-**Status: Proposed / awaiting approval.** No production Rust applications, packaging, infrastructure or deployment are created here. M001 is a separate library/experiment foundation.
+**Status: Proposed / awaiting approval.** No production packaging, signing, infrastructure or deployment exists. The platform scope of the first release, StoneQL v0.1.0 Alpha for macOS, is an **Approved product decision** (2026-10-26), and so is its feature scope and release direction: a usable MySQL/MariaDB client distributed as a **signed and notarized DMG**, with separate desktop and server release gates and a Rust core independent of macOS host APIs (D022, 2026-10-26). Every packaging, signing and lifecycle mechanism below is a **Proposed technical decision** or **Unresolved release blocker**, except items labelled **Implemented and verified**, which describe only the current unsigned development host and fixture-level behavior.
 
 ## Independent release gates
 
-M009 is Desktop Release; M011 is Server Release. M010-D and M010-S are separately accepted evidence sets, not a requirement to finish both before either release. Desktop distribution has no Axum, server-vault, server-SLO or server-release prerequisite. Core services/contracts remain shared and framework-independent; server support is retained without scaffolding it early.
+Separate desktop and server release gates are an **Approved** principle (D009, reaffirmed by D022). M009 is Desktop Release; M011 is Server Release. M010-D and M010-S are separately accepted evidence sets, not a requirement to finish both before either release. Desktop distribution has no Axum, server-vault, server-SLO or server-release prerequisite. Core services/contracts remain shared and framework-independent; server support is retained without scaffolding it early.
 
 Use the [roadmap G1–G6 gates and measurement profile](./roadmap.md#gates-applied-throughout) for security, exact values, compatibility, latency/memory, lifecycle reliability and packaging in every owning milestone. Numerical targets are proposed, not measured or approved. Missing scoped budgets, support matrix or release evidence block the affected track. Scope reduction requires explicit approval and accurate unsupported-feature labels, not silent test omissions.
 
 ## Desktop
 
-Tauri 2 should package the shared frontend and IPC adapter for macOS, Windows and Linux. Build/sign/notarize on supported native runners, test native credential stores and SSH agents, and constrain updater trust. Browser mode remains independent and uses mocks until a reviewed host adapter is selected. Offline desktop operation must not depend on the documentation site's Mermaid CDN.
+Tauri 2 packages the shared frontend and IPC adapter. The architecture stays cross-platform; the first release is macOS only. Browser mode remains independent and uses mocks. Offline desktop operation must not depend on the documentation site's Mermaid CDN.
+
+### Current host configuration — Implemented and verified
+
+Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `StoneQL`, version `0.1.0`, identifier `app.dbadmin.desktop`, `bundle.active: false` and an empty `bundle.icon` list (only a PNG source icon exists). No signing identity, entitlements file, minimum macOS version or updater plugin is configured. The CSP limits renderer connections to IPC; all database and SSH networking happens in the Rust host. `security-framework` is a macOS-only target dependency of the desktop host, not of shared crates. Only debug development builds and a startup smoke have run.
+
+### v0.1.0 Alpha (macOS) packaging and lifecycle requirements
+
+| Area | Requirement or proposal | Label |
+| --- | --- | --- |
+| Targets | macOS arm64 primary; x86_64 only after its own verification (separate build or universal binary is part of that decision) | Approved product decision; x86_64 inclusion and packaging form unresolved |
+| Artifacts | Enable Tauri bundling for a release `.app` inside a `.dmg`, with `.icns` icons, SHA-256 checksums and an SBOM/license report bound to the commit | Proposed technical decision; DMG vs other format needs approval |
+| Minimum macOS version | Set `bundle.macOS.minimumSystemVersion` explicitly and test on that version; do not rely on an unrecorded default | Unresolved release blocker; version needs approval |
+| Signing | Developer ID Application certificate; sign every nested binary with Hardened Runtime and a secure timestamp; verify with `codesign --verify --deep --strict` and `spctl --assess` | Unresolved release blocker; Apple Developer account and identity custody need approval |
+| Notarization | Submit with `notarytool` using credentials held outside the repository (CI secret store or release workstation keychain), staple the ticket to the DMG/app and verify with `stapler validate` and a quarantined first launch on a clean machine | Unresolved release blocker; credential custody needs approval |
+| Hardened Runtime entitlements | Start with no exception entitlements (no JIT, unsigned executable memory, library-validation or dyld-environment exceptions); add one only with evidence that the signed app fails without it | Proposed technical decision |
+| App Sandbox | Not proposed for Developer ID distribution in the alpha. If adopted, it would need at least network client, user-selected read-only file access and a review of SSH-agent socket and temporary Unix-socket tunnel paths, which a sandbox container may block | Proposed technical decision; sandbox yes/no needs approval |
+| Keychain | Generic-password items in the login Keychain under service `app.dbadmin.desktop.credentials`; item access control follows the code signature, so the signed build must be tested for first-use and post-upgrade prompts, including the prompt racing the renderer's 8 s connect timeout | Implemented and verified for unsigned fixture runs only; signed behavior is an Unresolved release blocker |
+| Bundle identifier | `app.dbadmin.desktop` stays until explicitly approved. Proposed: decide the final identifier **before the first signed build**, when only developer data exists. For the bundled app the identifier is expected to key the WebView data store (non-secret profiles and preferences) and any app-support paths; unbundled development builds key them by executable name instead (observed: `~/Library/WebKit/stoneql-desktop`). The Keychain service `app.dbadmin.desktop.credentials` is a separate constant and moves only if changed with it. Changing after a public alpha would strand every user's profiles and saved secrets | Proposed technical decision; change requires human approval |
+| Updater | No auto-updater in v0.1.0 Alpha; users install a newer notarized DMG manually. A later updater requires a signed update feed, pinned public key and tamper/downgrade tests | Proposed technical decision |
+| Install | Drag-to-Applications from the DMG; first launch passes Gatekeeper without user overrides | Unresolved release blocker (never executed) |
+| Upgrade | Replacing the app preserves non-secret profiles and Keychain references, keeps the same identifier and signing team, and is tested from each prior alpha build; schema changes to stored profiles need a reversible migration | Unresolved release blocker; policy not written |
+| Uninstall and credential cleanup | Dragging the app to the Trash leaves Keychain items and WebView data behind. Proposed: an in-app "remove all saved secrets" action, documented manual cleanup of remaining data, and surfacing (not ignoring) failed `delete_secret` calls on profile removal | Unresolved release blocker; today profile removal deletes references best-effort and ignores errors |
+| Session lifecycle | Pools, tunnels, key-file/SQLite grants close on disconnect, expiry, renderer reload and shutdown | Implemented and verified with command-handler fixtures; graphical and signed-artifact verification unresolved |
+
+### Signed and notarized DMG release gates (v0.1.0 Alpha)
+
+All steps are **Unresolved release blockers** until executed on the actual release candidate; logs are kept with the desktop evidence set and bound to the artifact checksum.
+
+1. Approved custody of the Apple Developer Team, *Developer ID Application* certificate and `notarytool` credentials, outside the repository.
+2. Bundling enabled with DMG target, `.icns` icons, explicit minimum macOS version, final identifier, Hardened Runtime and an entitlements file without exception entitlements.
+3. Clean tagged build with pinned toolchains for `aarch64-apple-darwin` (Intel only if approved and verified).
+4. Sign nested code, app and DMG with `codesign --options runtime --timestamp`.
+5. Verify with `codesign --verify --deep --strict --verbose=2`, inspect entitlements and the Hardened Runtime flag.
+6. Notarize with `xcrun notarytool submit --wait`; keep the log.
+7. Staple and validate: `xcrun stapler staple` / `stapler validate`, `spctl -a -vvv -t exec` on the app, `spctl -a -t open --context context:primary-signature` on the DMG, `hdiutil verify`.
+8. Quarantined first launch on a clean Mac (minimum and current macOS), online and offline, with no Gatekeeper override.
+9. Install, upgrade-from-each-prior-alpha, downgrade stance and uninstall drills, including Keychain prompts and saved-secret cleanup.
+10. Credential cleanup and session lifecycle: failed secret deletion reported; no orphan tunnels, pools, grants or temporary transfer files after quit, crash relaunch, sleep/wake or network change.
+11. Checksums, SBOM/license report and an artifact secret scan.
+
+### Proposed alpha budgets (not approved)
+
+| Budget | Proposed value |
+| --- | --- |
+| Cold launch to interactive | p95 at most 3 s over 30 launches of the signed arm64 build |
+| Whole-app memory (host plus WebKit processes) | Measure first; proposed at most 300 MiB idle and 400 MiB with eight connections |
+| Basic SQL | p95 at most 500 ms; at most 64 MiB above connected idle |
+| Cancellation | Accepted cancel to terminal state p95 at most 2 s |
+| Transfers | One million 1 KiB rows with a slow consumer within 256 MiB additional memory; temporary files removed within 30 s of cancellation |
+| SSH transport | Connect p95 at most 6 s; per-query overhead at most 50 ms above Direct on the loopback reference |
+
+These are review inputs recorded for approval, not measured guarantees; the [roadmap measurement profile](./roadmap.md#gates-applied-throughout) remains the shared definition.
+
+### Deferred desktop platforms
+
+Windows and Linux desktop packaging, signing (Authenticode, distribution package signing), credential stores, SSH agents and native runners are **Deferred** and must not block v0.1.0 Alpha. Their open findings stay open for later releases: Linux GTK dependency advisories (RUSTSEC-2024-0429, RUSTSEC-2024-0370), no Windows SSH tunnel endpoint, and unexecuted Windows/Linux CI. No Windows/Linux-specific code is removed; shared crates gain no macOS dependency.
 
 ## Future Linux server
 
@@ -28,4 +84,4 @@ The VitePress workflow is prepared separately. It builds pull requests and deplo
 
 ## Release gates and unknowns
 
-Define desktop OS/engine versions, signing/update custody and startup/install/upgrade/rollback budgets before M009. Define server OIDC/vault/TLS ownership, Linux compatibility, resource/availability/SLO and RPO/RTO targets before M011. Do not require server decisions for desktop distribution. Run signed native smoke tests on all three desktop OSes and systemd/container integration tests before claiming deployability. None of these production checks are part of the browser prototype's passing unit suite.
+Before M009's v0.1.0 Alpha sign-off (feature scope approved by D022): approve signing/notarization custody, the bundle identifier, minimum macOS version, x86_64 inclusion, artifact format and startup/install/upgrade budgets, then run signed native smoke and end-to-end tests on macOS using the actual release artifact. Windows/Linux desktop gates move to their later releases. Define server OIDC/vault/TLS ownership, Linux compatibility, resource/availability/SLO and RPO/RTO targets before M011; do not require server decisions for desktop distribution. None of these production checks are part of the browser prototype's passing unit suite.

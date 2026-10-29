@@ -1,6 +1,6 @@
 # Connection management
 
-**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB/PostgreSQL and SQLite-file read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped pools, TLS, expiry and shutdown tests; [M004](../development/postgres-sqlite.md) adds PostgreSQL VerifyFull TLS and owner-scoped SQLite file grants. Native live binding and renderer-bootstrap cleanup are implemented. [M005](../development/ssh-credentials.md) adds desktop SSH tunnels (verified enrolled host keys, agent/password/key file) and macOS Keychain secret references; other operating systems, Teleport/SSM and a server vault remain unimplemented.
+**Status: partially implemented evaluation.** Profile/group UI defaults to mocks, with explicit desktop Direct MySQL/MariaDB/PostgreSQL and SQLite-file read-only profiles. The [M003 runtime](../development/connection-lifecycle.md) has owner-scoped pools, TLS, expiry and shutdown tests; [M004](../development/postgres-sqlite.md) adds PostgreSQL VerifyFull TLS and owner-scoped SQLite file grants. Native live binding and renderer-bootstrap cleanup are implemented. [M005](../development/ssh-credentials.md) adds desktop SSH tunnels (verified enrolled host keys, agent/password/key file) and macOS Keychain secret references; other operating systems and a server vault remain unimplemented. Teleport/SSM remain unimplemented.
 
 ## Identity and ownership
 

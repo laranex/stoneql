@@ -148,6 +148,60 @@ pub(crate) fn decode_cell(row: &MySqlRow, index: usize) -> Result<CellValue, Rea
     })
 }
 
+/// Text-protocol rows (statements MySQL cannot prepare, such as `USE` or routine DDL). The
+/// server's own text rendering is kept exactly; nothing is parsed into floating point.
+pub(crate) fn decode_text_cell(row: &MySqlRow, index: usize) -> Result<CellValue, ReadError> {
+    let raw = row.try_get_raw(index).map_err(|_| ReadError::Database)?;
+    if raw.is_null() {
+        return Ok(CellValue::Null);
+    }
+    let kind = raw.type_info().name().to_owned();
+    let bytes = row
+        .try_get_unchecked::<Vec<u8>, _>(index)
+        .map_err(|_| ReadError::Database)?;
+    let unknown = || CellValue::Unknown {
+        database_type: kind.clone(),
+        hex: hex(&bytes),
+    };
+    let Ok(text) = String::from_utf8(bytes.clone()) else {
+        return Ok(match kind.as_str() {
+            "BINARY" | "VARBINARY" | "TINYBLOB" | "BLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BIT" => {
+                CellValue::Binary { hex: hex(&bytes) }
+            }
+            _ => unknown(),
+        });
+    };
+    let integer = !text.is_empty()
+        && text
+            .strip_prefix('-')
+            .unwrap_or(&text)
+            .bytes()
+            .all(|byte| byte.is_ascii_digit());
+    Ok(match kind.as_str() {
+        "BOOLEAN" | "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" | "YEAR"
+        | "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
+        | "BIGINT UNSIGNED"
+            if integer =>
+        {
+            CellValue::Integer { text }
+        }
+        "DECIMAL" => CellValue::Decimal { text },
+        "FLOAT" | "DOUBLE" => CellValue::Float { text },
+        "DATE" | "DATETIME" | "TIMESTAMP" | "TIME" => CellValue::Temporal {
+            database_type: kind.clone(),
+            text,
+        },
+        "CHAR" | "VARCHAR" | "TINYTEXT" | "TEXT" | "MEDIUMTEXT" | "LONGTEXT" | "ENUM" | "SET" => {
+            CellValue::Text { text }
+        }
+        "JSON" => CellValue::Json { text },
+        "BINARY" | "VARBINARY" | "TINYBLOB" | "BLOB" | "MEDIUMBLOB" | "LONGBLOB" | "BIT" => {
+            CellValue::Binary { hex: hex(&bytes) }
+        }
+        _ => unknown(),
+    })
+}
+
 fn temporal(kind: &str, bytes: &[u8]) -> Option<String> {
     let length = *bytes.first()? as usize;
     if length + 1 != bytes.len() {

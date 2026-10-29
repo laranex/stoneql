@@ -15,6 +15,11 @@ fn main() {
             "cancel_connect",
             "store_secret",
             "delete_secret",
+            "submit_job",
+            "fetch_job",
+            "cancel_job",
+            "begin_transaction",
+            "end_transaction",
         ]),
     ))
     .expect("validate StoneQL native configuration and command permissions");

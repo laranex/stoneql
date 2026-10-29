@@ -2859,3 +2859,46 @@ label svg {
   overflow-y: auto;
   min-height: 0;
 }
+/* Live read-write execution: access mode, transaction state and per-statement outcomes. */
+.access-badge {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  font-size: var(--font-small);
+  color: var(--muted);
+}
+.access-badge.read-write {
+  border-color: var(--warning-line);
+  color: var(--warning);
+  font-weight: var(--weight-semibold);
+}
+.transaction-toolbar {
+  flex-wrap: wrap;
+}
+.statement-outcomes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+.statement-outcome {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px var(--space-2);
+  font-size: var(--font-small);
+  color: var(--muted);
+}
+.statement-outcome.succeeded {
+  border-color: var(--success-line);
+  color: var(--success);
+  background: var(--success-bg);
+}
+.statement-outcome.failed,
+.statement-outcome.unknown {
+  border-color: var(--danger-line);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.result-sets {
+  margin-bottom: var(--space-2);
+}

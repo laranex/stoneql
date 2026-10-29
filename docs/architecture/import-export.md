@@ -2,6 +2,24 @@
 
 **Status: Proposed / awaiting approval.** Current jobs simulate progress and summaries only; no real dump or compression is performed.
 
+## v0.1.0 Alpha scope
+
+Basic **SQL and CSV import/export for MySQL/MariaDB** is part of the approved alpha feature scope (D022, 2026-10-26). Nothing below is implemented; mechanisms and limits are **Proposed**.
+
+| Format / feature | Alpha treatment |
+| --- | --- |
+| CSV export (table or query result) | Required; streaming, explicit encoding/delimiter/quote/header and a NULL marker distinct from the empty string |
+| SQL export | Required; logical exporter (table structure plus batched inserts), no dependency on a native dump tool; InnoDB exported from a consistent read-only snapshot, non-transactional tables labelled as not snapshot-consistent; views, routines, triggers and events listed as omitted |
+| CSV import into an existing table | Required; validated against live metadata, parameterized batches inside an owned transaction, stop on first error, truthful committed/rejected/unknown counts |
+| SQL import | Required; statements run one at a time through the safe execution path, no whole-file rollback promise, implicit DDL commits stated; waits for the gate that enables unrestricted read-write SQL |
+| GZIP | Proposed: export kept (no expansion risk); import deferred unless quotas apply to decompressed bytes with a tested expansion-ratio cap |
+| XLSX import | **Deferred** (approved deferral) |
+| XLSX and JSON export, ZIP | Proposed deferral |
+| PostgreSQL and SQLite transfers | Deferred with those engines' alpha status |
+
+Files are reached only through native save/open dialogs that issue owner-scoped, one-shot grants; exports write to a temporary file beside the target and rename atomically, removing it on cancel or failure. File, record, batch and disk quotas are proposed for approval and are not yet set.
+
+
 ## Pipeline
 
 ```mermaid
@@ -22,7 +40,7 @@ Keep format configuration independent of Vue. Engine adapters supply quoting, ob
 | SQL | Engine-aware DDL/data output; native dump tool versus logical exporter requires evaluation; import may partially commit DDL |
 | CSV | Explicit encoding, delimiter, quoting, header, NULL and empty-string semantics; schema validation before writes |
 | JSON | Tagged lossless values or documented plain export policy; streaming array/record framing |
-| XLSX | Planned only; preserve text precision, reject formula execution, bound workbook expansion and rows |
+| XLSX | Planned only, Deferred for the alpha; preserve text precision, reject formula execution, bound workbook expansion and rows |
 | GZIP | Streaming compression with cancellation and byte quotas |
 | ZIP | Bound expanded size/entries; evaluate streaming writer versus quota-limited temporary storage and central-directory requirements |
 

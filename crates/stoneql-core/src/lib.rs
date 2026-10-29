@@ -85,6 +85,8 @@ pub enum ErrorCode {
     SshAuthenticationFailed,
     SshAgentUnavailable,
     SecretUnavailable,
+    /// The handle is running a job or holds an open transaction. Work is never queued.
+    Busy,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -122,6 +124,7 @@ impl ErrorCode {
             Self::SecretUnavailable => {
                 "The saved credential is unavailable or belongs to a different connection target."
             }
+            Self::Busy => "The connection is busy with another statement or an open transaction.",
             Self::Internal => "The operation could not be completed.",
         }
     }
@@ -132,6 +135,18 @@ pub enum Outcome {
     Rejected,
     RolledBack,
     Committed,
+    Unknown,
+}
+
+/// Terminal result of a job or statement; exactly one applies. `Succeeded`/`Failed` need the
+/// server's reply. `Cancelled` means stopped before the work was sent, so nothing ran.
+/// An interrupted write is `Unknown` even when its end was observed: partial or committed
+/// effects cannot be excluded without a server-confirmed ROLLBACK.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionOutcome {
+    Succeeded,
+    Failed,
+    Cancelled,
     Unknown,
 }
 

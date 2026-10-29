@@ -1,13 +1,13 @@
 # M002 — Tauri host integration
 
 ## Status
-Authorized by user instruction to continue all milestones. Implemented development host; local verification in progress. Not complete: cross-OS execution, performance profile and transitive Linux security findings remain open.
+Authorized by user instruction to continue all milestones. Implemented development host; local verification in progress. Not complete. **Re-scoped for v0.1.0 Alpha (D021, Approved product decision 2026-10-26):** only macOS gates block the alpha (arm64 required, x86_64 if shipped). Open for the alpha: native macOS E2E, release-build startup/IPC profile, OS fallback-dialog interaction, macOS-applicable audit result. Windows/Linux execution and the Linux GTK advisories are Deferred (see below), not passed. D022 (Approved 2026-10-26) adds alpha IPC surface for jobs, transactions, metadata, browse/CRUD and native transfer file grants; each new command needs the same G1 ACL negatives, strict decoding and session checks before the alpha, and the shared crates stay free of macOS host APIs.
 
 ## Objective and scope
 Bind the shared core through a minimal Tauri host and existing Vue UI; retain browser/mock mode. No server implementation.
 
 ## Dependencies and prerequisites
-M001 versioned/generated contracts and approved D001/D003 boundaries; approved native capability and OS test matrix. Production signing custody is a later M009 gate, not required for fixture-based development.
+M001 versioned/generated contracts and approved D001/D003 boundaries; approved native capability and OS test matrix (for the alpha: macOS arm64, plus x86_64 if shipped). Production signing custody is a later M009 gate, not required for fixture-based development.
 
 ## Technical approach
 Use reviewed IPC DTOs and host-local identity/handle authorization; no Tauri types in shared crates. Start with fixture requests and integrate M003 only when ready.
@@ -18,12 +18,26 @@ Native IPC adapter, capability policy, generated-contract integration and cross-
 ## Acceptance criteria
 - G1: deny unauthorized window/command access; no arbitrary renderer shell/filesystem API or secrets in renderer storage/logs.
 - G2: IPC round trips preserve tagged raw values/errors without conversion; reconnect/disconnect cannot target another workspace.
-- G3: approved macOS/Windows/Linux development runners pass native smoke tests; browser frontend remains independent of native imports; reject unsupported DTO versions.
+- G3: macOS arm64 (and x86_64 if shipped) native smoke and E2E pass for the alpha; Windows/Linux runners are Deferred to their releases; browser frontend remains independent of native imports; reject unsupported DTO versions.
 - G4/G5: record startup/IPC overhead against the approved reference profile, bounded errors/timeouts and clean shutdown; failed IPC must not freeze the editor.
 - G6: reproducible development bundle documented; production signing/install/upgrade acceptance remains M009.
 
 ## Required tests and verification
-Native three-OS smoke tests; negative capability/handle tests; generated-contract fixtures; existing frontend automated/browser suites and build; measure IPC/startup samples.
+Native macOS smoke and E2E tests (three-OS smoke deferred for Windows/Linux); negative capability/handle tests; generated-contract fixtures; existing frontend automated/browser suites and build; measure IPC/startup samples.
+
+## v0.1.0 Alpha (macOS) required evidence
+Labels: Implemented and verified / Unresolved release blocker / Proposed technical decision. Nothing here is complete.
+- Implemented and verified: debug macOS ARM WebView smoke (453 ms latest), four native IPC ACL/value/protocol/close tests, browser-shim close dialogs, generated-contract and boundary checks.
+- Unresolved release blocker: native GUI end-to-end on the signed release `.app` (macOS arm64) driving real MySQL/MariaDB fixtures Direct and over SSH — connect, query, browse, CRUD, export/import, cancel, disconnect, reload, quit with unsaved edits or an open transaction; current tests use MockRuntime or browser shims.
+- Unresolved release blocker: OS fallback close dialog on an unresponsive renderer, exercised manually or automated on macOS.
+- Unresolved release blocker: 30-launch cold-start and IPC overhead profile of the release build on arm64 (x86_64 if shipped); budgets remain Proposed technical decisions.
+- Unresolved release blocker: dependency audit applicable to the macOS artifact (Linux GTK findings either shown absent from the macOS link graph or explicitly risk-accepted; no ignore added).
+- Proposed technical decision: release bundling configuration (icons, minimum macOS version, Hardened Runtime) belongs to M009 but must not weaken the M002 capability/CSP boundary.
+
+## Deferred (not blocking v0.1.0 Alpha)
+- Windows and Linux native execution, WebView differences and OS fallback dialogs.
+- Linux GTK advisories RUSTSEC-2024-0429 / RUSTSEC-2024-0370: remain open for Linux distribution.
+- Remote execution of the prepared three-OS CI matrix (Windows/Linux jobs).
 
 ## Risks and limitations
 WebView/platform differences and native runners can block a target. A development bundle does not establish a signed release. Desktop progress must not depend on Axum.

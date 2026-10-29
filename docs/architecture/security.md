@@ -25,3 +25,5 @@ Use TLS and verified host keys, signed desktop updates, restrictive CSP and no a
 ## Verification and open decisions
 
 Threat-review malicious SQL strings in generated CRUD, object ownership/IDOR, CSRF, path traversal, archive bombs, TLS failures, untrusted SSH keys, leaked errors and quota bypass. Test negative authorization cases, credential isolation and cleanup after crashes. Approve authentication provider, credential lifecycle, target policy and diagnostic retention before M005/M008. No security controls may be disabled merely to pass local tests.
+
+Desktop SSH/credential status (2026-10-26 review): host keys require explicit enrollment and exact match, TLS stays verified through tunnels, and secrets are referenced rather than read back. Open hardening before the macOS alpha: the enrolled host key is currently held by the renderer rather than a native store, Keychain resolution is not yet inside the cancellable bounded setup, dead tunnels keep their slot until expiry, same-user processes can reach a live tunnel socket, and secret deletion failures are not surfaced. See [SSH and credentials](../development/ssh-credentials.md).

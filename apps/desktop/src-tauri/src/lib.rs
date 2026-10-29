@@ -1,8 +1,10 @@
 mod database;
+mod execution;
 mod secrets;
 mod sqlite_file;
 mod ssh_transport;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
+use execution::{begin_transaction, cancel_job, end_transaction, fetch_job, submit_job};
 pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
 use secrets::{delete_secret, store_secret};
 pub use sqlite_file::authorize_sqlite_file;
@@ -25,26 +27,37 @@ use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-/// Trusted host services injected at startup: the OS secret store and the SSH agent socket.
-/// Tests substitute a dedicated keychain service and a private agent.
+/// M006 gate for unrestricted read-write SQL (jobs and transactions). OFF until the critical
+/// execution safety tests pass and the user approves enabling it. While off, the host refuses
+/// `access: read_write` before any credential lookup or network I/O. Only trusted host code can
+/// change it (tests through [`app_builder_with`]); never renderer input or the environment.
+pub const READ_WRITE_SQL_ENABLED: bool = false;
+
+/// Trusted host services injected at startup: the OS secret store, the SSH agent socket and the
+/// read-write SQL gate. Tests substitute a dedicated keychain service, a private agent and, for
+/// execution tests only, an enabled gate.
 pub struct HostServices {
     pub secrets: Arc<dyn SecretStore>,
     pub agent_socket: Option<PathBuf>,
+    pub read_write_sql: bool,
 }
 impl HostServices {
-    /// Production: the OS credential store and the agent named by `SSH_AUTH_SOCK` at startup.
+    /// Production: the OS credential store, the agent named by `SSH_AUTH_SOCK` at startup and
+    /// the compiled-in read-write gate.
     pub fn system() -> Self {
         Self {
             secrets: Arc::new(OsSecretStore::new(DEFAULT_SERVICE)),
             agent_socket: std::env::var_os("SSH_AUTH_SOCK")
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute()),
+            read_write_sql: READ_WRITE_SQL_ENABLED,
         }
     }
 }
 pub struct NativeSession {
     secrets: Arc<dyn SecretStore>,
     agent_socket: Option<PathBuf>,
+    read_write_sql: bool,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     owner: stoneql_runtime::OwnerId,
@@ -75,6 +88,7 @@ impl NativeSession {
         Self {
             secrets: services.secrets,
             agent_socket: services.agent_socket,
+            read_write_sql: services.read_write_sql,
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
@@ -173,6 +187,7 @@ async fn host_info<R: Runtime>(
             session_id: id,
             nonce: request.payload.nonce,
             simulated: true,
+            read_write_sql: session.read_write_sql,
         },
     })
 }
@@ -368,7 +383,12 @@ pub fn app_builder_with<R: Runtime>(
             pick_ssh_key_file,
             cancel_connect,
             store_secret,
-            delete_secret
+            delete_secret,
+            submit_job,
+            fetch_job,
+            cancel_job,
+            begin_transaction,
+            end_transaction
         ])
 }
 pub fn run() {

@@ -20,6 +20,8 @@ Pin one physical connection for a transaction lease. Bound lease lifetime and cl
 
 DDL atomicity varies by engine and operation. In particular, MySQL implicit commits mean a multi-object schema operation cannot be promised atomic. See [MySQL implicit commit documentation](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html). Record per-step outcomes and prevent false all-or-nothing success notices.
 
+Proposed execution contract (2026-10-26, awaiting approval): every statement, job and transaction outcome is exactly one of confirmed success, confirmed failure, confirmed cancellation or unknown. Cancellation is best-effort; a cancelled or timed-out write is reported as unknown unless a server-confirmed rollback follows, rollback is never claimed without server confirmation, and writes with uncertain outcomes are never retried automatically.
+
 ## Required tests
 
 Use real disposable database integration tests for concurrent edits, FK delete/update actions, composite keys, duplicate batches, precision boundaries, NULL/defaults, rollback, timeout and lost commit responses. Property-based DTO round trips are a candidate, not an installed dependency. Mock unit tests cannot establish real database isolation or DDL behavior.

@@ -13,7 +13,7 @@
 | Agent policy | The agent signs authentication challenges only and is closed after authentication; at most five identities are tried; agent forwarding, sessions, shells, X11 and remote forwards are never requested |
 | Endpoint | One SSH session per logical connection handle. The runtime binds a private Unix socket in a new mode-0700 directory under the temporary directory and forwards each accepted stream through a fresh `direct-tcpip` channel. No TCP port is opened locally |
 | TLS identity | The database adapter dials the socket but keeps `VerifyIdentity`/`VerifyFull` and the **original database hostname** for certificate verification. The SSH server resolves and reaches that hostname |
-| Lifecycle | Tunnels belong to the runtime registry entry and close after its pool on disconnect, expiry, renderer reset and shutdown. Setup is bounded (SSH phase within the 3 s deadline, whole setup within 6 s), can be cancelled by attempt id, and partial state is dropped on every failure |
+| Lifecycle | Tunnels belong to the runtime registry entry and close after its pool on disconnect, expiry, renderer reset and shutdown. Setup after secret resolution is bounded (SSH phase within the 3 s deadline, whole setup within 6 s), can be cancelled by attempt id, and partial state is dropped on every failure. Keychain secret resolution and key-file reading happen before and outside that bound and are not cancellable yet (review finding F-02) |
 | Secrets | `store_secret` saves a value in the macOS login Keychain (service `app.dbadmin.desktop.credentials`) under a random UUID reference bound to its target and route; `delete_secret` forgets it. There is no command that returns a secret. Other operating systems return `UNSUPPORTED_CAPABILITY` |
 
 SQLite has no network transport: an SSH request for a SQLite profile is refused. Teleport and AWS SSM remain unimplemented extension points.
@@ -58,7 +58,11 @@ SSH overhead was characterized against the Direct loopback baseline on Docker De
 - RSA user and host keys are unsupported until the `rsa` crate advisory ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)) is resolved or explicitly risk-accepted.
 - `~/.ssh/known_hosts`, `~/.ssh/config`, jump hosts, keyboard-interactive/2FA, host certificates and agent confirmation prompts are not supported.
 - Key-file grants are session-only: choose the key again after restarting.
-- A tunnel whose SSH session dies (keepalive exhausted) makes the handle report disconnected, but its registry slot is released only on explicit disconnect, reset or the one-hour expiry (as for a dead Direct pool).
+- A tunnel whose SSH session dies (keepalive exhausted) is expected, from code reading, to make the handle report disconnected (not yet covered by a test); its registry slot is released only on explicit disconnect, reset or the one-hour expiry (as for a dead Direct pool).
+- Same-user reachability: the endpoint's 0700 directory keeps other users out, but any process running as the same user can connect to a live tunnel socket (no peer-process check yet). It still needs database credentials and must pass verified TLS.
+- Secret deletion failures are currently swallowed by the renderer, and a renderer timeout during `store_secret` or connect can leave an unreferenced Keychain item or an invisible live handle.
+- RSA agent identities are skipped silently and RSA-only host keys surface as a connection failure rather than an explicit unsupported error.
+- 2026-10-26 security review findings, fixes and approval requests: internal `.ref/planning/m005-security-review.md` (F-01 host-key trust anchor held by the renderer; F-02 cancellation/timeout around Keychain resolution; F-03 dead-tunnel slot release; F-04 host/port edits keep the old trusted key).
 - Windows compilation/Clippy of the Unix-only endpoint gating was not executed locally; CI is prepared, not remotely run.
 - The SSH fixture disables OpenSSH `PerSourcePenalties` because it deliberately aborts many handshakes; real servers may throttle a client that cancels repeatedly.
 - G4/G5 transport budgets, cross-OS agent/keyring behaviour and decisions D016–D020 need review before M005 can be accepted.

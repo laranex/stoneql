@@ -1,0 +1,189 @@
+{
+  "backpressure": {
+    "pages": 17,
+    "parkedWhileUnread": true,
+    "rowsDelivered": 8397,
+    "truncated": true
+  },
+  "bulkCancel": [
+    {
+      "cancelToTerminalMs": 82.126709,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    },
+    {
+      "cancelToTerminalMs": 80.18325,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    },
+    {
+      "cancelToTerminalMs": 71.36575,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    }
+  ],
+  "busyNotQueued": true,
+  "cancel": {
+    "confirmed": 100,
+    "deadlinePathConfirmed": true,
+    "graceMs": 1500,
+    "maxMs": 70.11004199999999,
+    "p50Ms": 60.521166,
+    "p95Ms": 68.625291,
+    "samples": 100,
+    "serverSignalsSent": 100
+  },
+  "connectionLossUnknown": true,
+  "constraintFailures": [
+    "unique",
+    "foreign_key"
+  ],
+  "ddlPartialOutcome": true,
+  "engine": "PostgreSql",
+  "exactValues": true,
+  "faultCycles": {
+    "committed": 25,
+    "cycles": 100,
+    "dirtyConnectionsReused": 0,
+    "sessionStateLeaks": 0,
+    "writerSessionsAfter": 2,
+    "writerSessionsBefore": 2
+  },
+  "killFailure": {
+    "boundMs": 2500,
+    "cancelToTerminalMs": 1502.418167,
+    "cancellation": "requested",
+    "executions": 1,
+    "killedByObserver": false,
+    "outcome": "unknown",
+    "rowApplied": false,
+    "serverBackstop": {
+      "endedAfterSubmitMs": 5066.046042,
+      "endedByServer": true,
+      "statementTimeoutMs": 5000
+    },
+    "serverCancelSent": false,
+    "statementStillRunningAfterAbandon": true
+  },
+  "leaseExpiry": {
+    "idleSeconds": 60,
+    "outcome": "rolled_back"
+  },
+  "lostEndReplies": {
+    "commit_drop_s2c": {
+      "commitSent": true,
+      "endMsMax": 10008.139834,
+      "endMsP50": 10007.705542,
+      "endStatementReachedServer": "3/3",
+      "n": 3,
+      "repeatEndSameOutcome": "3/3",
+      "rollbackSent": false,
+      "rowCommittedObserved": 3,
+      "unknown": "3/3"
+    },
+    "commit_sever": {
+      "commitSent": true,
+      "endMsMax": 0.204208,
+      "endMsP50": 0.101709,
+      "endStatementReachedServer": "0/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": false,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    },
+    "commit_sever_on_reply": {
+      "commitSent": true,
+      "endMsMax": 0.944166,
+      "endMsP50": 0.493667,
+      "endStatementReachedServer": "50/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": false,
+      "rowCommittedObserved": 50,
+      "unknown": "50/50"
+    },
+    "rollback_drop_s2c": {
+      "commitSent": false,
+      "endMsMax": 2008.6334579999998,
+      "endMsP50": 2007.2255420000001,
+      "endStatementReachedServer": "3/3",
+      "n": 3,
+      "repeatEndSameOutcome": "3/3",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "3/3"
+    },
+    "rollback_sever": {
+      "commitSent": false,
+      "endMsMax": 0.171667,
+      "endMsP50": 0.08604200000000001,
+      "endStatementReachedServer": "0/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    },
+    "rollback_sever_on_reply": {
+      "commitSent": false,
+      "endMsMax": 0.885541,
+      "endMsP50": 0.486375,
+      "endStatementReachedServer": "50/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    }
+  },
+  "noResend": {
+    "lostReplyEndStatementsAtMostOnce": true,
+    "source": "PostgreSQL csvlog, log_statement = all (execute and simple-query statements; parse excluded)",
+    "writeCancelExecutedOnce": "30/30"
+  },
+  "ownerIsolation": true,
+  "postgresSessionState": {
+    "probe": {
+      "abortedBlockMismatchAfterSuccess": true,
+      "autocommitMatches": true,
+      "healthyBlockMatchesLeaseOnly": true,
+      "healthyCommitApplied": true
+    },
+    "r10": {
+      "blockStillAbortedAfterRefusal": true,
+      "checkedCommitOnAbortedBlock": "25P02",
+      "checkedCommitOutsideBlock": "25P01",
+      "plainCommitOnAbortedBlockAnsweredOk": true,
+      "rowsAppliedFromAbortedBlocks": 0
+    }
+  },
+  "procedureResultSets": 1,
+  "transactions": [
+    "commit",
+    "rollback",
+    "rollback_only"
+  ],
+  "writeCancel": {
+    "cancellation": "confirmed",
+    "connectionDiscarded": "30/30",
+    "executedOnce": "30/30",
+    "interruptDelivered": "30/30",
+    "maxMs": 40.343042000000004,
+    "n": 30,
+    "note": "rowUnchanged is the observed data state after the lock holder rolled back (statement never acquired the lock); not a claimed rollback",
+    "outcome": "unknown",
+    "p50Ms": 24.691292,
+    "p95Ms": 30.904958,
+    "rowUnchanged": "30/30",
+    "serverInterrupt": "pg_cancel_backend",
+    "sessionsBaseline": 2
+  },
+  "image": "sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929"
+}

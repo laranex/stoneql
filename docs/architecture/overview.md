@@ -1,6 +1,6 @@
 # Architecture overview
 
-**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles M004 adds Direct PostgreSQL and natively granted SQLite files, and M005 adds desktop SSH tunnels and macOS Keychain secret references; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
+**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles; M004 adds Direct PostgreSQL and natively granted SQLite files, and M005 adds desktop SSH tunnels and macOS Keychain secret references; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
 
 ## Current system
 
@@ -22,7 +22,7 @@ flowchart TB
   DB --> Engines[MySQL / MariaDB / PostgreSQL / SQLite]
 ```
 
-Desktop targets macOS, Windows and Linux. A later standalone Axum binary serves the same built frontend on Linux. The shared core owns connection/job lifecycles, typed values, capabilities, errors and validation; it imports neither Tauri nor Axum. Host adapters authenticate/authorize and translate versioned DTOs, without duplicating domain rules.
+Desktop architecture remains cross-platform (macOS, Windows, Linux); the approved v0.1.0 Alpha ships macOS only (Apple Silicon primary, Intel optional), with Windows and Linux deferred — see the [roadmap](./roadmap.md#v0-1-0-alpha-macos). Its approved feature scope (D022) is a usable MySQL/MariaDB client: live browsing, CRUD, safe SQL execution, SSH and basic SQL/CSV import/export; PostgreSQL is optional, SQLite, advanced objects and XLSX import are deferred. macOS-specific code (such as the Keychain provider) stays in the desktop host; the shared Rust core does not depend on macOS host APIs. A later standalone Axum binary serves the same built frontend on Linux. The shared core owns connection/job lifecycles, typed values, capabilities, errors and validation; it imports neither Tauri nor Axum. Host adapters authenticate/authorize and translate versioned DTOs, without duplicating domain rules.
 
 ## Decisions and alternatives
 

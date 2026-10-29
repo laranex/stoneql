@@ -2,6 +2,7 @@
 //! show the OS file picker and receives an opaque, session-scoped grant for the chosen file.
 use super::{
     NativeSession,
+    database::access,
     database::{admit, authorize, connected, lifecycle},
     decode, forbidden,
 };
@@ -92,13 +93,14 @@ pub async fn connect_sqlite<R: Runtime>(
     authorize(&window, &session, &request.payload.session_id)?;
     let _slot = admit(&session)?;
     let input = request.payload;
+    let mode = access(&session, input.access, false)?;
     let file_name = session
         .connections
         .sqlite_file_name(session.owner, &input.grant)
         .map_err(lifecycle)?;
     let handle = session
         .connections
-        .connect_sqlite(session.owner, &input.grant)
+        .connect_sqlite_with_access(session.owner, &input.grant, mode)
         .await;
     connected(
         &session,

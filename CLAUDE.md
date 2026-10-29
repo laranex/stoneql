@@ -37,7 +37,7 @@ cargo test --locked -p stoneql-runtime <test_name>
 
 Desktop (Tauri 2): `desktop:build` (builds frontend first and embeds `apps/frontend/dist` — rebuild after frontend changes), `desktop:run`, `desktop:test`, `desktop:smoke` (opens a real window, 15 s deadline).
 
-Docker-backed fixtures (each run creates and removes its own containers): `spike:drivers`, `test:native-database`, `test:native-postgres`, `test:lifecycle`, `test:resources`, `test:ssh` (disposable OpenSSH + databases, private agent, per-run Keychain service), `test:receive-limit[:live]`. `rust:vendor` verifies the patched `vendor/sqlx-mysql`.
+Docker-backed fixtures (each run creates and removes its own containers): `spike:drivers`, `test:native-database`, `test:native-postgres`, `test:lifecycle`, `test:resources`, `test:ssh` (disposable OpenSSH + databases, private agent, per-run Keychain service), `test:execution` (M006 jobs/transactions/cancel), `test:receive-limit[:live]`. `rust:vendor` verifies the patched `vendor/sqlx-mysql`.
 
 ## Architecture
 
