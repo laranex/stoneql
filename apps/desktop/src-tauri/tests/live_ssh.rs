@@ -1,6 +1,7 @@
 //! Explicitly opted-in IPC integration for SSH tunnels and OS secret references. Run only
 //! through `npm run test:ssh`: disposable OpenSSH/database containers, generated keys, a
 //! private agent and a per-run Keychain service whose items are deleted before exit.
+mod common;
 use serde_json::{Value, json};
 use std::{env, sync::Arc};
 use stoneql_desktop::{HostServices, OsSecretStore, SecretError, SecretStore};
@@ -46,6 +47,7 @@ fn ssh_commands_use_owned_fixture() {
     ];
     let keychain = Arc::new(OsSecretStore::new(&service));
     let created = Created(keychain.clone(), Default::default());
+    let journal = common::TempJournal::new();
     let app = stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
@@ -53,6 +55,7 @@ fn ssh_commands_use_owned_fixture() {
             secrets: keychain.clone(),
             agent_socket: Some(var("STONEQL_SSH_AGENT").into()),
             read_write_sql: false,
+            outcome_journal: Some(journal.dir()),
         },
     )
     .build(tauri::generate_context!())

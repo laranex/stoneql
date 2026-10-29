@@ -188,6 +188,7 @@ pub enum ErrorCodeDto {
     SecretUnavailable,
     Busy,
     UnresolvedOutcomes,
+    OutcomeJournalUnavailable,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -228,6 +229,7 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::SecretUnavailable => ErrorCodeDto::SecretUnavailable,
             ErrorCode::Busy => ErrorCodeDto::Busy,
             ErrorCode::UnresolvedOutcomes => ErrorCodeDto::UnresolvedOutcomes,
+            ErrorCode::OutcomeJournalUnavailable => ErrorCodeDto::OutcomeJournalUnavailable,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -783,21 +785,60 @@ pub struct UnresolvedJob {
     pub server_cancel_sent: bool,
     pub deadline_exceeded: bool,
 }
-/// An `unknown` outcome (a transaction end or a job) the user has not acknowledged. The server
-/// may or may not have applied the work; only the server can tell. No SQL text, values, driver
-/// messages or credentials: `database` is the database or SQLite file name of the connection.
-/// Exactly one of `transaction` and `job` is present. Kept in memory by this app process only.
+/// An unknown-outcome journal that could not be read intact at startup. The damaged file was
+/// renamed, never deleted or overwritten (`preservedAs`, a file name in the journal directory;
+/// absent when it could not be renamed). `unreadableRecords` counts records that could not be
+/// recovered (absent when the file was too damaged to count them).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JournalDamage {
+    pub unreadable_records: Option<u32>,
+    pub preserved_as: Option<String>,
+}
+/// Why the durable unknown-outcome journal cannot be used; new read-write work is refused
+/// (`OUTCOME_JOURNAL_UNAVAILABLE`) while one is reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum JournalProblemDto {
+    /// Not opened yet (or the app data directory could not be resolved).
+    NotOpened,
+    /// The directory or file could not be created, read or locked.
+    Unavailable,
+    /// A symlink, not owned by the user, or accessible by group or others.
+    Insecure,
+    /// Another StoneQL process holds the journal.
+    InUse,
+    /// Written by a newer StoneQL; left untouched.
+    UnsupportedVersion,
+    /// Damaged and could not be renamed aside; left untouched.
+    DamagedNotPreserved,
+    /// The last durable write failed (for example a full disk).
+    WriteFailed,
+}
+/// An `unknown` outcome (a transaction end or a job) the user has not acknowledged, or a
+/// damaged journal (`journalDamage`). The server may or may not have applied the work; only the
+/// server can tell. No SQL text, values, driver messages or credentials: `database` is the
+/// database or SQLite file name of the connection. Exactly one of `transaction`, `job` and
+/// `journalDamage` is present. Kept in a durable per-user journal across restarts.
+/// `restored`: recorded by an earlier run of StoneQL (before a restart). `appExited`: StoneQL
+/// quit or crashed while the work was in flight; the facts are the last ones journaled before
+/// anything was sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedOutcome {
     pub outcome_id: String,
+    pub engine: Option<EngineDto>,
     pub database: String,
     pub seconds_ago: u32,
+    pub restored: bool,
+    pub app_exited: bool,
     pub transaction: Option<TransactionEnd>,
     pub job: Option<UnresolvedJob>,
+    pub journal_damage: Option<JournalDamage>,
 }
 /// Oldest first. At `limit` unresolved outcomes new jobs and transactions are refused
 /// (`UNRESOLVED_OUTCOMES`) until some are acknowledged; none is ever dropped to make room.
+/// `journal` reports why unknown outcomes cannot be saved durably (null when they can).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct UnresolvedOutcomes {
@@ -806,6 +847,7 @@ pub struct UnresolvedOutcomes {
     // Jobs a renderer reset detached while still running. Each may still add an unknown
     // outcome; list again until this is 0, then `outcomes` includes all of them.
     pub pending: u32,
+    pub journal: Option<JournalProblemDto>,
 }
 
 pub fn typescript() -> String {
@@ -856,6 +898,8 @@ pub fn typescript() -> String {
         UnresolvedOutcomesRequest::decl(&config),
         AcknowledgeOutcomeRequest::decl(&config),
         UnresolvedJob::decl(&config),
+        JournalDamage::decl(&config),
+        JournalProblemDto::decl(&config),
         UnresolvedOutcome::decl(&config),
         UnresolvedOutcomes::decl(&config),
         CloseAction::decl(&config),

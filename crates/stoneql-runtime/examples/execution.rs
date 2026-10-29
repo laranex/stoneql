@@ -333,6 +333,7 @@ async fn unknown_outcome_retention(
     run: &Run,
     relay_handle: ConnectionId,
     observer: &mut Observer,
+    journaled_target: DirectServer,
 ) -> Result<serde_json::Value, Failure> {
     let (connections, owner) = (&run.connections, run.owner);
     relay("normal").await?;
@@ -410,13 +411,129 @@ async fn unknown_outcome_retention(
             && connections.end_transaction(owner, lease, true).await? == expected,
         "acknowledgement hides the outcome without changing it",
     )?;
+    let restart = journal_restart(observer, journaled_target).await?;
     Ok(json!({
         "lostCommit": {"outcome": "unknown", "commitSent": true, "rowCommittedObserved": applied},
         "confirmedEndsChurned": churn, "churnMs": churn_ms,
         "oldestConfirmedEvicted": evicted,
         "unknownListedAfterChurn": true, "unknownQueryableAfterChurn": true,
         "acknowledgementChangesOutcome": false,
+        "journalRestart": restart,
     }))
+}
+
+/// Durable journal on a real server: a lost-COMMIT `unknown` (`sever_on_reply`) is journaled by
+/// a registry with a journal in a private temporary directory; that registry is dropped without
+/// shutdown (a crash), a new one is created from the journal, and the outcome is listed for
+/// the new owner with unchanged facts, marked as recorded before a restart.
+async fn journal_restart(
+    observer: &mut Observer,
+    target: DirectServer,
+) -> Result<serde_json::Value, Failure> {
+    let root = env::temp_dir().join(format!("stoneql-fixture-journal-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root)?;
+    let dir = root.join("outcome-journal");
+    let result = async {
+        let fresh = || Connections::new(2, Duration::from_secs(3), Duration::from_secs(3600));
+        let crashed = fresh()?;
+        crashed.require_outcome_journal();
+        let owner = OwnerId::new();
+        ensure(
+            crashed.open_outcome_journal(&dir, owner).is_none(),
+            "journal opened",
+        )?;
+        let handle = crashed
+            .connect_with_access(owner, target, None, None, Access::ReadWrite)
+            .await?;
+        relay("normal").await?;
+        step("journal restart: begin");
+        let lease = crashed.begin_transaction(owner, handle).await?;
+        let mut options = JobOptions::new("INSERT INTO exec_item(id, parent) VALUES (9002, 1)");
+        options.lease = Some(lease);
+        let (id, _) = crashed.submit_job(owner, handle, options)?;
+        let mut done = false;
+        for _ in 0..30 {
+            let update = crashed.fetch_job(owner, id, Duration::from_secs(1)).await?;
+            if update.done {
+                ensure(
+                    update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+                    "journaled lease insert",
+                )?;
+                done = true;
+                break;
+            }
+        }
+        ensure(done, "journaled lease insert finished")?;
+        relay("sever_on_reply").await?;
+        step("journal restart: lost commit");
+        let lost = crashed.end_transaction(owner, lease, true).await?;
+        relay("sever").await?;
+        relay("normal").await?;
+        let expected = TransactionEnd {
+            outcome: Outcome::Unknown,
+            reason: EndReason::Requested,
+            commit_sent: true,
+            rollback_sent: false,
+        };
+        ensure(lost == expected, "journaled lost COMMIT is unknown")?;
+        let before = crashed
+            .unresolved_outcomes(owner)
+            .outcomes
+            .into_iter()
+            .find(|outcome| outcome.outcome_id == lease.opaque())
+            .ok_or("lost COMMIT listed before the crash")?;
+        // Crash: no shutdown, nothing concluded or flushed by the runtime on the way out.
+        drop(crashed);
+        step("journal restart: restored");
+        let restarted = fresh()?;
+        let next = OwnerId::new();
+        ensure(
+            restarted.open_outcome_journal(&dir, next).is_none(),
+            "journal reopened",
+        )?;
+        let listed = restarted.unresolved_outcomes(next);
+        let after = listed
+            .outcomes
+            .iter()
+            .find(|outcome| outcome.outcome_id == lease.opaque())
+            .ok_or("lost COMMIT restored after the restart")?;
+        ensure(
+            after.restored
+                && !after.app_exited
+                && after.transaction == Some(expected.into())
+                && after.transaction == before.transaction
+                && (after.engine.clone(), after.database.clone())
+                    == (before.engine.clone(), before.database.clone())
+                && after.engine.is_some(),
+            "restored facts unchanged",
+        )?;
+        ensure(
+            restarted.end_transaction(next, lease, false).await? == expected,
+            "restored outcome answers as recorded and sends nothing",
+        )?;
+        let applied = observer
+            .scalar("SELECT COUNT(*) FROM exec_item WHERE id = 9002".into())
+            .await?;
+        restarted.acknowledge_outcome(next, OutcomeId::parse(&lease.opaque())?)?;
+        let modes = {
+            use std::os::unix::fs::MetadataExt;
+            (
+                std::fs::metadata(&dir)?.mode() & 0o777,
+                std::fs::metadata(dir.join("unknown-outcomes.journal"))?.mode() & 0o777,
+            )
+        };
+        ensure(modes == (0o700, 0o600), "journal modes")?;
+        drop(restarted);
+        Ok::<_, Failure>(json!({
+            "lostCommitJournaled": true, "restoredAfterDrop": true,
+            "factsUnchanged": true, "restoredMarked": true,
+            "rowCommittedObserved": applied, "modes": [format!("{:o}", modes.0), format!("{:o}", modes.1)],
+            "otherRestoredOutcomes": listed.outcomes.len() - 1,
+        }))
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(&root);
+    result
 }
 
 /// Requests cancellation and returns (cancel→terminal latency, final update).
@@ -622,6 +739,7 @@ async fn write_faults(
     observer: &mut Observer,
     mut locker: Observer,
     relayed: DirectServer,
+    journaled: DirectServer,
 ) -> Result<serde_json::Map<String, serde_json::Value>, Failure> {
     let (connections, owner) = (&run.connections, run.owner);
     let spy = Spy { mysql: run.mysql() };
@@ -1017,7 +1135,7 @@ async fn write_faults(
     step("unknown outcome retention");
     report.insert(
         "unknownOutcomeRetention".into(),
-        unknown_outcome_retention(run, relay_handle, observer).await?,
+        unknown_outcome_retention(run, relay_handle, observer, journaled).await?,
     );
     report.insert(
         "noResend".into(),
@@ -2201,8 +2319,12 @@ async fn harness() -> Result<(), Failure> {
             port: env::var("STONEQL_RELAY_PORT")?.parse()?,
             ..config()
         };
+        let journaled = DirectServer {
+            port: env::var("STONEQL_RELAY_PORT")?.parse()?,
+            ..config()
+        };
         let locker = admin().await?;
-        let faults = write_faults(&run, &mut observer, locker, relayed).await?;
+        let faults = write_faults(&run, &mut observer, locker, relayed, journaled).await?;
         for (key, value) in faults {
             report.insert(key, value);
         }

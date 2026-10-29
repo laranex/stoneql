@@ -31,6 +31,7 @@ fn execution_error(error: ExecutionError) -> ErrorDto {
         ExecutionError::Connection(error) => return lifecycle(error),
         ExecutionError::Database => ErrorCode::QueryRejected,
         ExecutionError::UnresolvedOutcomes => ErrorCode::UnresolvedOutcomes,
+        ExecutionError::JournalUnavailable => ErrorCode::OutcomeJournalUnavailable,
     };
     let mut dto = ErrorDto::from(CoreError::rejected(code));
     // The runtime's specific refusal text is static and safe to show.
@@ -40,6 +41,7 @@ fn execution_error(error: ExecutionError) -> ErrorDto {
             | ExecutionError::RollbackOnly
             | ExecutionError::ReadOnlyHandle
             | ExecutionError::UnresolvedOutcomes
+            | ExecutionError::JournalUnavailable
     ) {
         dto.message = error.to_string();
     }
@@ -198,9 +200,10 @@ pub async fn end_transaction<R: Runtime>(
     Ok(reply(request.request_id, end.into()))
 }
 
-/// Unknown outcomes this app process recorded for its owner and the user has not acknowledged,
-/// including those of the renderer session before a reload (the owner outlives rotations).
-/// SQL-free summaries only.
+/// Unknown outcomes the user has not acknowledged: recorded by this app process (including
+/// those of the renderer session before a reload; the owner outlives rotations) and restored
+/// from the durable journal at startup (before a restart). SQL-free summaries only, plus the
+/// journal's problem if unknown outcomes cannot be saved durably.
 #[tauri::command]
 pub fn list_unresolved_outcomes<R: Runtime>(
     window: WebviewWindow<R>,
@@ -269,5 +272,14 @@ mod tests {
             (ErrorCodeDto::UnresolvedOutcomes, OutcomeDto::Rejected)
         );
         assert!(unresolved.message.contains("acknowledge") && !unresolved.retryable);
+        let journal = execution_error(ExecutionError::JournalUnavailable);
+        assert_eq!(
+            (journal.code, journal.outcome),
+            (
+                ErrorCodeDto::OutcomeJournalUnavailable,
+                OutcomeDto::Rejected
+            )
+        );
+        assert!(journal.message.starts_with("Nothing was sent") && !journal.retryable);
     }
 }

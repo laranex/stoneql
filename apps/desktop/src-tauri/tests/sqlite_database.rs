@@ -1,5 +1,6 @@
 //! Actual Tauri command handlers (MockRuntime) against temporary SQLite files. The native picker
 //! itself cannot be driven here; the trusted `authorize_sqlite_file` step it calls is used instead.
+mod common;
 use serde_json::{Value, json};
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::path::PathBuf;
@@ -42,7 +43,8 @@ INSERT INTO "odd ""name"""(id,big,amount,note) VALUES (2,NULL,'',NULL);"#,
             .unwrap();
         writer.close().await.unwrap();
     });
-    let app = stoneql_desktop::app_builder(mock_builder(), false)
+    let journal = common::TempJournal::new();
+    let app = stoneql_desktop::app_builder_with(mock_builder(), false, journal.services())
         .build(tauri::generate_context!())
         .unwrap();
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))

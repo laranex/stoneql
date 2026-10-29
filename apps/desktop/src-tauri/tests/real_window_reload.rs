@@ -268,6 +268,8 @@ fn main() {
         false,
         stoneql_desktop::HostServices {
             read_write_sql: true,
+            // Never the user's app data directory; removed with `root`.
+            outcome_journal: Some(root.join("outcome-journal")),
             ..stoneql_desktop::HostServices::system()
         },
     )

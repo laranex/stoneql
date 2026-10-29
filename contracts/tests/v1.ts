@@ -42,16 +42,23 @@ const endedWithoutRollbackFact: TransactionEnd = {outcome: 'unknown', reason: 'c
 const savepoint: EndTransactionRequest = {sessionId: 's', leaseId: 'l', action: 'savepoint'};
 const busy: ErrorDto = {...error, code: 'BUSY'};
 const unresolvedRefusal: ErrorDto = {...error, code: 'UNRESOLVED_OUTCOMES', outcome: 'rejected'};
-const unresolved: UnresolvedOutcomes = {limit: 16, pending: 1, outcomes: [
-  {outcomeId: 'o1', database: 'app', secondsAgo: 4, transaction: ended, job: null},
-  {outcomeId: 'o2', database: 'app', secondsAgo: 9, transaction: null, job: {statementCount: 2, unknownStatement: 1, inTransaction: false, cancellation: 'requested', serverCancelSent: true, deadlineExceeded: false}},
+const unresolved: UnresolvedOutcomes = {limit: 16, pending: 1, journal: null, outcomes: [
+  {outcomeId: 'o1', engine: 'mysql', database: 'app', secondsAgo: 4, restored: false, appExited: false, transaction: ended, job: null, journalDamage: null},
+  {outcomeId: 'o2', engine: null, database: 'app', secondsAgo: 9, restored: true, appExited: true, transaction: null, job: {statementCount: 2, unknownStatement: 1, inTransaction: false, cancellation: 'requested', serverCancelSent: true, deadlineExceeded: false}, journalDamage: null},
+  {outcomeId: 'o3', engine: null, database: '', secondsAgo: 0, restored: true, appExited: false, transaction: null, job: null, journalDamage: {unreadableRecords: 1, preservedAs: 'unknown-outcomes.journal.damaged-1-abcd'}},
 ]};
+const journalRefusal: ErrorDto = {...error, code: 'OUTCOME_JOURNAL_UNAVAILABLE', outcome: 'rejected'};
+const journalProblem: UnresolvedOutcomes = {...unresolved, journal: 'write_failed'};
+// @ts-expect-error journal problems are a closed set
+const unknownProblem: UnresolvedOutcomes = {...unresolved, journal: 'disk_full'};
+// @ts-expect-error a restored outcome still states whether it was restored
+const withoutRestored: UnresolvedOutcomes = {...unresolved, outcomes: [{outcomeId: 'o4', engine: null, database: 'app', secondsAgo: 1, appExited: false, transaction: ended, job: null, journalDamage: null}]};
 const acknowledge: AcknowledgeOutcomeRequest = {sessionId: 's', outcomeId: 'o1'};
 // @ts-expect-error acknowledgement never sets or changes an outcome
 const resolveByAck: AcknowledgeOutcomeRequest = {sessionId: 's', outcomeId: 'o1', outcome: 'rolled_back'};
 // @ts-expect-error a listed outcome carries no SQL text
-const withSql: UnresolvedOutcomes = {limit: 16, pending: 0, outcomes: [{...unresolved.outcomes[0]!, sql: 'UPDATE t SET a = 1'}]};
+const withSql: UnresolvedOutcomes = {limit: 16, pending: 0, journal: null, outcomes: [{...unresolved.outcomes[0]!, sql: 'UPDATE t SET a = 1'}]};
 // @ts-expect-error the host always reports detached jobs still pending
-const withoutPending: UnresolvedOutcomes = {limit: 16, outcomes: []};
-void [job, nullLease, page, interrupted, unflagged, queued, writeCancelled, ended, endedWithoutRollbackFact, savepoint, busy, unresolvedRefusal, unresolved, acknowledge, resolveByAck, withSql, withoutPending];
+const withoutPending: UnresolvedOutcomes = {limit: 16, journal: null, outcomes: []};
+void [job, nullLease, page, interrupted, unflagged, queued, writeCancelled, ended, endedWithoutRollbackFact, savepoint, busy, unresolvedRefusal, unresolved, journalRefusal, journalProblem, unknownProblem, withoutRestored, acknowledge, resolveByAck, withSql, withoutPending];
 void [request, result, defaults, error, invalid, future, liveDefaults, liveExplicit, liveNull, sqliteOpen, sqlitePath, pickerCancelled, overSsh, pastedKey, nullHostKey, remember, hostKeyChanged];

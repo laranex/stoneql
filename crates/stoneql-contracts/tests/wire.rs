@@ -345,7 +345,18 @@ fn execution_replies_keep_outcomes_cancellation_and_exact_values_distinct() {
         json!("UNRESOLVED_OUTCOMES")
     );
     assert_eq!(refused.outcome, OutcomeDto::Rejected);
-    let listed = json!({"outcomes":[{"outcomeId":"o","database":"app","secondsAgo":3,"transaction":{"outcome":"unknown","reason":"closed","commitSent":true,"rollbackSent":false},"job":null}],"limit":16,"pending":1});
+    let journal = ErrorDto::from(CoreError::rejected(ErrorCode::OutcomeJournalUnavailable));
+    assert_eq!(
+        (
+            serde_json::to_value(&journal).unwrap()["code"].clone(),
+            journal.outcome
+        ),
+        (json!("OUTCOME_JOURNAL_UNAVAILABLE"), OutcomeDto::Rejected)
+    );
+    let listed = json!({"outcomes":[
+        {"outcomeId":"o","engine":"mariadb","database":"app","secondsAgo":3,"restored":true,"appExited":false,"transaction":{"outcome":"unknown","reason":"closed","commitSent":true,"rollbackSent":false},"job":null,"journalDamage":null},
+        {"outcomeId":"d","engine":null,"database":"","secondsAgo":0,"restored":true,"appExited":false,"transaction":null,"job":null,"journalDamage":{"unreadableRecords":null,"preservedAs":"unknown-outcomes.journal.damaged-1-abcd"}}
+    ],"limit":16,"pending":1,"journal":"write_failed"});
     assert_eq!(
         serde_json::to_value(serde_json::from_value::<UnresolvedOutcomes>(listed.clone()).unwrap())
             .unwrap(),

@@ -36,17 +36,21 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 /// change it (tests through [`app_builder_with`]); never renderer input or the environment.
 pub const READ_WRITE_SQL_ENABLED: bool = false;
 
-/// Trusted host services injected at startup: the OS secret store, the SSH agent socket and the
-/// read-write SQL gate. Tests substitute a dedicated keychain service, a private agent and, for
-/// execution tests only, an enabled gate.
+/// Trusted host services injected at startup: the OS secret store, the SSH agent socket, the
+/// read-write SQL gate and the unknown-outcome journal directory. Tests substitute a dedicated
+/// keychain service, a private agent, a temporary journal directory and, for execution tests
+/// only, an enabled gate.
 pub struct HostServices {
     pub secrets: Arc<dyn SecretStore>,
     pub agent_socket: Option<PathBuf>,
     pub read_write_sql: bool,
+    /// Directory of the durable unknown-outcome journal; `None` means
+    /// `<app data dir>/outcome-journal` (macOS: `~/Library/Application Support/<identifier>/`).
+    pub outcome_journal: Option<PathBuf>,
 }
 impl HostServices {
-    /// Production: the OS credential store, the agent named by `SSH_AUTH_SOCK` at startup and
-    /// the compiled-in read-write gate.
+    /// Production: the OS credential store, the agent named by `SSH_AUTH_SOCK` at startup, the
+    /// compiled-in read-write gate and the journal in the app data directory.
     pub fn system() -> Self {
         Self {
             secrets: Arc::new(OsSecretStore::new(DEFAULT_SERVICE)),
@@ -54,9 +58,12 @@ impl HostServices {
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute()),
             read_write_sql: READ_WRITE_SQL_ENABLED,
+            outcome_journal: None,
         }
     }
 }
+/// Name of the journal directory inside the app data directory.
+pub const OUTCOME_JOURNAL_DIR: &str = "outcome-journal";
 pub struct NativeSession {
     secrets: Arc<dyn SecretStore>,
     agent_socket: Option<PathBuf>,
@@ -65,8 +72,12 @@ pub struct NativeSession {
     active_requests: AtomicUsize,
     /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
     /// before a reload stay listable (owner-scoped) by the next renderer until acknowledged.
+    /// Outcomes journaled by an earlier process are restored under this owner at startup.
     owner: stoneql_runtime::OwnerId,
     connections: stoneql_runtime::Connections,
+    /// Journal directory override (tests); `None` resolves the app data directory.
+    outcome_journal: Option<PathBuf>,
+    journal_opened: AtomicBool,
     renderer: Mutex<Option<(String, String)>>,
     bootstrap: tauri::async_runtime::Mutex<()>,
     echoed: AtomicBool,
@@ -100,7 +111,32 @@ impl NativeSession {
         self.close_generation.fetch_add(1, Ordering::SeqCst);
         self.connections.reset().await;
     }
+    /// Opens the durable unknown-outcome journal once, at the first renderer bootstrap (before
+    /// any session exists, so no command can list or admit work before it is restored). If the
+    /// directory cannot be resolved it stays unopened and read-write work is refused.
+    fn open_journal<R: Runtime>(&self, app: &tauri::AppHandle<R>) {
+        if self.journal_opened.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let dir = self.outcome_journal.clone().or_else(|| {
+            app.path()
+                .app_data_dir()
+                .ok()
+                .map(|dir| dir.join(OUTCOME_JOURNAL_DIR))
+        });
+        if let Some(dir) = dir {
+            self.connections.open_outcome_journal(&dir, self.owner);
+        }
+    }
     fn new(smoke: bool, services: HostServices) -> Self {
+        let connections = stoneql_runtime::Connections::new(
+            8,
+            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(3600),
+        )
+        .expect("static native limits");
+        // Fail closed until the journal is opened at setup: no read-write work before then.
+        connections.require_outcome_journal();
         Self {
             secrets: services.secrets,
             agent_socket: services.agent_socket,
@@ -108,12 +144,9 @@ impl NativeSession {
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
-            connections: stoneql_runtime::Connections::new(
-                8,
-                std::time::Duration::from_secs(3),
-                std::time::Duration::from_secs(3600),
-            )
-            .expect("static native limits"),
+            connections,
+            outcome_journal: services.outcome_journal,
+            journal_opened: AtomicBool::new(false),
             renderer: Mutex::new(None),
             bootstrap: tauri::async_runtime::Mutex::new(()),
             echoed: AtomicBool::new(false),
@@ -172,6 +205,7 @@ async fn host_info<R: Runtime>(
     if session.closing.load(Ordering::SeqCst) || session.allow_exit.load(Ordering::SeqCst) {
         return Err(forbidden());
     }
+    session.open_journal(window.app_handle());
     let previous = session
         .renderer
         .lock()

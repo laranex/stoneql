@@ -98,7 +98,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
  await page.evaluate(()=>window.dispatchEvent(new Event('stoneql-close-requested')));
  const closeDialog=page.getByRole('alertdialog');
  await expect(closeDialog).toContainText('A live transaction is open or a live statement is running.');
- await expect(closeDialog).toContainText('The outcome will not be shown.');
+ await expect(closeDialog).toContainText('listed the next time StoneQL starts, until you acknowledge it');
  await closeDialog.getByRole('button',{name:'Cancel',exact:true}).click();
  await expect.poll(()=>page.evaluate(()=>(window as any).liveLog.filter((e:any)=>e.command==='resolve_close').map((e:any)=>e.payload.action))).toEqual(['prompted','cancel']);
  await expect(page.getByText('Transaction open',{exact:true})).toBeVisible();

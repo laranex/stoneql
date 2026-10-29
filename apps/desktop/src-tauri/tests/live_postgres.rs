@@ -1,5 +1,6 @@
 //! Explicitly opted-in, owning-fixture PostgreSQL IPC integration. Never reads saved profiles,
 //! libpq environment or arbitrary URLs: every value comes from `npm run test:native-postgres`.
+mod common;
 use serde_json::{Value, json};
 use sqlx::{
     ConnectOptions, Connection, PgConnection,
@@ -237,7 +238,8 @@ fn postgres_commands_use_owned_tls_fixture() {
         observer.close().await.unwrap();
     });
 
-    let app = stoneql_desktop::app_builder(mock_builder(), false)
+    let journal = common::TempJournal::new();
+    let app = stoneql_desktop::app_builder_with(mock_builder(), false, journal.services())
         .build(tauri::generate_context!())
         .unwrap();
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))

@@ -4411,7 +4411,9 @@ name = "stoneql-runtime"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "nix",
  "russh",
+ "serde",
  "serde_json",
  "sqlx",
  "stoneql-contracts",

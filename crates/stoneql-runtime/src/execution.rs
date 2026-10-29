@@ -11,6 +11,7 @@ use super::{
     sqlite,
 };
 use futures_util::{StreamExt, stream::BoxStream};
+use journal::{Entry, Journal};
 use sqlx::{
     Connection, Database, Either, Executor, MySql, MySqlConnection, PgConnection, Postgres, Row,
     SqlSafeStr, Sqlite, SqliteConnection, Statement as _, TypeInfo,
@@ -19,7 +20,7 @@ use sqlx::{
 };
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
@@ -27,11 +28,12 @@ use std::{
     time::Duration,
 };
 use stoneql_contracts::v1::{
-    self, CancellationDto, CellValue, Column, ConstraintKindDto, JobStateDto, JobUpdate,
-    LeaseStateDto, OutcomeDto, ResultBatch, StatementFailure, StatementReport, StatementStatusDto,
-    TransactionEndReasonDto, UnresolvedJob, UnresolvedOutcome, UnresolvedOutcomes,
+    self, CancellationDto, CellValue, Column, ConstraintKindDto, EngineDto, JobStateDto, JobUpdate,
+    JournalDamage, JournalProblemDto, LeaseStateDto, OutcomeDto, ResultBatch, StatementFailure,
+    StatementReport, StatementStatusDto, TransactionEndReasonDto, UnresolvedJob, UnresolvedOutcome,
+    UnresolvedOutcomes,
 };
-use stoneql_core::{ExecutionOutcome, Outcome};
+use stoneql_core::{Engine, ExecutionOutcome, Outcome};
 use tokio::{
     sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc},
     time::Instant,
@@ -170,6 +172,9 @@ pub enum ExecutionError {
     Database,
     /// `MAX_UNRESOLVED_OUTCOMES_PER_OWNER` unknown outcomes await acknowledgement.
     UnresolvedOutcomes,
+    /// The durable unknown-outcome journal cannot be opened, validated or written, or a damaged
+    /// journal awaits acknowledgement. Nothing was sent.
+    JournalUnavailable,
 }
 impl std::fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -187,6 +192,9 @@ impl std::fmt::Display for ExecutionError {
                 }
                 Self::UnresolvedOutcomes => {
                     "Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them."
+                }
+                Self::JournalUnavailable => {
+                    "Nothing was sent: StoneQL cannot save unknown outcomes durably right now. See the notice about the unknown-outcome journal."
                 }
                 _ => "The database refused to start the transaction.",
             }),
@@ -254,6 +262,20 @@ impl From<TransactionEnd> for v1::TransactionEnd {
     }
 }
 impl TransactionEnd {
+    /// A journaled end (always unknown) restored at startup.
+    fn restored(end: &v1::TransactionEnd) -> Self {
+        Self {
+            outcome: Outcome::Unknown,
+            reason: match end.reason {
+                TransactionEndReasonDto::Requested => EndReason::Requested,
+                TransactionEndReasonDto::Expired => EndReason::Expired,
+                TransactionEndReasonDto::ConnectionLost => EndReason::ConnectionLost,
+                TransactionEndReasonDto::Closed => EndReason::Closed,
+            },
+            commit_sent: end.commit_sent,
+            rollback_sent: end.rollback_sent,
+        }
+    }
     /// Recorded before anything is sent; replaced only by what the server confirms.
     fn unknown(reason: EndReason) -> Self {
         Self {
@@ -261,6 +283,48 @@ impl TransactionEnd {
             reason,
             commit_sent: false,
             rollback_sent: false,
+        }
+    }
+}
+
+/// Non-secret connection context of a recorded outcome: the engine and the database (or SQLite
+/// file) name. Never host, user, credentials or SQL.
+#[derive(Clone, Debug, Default)]
+struct Origin {
+    engine: Option<EngineDto>,
+    database: String,
+}
+impl Origin {
+    fn of(engine: Engine, target: &Target) -> Self {
+        Self {
+            engine: Some(match engine {
+                Engine::MySql => EngineDto::MySql,
+                Engine::MariaDb => EngineDto::MariaDb,
+                Engine::PostgreSql => EngineDto::PostgreSql,
+                Engine::Sqlite => EngineDto::Sqlite,
+            }),
+            database: target.database(),
+        }
+    }
+}
+impl From<&Origin> for Origin {
+    fn from(origin: &Origin) -> Self {
+        origin.clone()
+    }
+}
+impl From<&str> for Origin {
+    fn from(database: &str) -> Self {
+        Self {
+            engine: None,
+            database: database.to_owned(),
+        }
+    }
+}
+impl From<String> for Origin {
+    fn from(database: String) -> Self {
+        Self {
+            engine: None,
+            database,
         }
     }
 }
@@ -497,7 +561,10 @@ impl Physical {
     /// Ends a lease and always discards its connection. COMMIT/ROLLBACK are reported only as
     /// the server confirmed them. `record` receives the unknown outcome (with the sent facts)
     /// **before** each COMMIT/ROLLBACK is sent and the final outcome once known, so a caller cut
-    /// off by a bound (release, shutdown) never loses the outcome. On PostgreSQL/SQLite a COMMIT
+    /// off by a bound (release, shutdown) never loses the outcome. `record` returns whether the
+    /// outcome is durable (journaled): COMMIT is sent only after its unknown outcome is, otherwise
+    /// the lease is rolled back instead (ROLLBACK is always allowed: a lost ROLLBACK reply with
+    /// COMMIT never sent cannot hide applied transaction work). On PostgreSQL/SQLite a COMMIT
     /// refused with a database error aborts the transaction, so ROLLBACK follows and is reported
     /// only when confirmed; on MySQL/MariaDB that abort is not proven, so the outcome is unknown.
     ///
@@ -509,7 +576,7 @@ impl Physical {
         commit: bool,
         reason: EndReason,
         diverged: bool,
-        record: impl Fn(TransactionEnd),
+        record: impl Fn(TransactionEnd) -> bool,
     ) -> TransactionEnd {
         self.interrupt.rearm();
         let mut end = TransactionEnd::unknown(reason);
@@ -520,7 +587,16 @@ impl Physical {
         }
         if commit {
             end.commit_sent = true;
-            record(end);
+            if !record(end) {
+                // Write-ahead failed: COMMIT is never sent without a durable unknown record.
+                end.commit_sent = false;
+                end.rollback_sent = true;
+                record(end);
+                end.outcome = self.rollback().await;
+                record(end);
+                self.close().await;
+                return end;
+            }
             let statement = match self.session {
                 Session::Postgres(_) => POSTGRES_COMMIT,
                 _ => "COMMIT",
@@ -1146,7 +1222,7 @@ struct LeaseState {
 struct Lease {
     owner: OwnerId,
     handle: ConnectionId,
-    database: String,
+    origin: Origin,
     created: Instant,
     slot: Arc<tokio::sync::Mutex<Option<Physical>>>,
     state: Mutex<LeaseState>,
@@ -1177,22 +1253,33 @@ pub(crate) struct ExecutionState {
     /// Jobs still running when a reset released their records (`RELEASE_BOUND` exceeded).
     /// They may still record an unknown outcome; reported as `pending` until finished.
     detached: Mutex<Vec<Arc<Job>>>,
+    /// The durable journal of unresolved unknown outcomes and in-flight work; `None` for a
+    /// volatile registry (runtime tests and harnesses that never attach one). Lock order:
+    /// `ended`, then `journal`.
+    journal: Mutex<Option<Journal>>,
 }
 /// What a recorded outcome describes. SQL-free: no statement text, values or driver text.
 enum Facts {
     Lease(TransactionEnd),
     /// Only jobs whose outcome is unknown are recorded here.
     Job(UnresolvedJob),
+    /// A journal that could not be read intact at startup.
+    Damage(JournalDamage),
 }
 struct Recorded {
     id: Uuid,
     owner: OwnerId,
-    database: String,
-    at: Instant,
+    origin: Origin,
+    /// Unix seconds.
+    at: u64,
     facts: Facts,
     /// The user acknowledged it: hidden from the unresolved list and evictable. The recorded
     /// outcome itself never changes.
     acknowledged: bool,
+    /// Restored from the journal at startup (recorded before a restart).
+    restored: bool,
+    /// Restored work that was still in flight when the app exited.
+    exited: bool,
 }
 impl Recorded {
     /// Unknown and not acknowledged: never evicted, and counted against
@@ -1201,7 +1288,7 @@ impl Recorded {
         !self.acknowledged
             && match &self.facts {
                 Facts::Lease(end) => end.outcome == Outcome::Unknown,
-                Facts::Job(_) => true,
+                Facts::Job(_) | Facts::Damage(_) => true,
             }
     }
     /// Resolved or acknowledged: subject to the retention bounds.
@@ -1209,17 +1296,58 @@ impl Recorded {
         !self.unresolved()
     }
     fn dto(&self) -> UnresolvedOutcome {
-        let (transaction, job) = match &self.facts {
-            Facts::Lease(end) => (Some((*end).into()), None),
-            Facts::Job(job) => (None, Some(job.clone())),
+        let (transaction, job, journal_damage) = match &self.facts {
+            Facts::Lease(end) => (Some((*end).into()), None, None),
+            Facts::Job(job) => (None, Some(job.clone()), None),
+            Facts::Damage(damage) => (None, None, Some(damage.clone())),
         };
         UnresolvedOutcome {
             outcome_id: self.id.to_string(),
-            database: self.database.clone(),
-            seconds_ago: u32::try_from(self.at.elapsed().as_secs()).unwrap_or(u32::MAX),
+            engine: self.origin.engine.clone(),
+            database: self.origin.database.clone(),
+            seconds_ago: u32::try_from(journal::now().saturating_sub(self.at)).unwrap_or(u32::MAX),
+            restored: self.restored,
+            app_exited: self.exited,
             transaction,
             job,
+            journal_damage,
         }
+    }
+    /// The journal entry of an unresolved record.
+    fn entry(&self) -> Entry {
+        let outcome = self.dto();
+        Entry {
+            id: outcome.outcome_id,
+            recorded_at: self.at,
+            engine: outcome.engine,
+            database: outcome.database,
+            in_flight: self.exited,
+            transaction: outcome.transaction,
+            job: outcome.job,
+            damage: outcome.journal_damage,
+        }
+    }
+    /// A journal entry restored at startup, owned by the host's owner of this run.
+    fn restore(entry: &Entry, owner: OwnerId) -> Option<Self> {
+        let facts = match (&entry.transaction, &entry.job, &entry.damage) {
+            (Some(end), None, None) => Facts::Lease(TransactionEnd::restored(end)),
+            (None, Some(job), None) => Facts::Job(job.clone()),
+            (None, None, Some(damage)) => Facts::Damage(damage.clone()),
+            _ => return None,
+        };
+        Some(Self {
+            id: Uuid::parse_str(&entry.id).ok()?,
+            owner,
+            origin: Origin {
+                engine: entry.engine.clone(),
+                database: entry.database.clone(),
+            },
+            at: entry.recorded_at,
+            facts,
+            acknowledged: false,
+            restored: true,
+            exited: entry.in_flight,
+        })
     }
 }
 /// Evicts the oldest resolved or acknowledged records beyond the per-owner and overall bounds.
@@ -1275,7 +1403,118 @@ impl ExecutionState {
             opening: Mutex::new(HashMap::new()),
             ended: Mutex::new(Vec::new()),
             detached: Mutex::new(Vec::new()),
+            journal: Mutex::new(None),
         }
+    }
+    /// Writes (`Some`) or removes (`None`) one journal entry durably. True when durable, or when
+    /// this registry has no journal (volatile). Callers holding `ended` lock it first.
+    fn persist(&self, id: Uuid, entry: Option<Entry>) -> bool {
+        match self.journal.lock().expect("journal lock").as_mut() {
+            None => true,
+            Some(journal) => match entry {
+                Some(entry) => journal.put(entry),
+                None => journal.remove(&id.to_string()),
+            },
+        }
+    }
+    /// Removes the journal entry of work whose outcome is now known (resolved, or nothing was
+    /// sent). Unlike an acknowledgement this is never undone by a failed write: it completes
+    /// with the next successful write.
+    fn forget(&self, id: Uuid) -> bool {
+        self.journal
+            .lock()
+            .expect("journal lock")
+            .as_mut()
+            .is_none_or(|journal| journal.conclude(&id.to_string()))
+    }
+    /// Write-ahead record of work about to be sent, so a crash before it concludes is restored
+    /// as `unknown` (the app exited) with these facts.
+    fn journal_in_flight(
+        &self,
+        id: Uuid,
+        origin: &Origin,
+        transaction: Option<TransactionEnd>,
+        job: Option<UnresolvedJob>,
+    ) -> bool {
+        self.persist(
+            id,
+            Some(Entry {
+                id: id.to_string(),
+                recorded_at: journal::now(),
+                engine: origin.engine.clone(),
+                database: origin.database.clone(),
+                in_flight: true,
+                transaction: transaction.map(Into::into),
+                job,
+                damage: None,
+            }),
+        )
+    }
+    /// An in-flight job: statement `index` of `count` is about to be sent.
+    fn journal_job(
+        &self,
+        id: JobId,
+        origin: &Origin,
+        count: usize,
+        index: usize,
+        lease: bool,
+    ) -> bool {
+        self.journal_in_flight(
+            id.0,
+            origin,
+            None,
+            Some(UnresolvedJob {
+                statement_count: count as u32,
+                unknown_statement: Some(index as u32),
+                in_transaction: lease,
+                cancellation: CancellationDto::None,
+                server_cancel_sent: false,
+                deadline_exceeded: false,
+            }),
+        )
+    }
+    /// Concluded without an unknown outcome (or nothing was sent): no longer journaled.
+    fn concluded(&self, id: Uuid) -> bool {
+        self.forget(id)
+    }
+    /// Durability required: until a journal is opened, new read-write work is refused.
+    pub(crate) fn require_journal(&self) {
+        self.journal
+            .lock()
+            .expect("journal lock")
+            .get_or_insert_with(Journal::unopened);
+    }
+    /// Opens the journal and restores its entries as unresolved outcomes of `owner` (marked as
+    /// recorded before a restart). Restored outcomes count against the unresolved cap.
+    pub(crate) fn open_journal(&self, dir: &Path, owner: OwnerId) -> Option<JournalProblemDto> {
+        let journal = Journal::open(dir);
+        let problem = journal.problem();
+        let mut ended = self.ended.lock().expect("ended lease lock");
+        let mut restored: Vec<_> = journal
+            .entries()
+            .iter()
+            .filter_map(|entry| Recorded::restore(entry, owner))
+            .collect();
+        restored.sort_by_key(|record| record.at);
+        ended.splice(0..0, restored);
+        *self.journal.lock().expect("journal lock") = Some(journal);
+        problem
+    }
+    /// Whether a durable record can be written now (always for a volatile registry). After a
+    /// failed write the snapshot is retried first, so a freed disk recovers without a restart.
+    fn journal_ready(&self) -> bool {
+        self.journal
+            .lock()
+            .expect("journal lock")
+            .as_mut()
+            .is_none_or(Journal::ready)
+    }
+    fn journal_problem(&self) -> Option<JournalProblemDto> {
+        self.journal
+            .lock()
+            .expect("journal lock")
+            .as_ref()
+            .and_then(Journal::problem)
     }
     /// Reserves one of the owner's `MAX_LEASES_PER_OWNER` slots before any await (L-4).
     fn reserve(&self, owner: OwnerId) -> Result<Reservation<'_>, ExecutionError> {
@@ -1307,7 +1546,16 @@ impl ExecutionState {
     /// Each owner keeps its newest `MAX_ENDED_LEASES_PER_OWNER` resolved or acknowledged ends,
     /// so another owner's ends never evict them; all owners together keep `MAX_ENDED_LEASES`.
     /// An unacknowledged unknown end is never evicted.
-    fn record_end(&self, id: LeaseId, owner: OwnerId, database: &str, end: TransactionEnd) {
+    ///
+    /// Returns whether the record is durable: an unresolved one is journaled (written before
+    /// it is visible in memory), a resolved or acknowledged one removed from the journal.
+    fn record_end(
+        &self,
+        id: LeaseId,
+        owner: OwnerId,
+        origin: impl Into<Origin>,
+        end: TransactionEnd,
+    ) -> bool {
         let mut ended = self.ended.lock().expect("ended lease lock");
         let mut acknowledged = false;
         if let Some(index) = ended
@@ -1320,28 +1568,42 @@ impl ExecutionState {
                 && (end.outcome != Outcome::Unknown
                     || matches!(previous.facts, Facts::Lease(before) if before == end));
         }
-        ended.push(Recorded {
+        let record = Recorded {
             id: id.0,
             owner,
-            database: database.to_owned(),
-            at: Instant::now(),
+            origin: origin.into(),
+            at: journal::now(),
             facts: Facts::Lease(end),
             acknowledged,
-        });
+            restored: false,
+            exited: false,
+        };
+        let durable = if record.unresolved() {
+            self.persist(id.0, Some(record.entry()))
+        } else {
+            self.forget(id.0)
+        };
+        ended.push(record);
         trim(&mut ended, owner);
+        durable
     }
     /// Records a job whose outcome is unknown, independently of its job record, so it survives
     /// the record's release (final page, `TERMINAL_RETENTION`, reset).
-    fn record_job(&self, id: JobId, owner: OwnerId, database: String, job: UnresolvedJob) {
+    /// It replaces the job's in-flight journal entry before it is visible.
+    fn record_job(&self, id: JobId, owner: OwnerId, origin: impl Into<Origin>, job: UnresolvedJob) {
         let mut ended = self.ended.lock().expect("ended lease lock");
-        ended.push(Recorded {
+        let record = Recorded {
             id: id.0,
             owner,
-            database,
-            at: Instant::now(),
+            origin: origin.into(),
+            at: journal::now(),
             facts: Facts::Job(job),
             acknowledged: false,
-        });
+            restored: false,
+            exited: false,
+        };
+        self.persist(id.0, Some(record.entry()));
+        ended.push(record);
         trim(&mut ended, owner);
     }
     fn recorded(&self, id: LeaseId, owner: OwnerId) -> Option<TransactionEnd> {
@@ -1352,20 +1614,28 @@ impl ExecutionState {
             .find(|record| record.id == id.0 && record.owner == owner)
             .and_then(|record| match record.facts {
                 Facts::Lease(end) => Some(end),
-                Facts::Job(_) => None,
+                Facts::Job(_) | Facts::Damage(_) => None,
             })
     }
-    /// Refuses new read-write work while the owner has `MAX_UNRESOLVED_OUTCOMES_PER_OWNER`
-    /// unacknowledged unknown outcomes. Nothing is evicted to make room.
+    /// Refuses new read-write work while the journal cannot be written (fail closed), while a
+    /// damaged journal awaits acknowledgement, or while the owner has
+    /// `MAX_UNRESOLVED_OUTCOMES_PER_OWNER` unacknowledged unknown outcomes (restored ones
+    /// included). Nothing is evicted to make room.
     fn admit(&self, owner: OwnerId) -> Result<(), ExecutionError> {
-        let unresolved = self
-            .ended
-            .lock()
-            .expect("ended lease lock")
+        if !self.journal_ready() {
+            return Err(ExecutionError::JournalUnavailable);
+        }
+        let ended = self.ended.lock().expect("ended lease lock");
+        let mut unresolved = ended
             .iter()
-            .filter(|record| record.owner == owner && record.unresolved())
-            .count();
-        if unresolved >= ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER {
+            .filter(|record| record.owner == owner && record.unresolved());
+        if unresolved
+            .clone()
+            .any(|record| matches!(record.facts, Facts::Damage(_)))
+        {
+            return Err(ExecutionError::JournalUnavailable);
+        }
+        if unresolved.by_ref().count() >= ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER {
             return Err(ExecutionError::UnresolvedOutcomes);
         }
         Ok(())
@@ -1389,17 +1659,22 @@ impl ExecutionState {
                 .map(Recorded::dto)
                 .collect(),
             limit: ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER as u32,
+            journal: self.journal_problem(),
         }
     }
     /// Marks an owned record acknowledged (idempotent). Never changes its outcome. It becomes
     /// the newest evictable record, so it stays queryable until newer outcomes push it out
-    /// (rather than being evicted at once as the oldest).
+    /// (rather than being evicted at once as the oldest). The acknowledgement is durable
+    /// (removed from the journal) before it is reported; if it cannot be, nothing changes.
     fn acknowledge(&self, owner: OwnerId, id: OutcomeId) -> Result<(), ExecutionError> {
         let mut ended = self.ended.lock().expect("ended lease lock");
         let index = ended
             .iter()
             .position(|record| record.id == id.0 && record.owner == owner)
             .ok_or(ExecutionError::Forbidden)?;
+        if !ended[index].acknowledged && !self.persist(id.0, None) {
+            return Err(ExecutionError::JournalUnavailable);
+        }
         let mut record = ended.remove(index);
         record.acknowledged = true;
         ended.push(record);
@@ -1415,7 +1690,7 @@ impl ExecutionState {
         self.record_end(
             id,
             lease.owner,
-            &lease.database,
+            &lease.origin,
             TransactionEnd::unknown(reason),
         );
         leases.remove(&id)
@@ -1495,7 +1770,7 @@ async fn release_within(inner: &Inner, handle: Option<ConnectionId>, bound: Dura
                     .conclude(false, EndReason::Closed, lease.diverged(), |end| {
                         inner
                             .execution
-                            .record_end(id, lease.owner, &lease.database, end)
+                            .record_end(id, lease.owner, &lease.origin, end)
                     })
                     .await;
             }
@@ -1512,6 +1787,7 @@ struct Plan {
     job: Arc<Job>,
     statements: Vec<Statement>,
     target: Target,
+    origin: Origin,
     statement_deadline: Duration,
     lease: Option<HeldLease>,
     /// The handle's exclusive work permit for a job outside a lease. Declared before `sink`
@@ -1527,7 +1803,7 @@ impl Connections {
         &self,
         owner: OwnerId,
         handle: ConnectionId,
-    ) -> Result<(EnginePool, Arc<Semaphore>), ExecutionError> {
+    ) -> Result<(EnginePool, Arc<Semaphore>, Engine), ExecutionError> {
         let entries = self.0.entries.lock().expect("connection registry lock");
         let entry = entries
             .get(&handle)
@@ -1536,7 +1812,7 @@ impl Connections {
         if entry.access != Access::ReadWrite {
             return Err(ExecutionError::ReadOnlyHandle);
         }
-        Ok((entry.pool.clone(), entry.work.clone()))
+        Ok((entry.pool.clone(), entry.work.clone(), entry.engine))
     }
 
     /// Starts a read-write script now, or refuses: a handle running a job or holding a
@@ -1569,7 +1845,7 @@ impl Connections {
         statements: Vec<Statement>,
         options: JobOptions,
     ) -> Result<(JobId, usize), ExecutionError> {
-        let (pool, work) = self.writable(owner, handle)?;
+        let (pool, work, engine) = self.writable(owner, handle)?;
         let execution = &self.0.execution;
         execution.admit(owner)?;
         execution.prune();
@@ -1648,6 +1924,13 @@ impl Connections {
             finished: Notify::new(),
         });
         let id = JobId(Uuid::new_v4());
+        let target = Target::of(&pool);
+        let origin = Origin::of(engine, &target);
+        // Write-ahead: the first statement's in-flight record is durable before the job exists.
+        if !execution.journal_job(id, &origin, count, 0, lease.is_some()) {
+            execution.concluded(id.0);
+            return Err(ExecutionError::JournalUnavailable);
+        }
         execution.jobs.lock().expect("job lock").insert(
             id,
             JobEntry {
@@ -1660,13 +1943,15 @@ impl Connections {
         if self.writable(owner, handle).is_err() {
             finish(&job, ExecutionOutcome::Cancelled, true, None);
             execution.jobs.lock().expect("job lock").remove(&id);
+            execution.concluded(id.0);
             return Err(ExecutionError::Forbidden);
         }
         tokio::spawn(run(Plan {
             id,
             job,
             statements,
-            target: Target::of(&pool),
+            target,
+            origin,
             statement_deadline: options.statement_deadline,
             lease,
             _permit: permit,
@@ -1761,26 +2046,47 @@ impl Connections {
         owner: OwnerId,
         handle: ConnectionId,
     ) -> Result<LeaseId, ExecutionError> {
-        let (pool, work) = self.writable(owner, handle)?;
-        self.0.execution.admit(owner)?;
-        let reservation = self.0.execution.reserve(owner)?;
+        let (pool, work, engine) = self.writable(owner, handle)?;
+        let execution = &self.0.execution;
+        execution.admit(owner)?;
+        let reservation = execution.reserve(owner)?;
         let permit = work.try_acquire_owned().map_err(|_| ExecutionError::Busy)?;
-        let mut physical = tokio::time::timeout(self.0.deadline, Target::of(&pool).open())
-            .await
-            .map_err(|_| ExecutionError::Connection(LifecycleError::Timeout))?
-            .map_err(ExecutionError::Connection)?;
-        if !matches!(
-            tokio::time::timeout(self.0.deadline, physical.begin()).await,
-            Ok(Ok(()))
-        ) {
-            physical.close().await;
-            return Err(ExecutionError::Database);
-        }
         let id = LeaseId(Uuid::new_v4());
+        let target = Target::of(&pool);
+        let origin = Origin::of(engine, &target);
+        // Write-ahead: an open lease is journaled before BEGIN, so a crash while it is open is
+        // restored as `unknown` (closed by the app's exit, COMMIT never sent).
+        let open = TransactionEnd::unknown(EndReason::Closed);
+        if !execution.journal_in_flight(id.0, &origin, Some(open), None) {
+            execution.concluded(id.0);
+            return Err(ExecutionError::JournalUnavailable);
+        }
+        let opened = async {
+            let mut physical = tokio::time::timeout(self.0.deadline, target.open())
+                .await
+                .map_err(|_| ExecutionError::Connection(LifecycleError::Timeout))?
+                .map_err(ExecutionError::Connection)?;
+            if !matches!(
+                tokio::time::timeout(self.0.deadline, physical.begin()).await,
+                Ok(Ok(()))
+            ) {
+                physical.close().await;
+                return Err(ExecutionError::Database);
+            }
+            Ok(physical)
+        }
+        .await;
+        let physical = match opened {
+            Ok(physical) => physical,
+            Err(error) => {
+                execution.concluded(id.0);
+                return Err(error);
+            }
+        };
         let lease = Arc::new(Lease {
             owner,
             handle,
-            database: Target::of(&pool).database(),
+            origin,
             created: Instant::now(),
             slot: Arc::new(tokio::sync::Mutex::new(Some(physical))),
             state: Mutex::new(LeaseState {
@@ -1804,9 +2110,11 @@ impl Connections {
             if removed.is_some()
                 && let Some(physical) = lease.slot.lock().await.take()
             {
+                // The renderer never learned this lease; only BEGIN was sent on it.
                 physical
-                    .conclude(false, EndReason::Closed, false, |_| {})
+                    .conclude(false, EndReason::Closed, false, |_| true)
                     .await;
+                self.0.execution.concluded(id.0);
             }
             return Err(ExecutionError::Forbidden);
         }
@@ -1847,6 +2155,11 @@ impl Connections {
         if commit && lease.state.lock().expect("lease lock").rollback_only {
             return Err(ExecutionError::RollbackOnly);
         }
+        // COMMIT needs a durable unknown record first; refused here (lease left open, nothing
+        // sent) while the journal cannot be written. Rollback is always allowed.
+        if commit && !execution.journal_ready() {
+            return Err(ExecutionError::JournalUnavailable);
+        }
         if execution.take_lease(id, EndReason::Requested).is_none() {
             return execution
                 .recorded(id, owner)
@@ -1856,7 +2169,7 @@ impl Connections {
             Some(physical) => {
                 physical
                     .conclude(commit, EndReason::Requested, lease.diverged(), |end| {
-                        execution.record_end(id, owner, &lease.database, end)
+                        execution.record_end(id, owner, &lease.origin, end)
                     })
                     .await
             }
@@ -1864,9 +2177,21 @@ impl Connections {
         })
     }
 
+    /// Durability required (desktop host): until [`Connections::open_outcome_journal`]
+    /// succeeds, new jobs and transactions are refused with `JournalUnavailable`.
+    pub fn require_outcome_journal(&self) {
+        self.0.execution.require_journal();
+    }
+    /// Opens the durable unknown-outcome journal in `dir` (a private per-user directory the host
+    /// chooses; created 0700) and restores its records as unresolved outcomes of `owner`,
+    /// marked as recorded before a restart. Call once per registry. Returns the problem that
+    /// keeps new read-write work refused, if any.
+    pub fn open_outcome_journal(&self, dir: &Path, owner: OwnerId) -> Option<JournalProblemDto> {
+        self.0.execution.open_journal(dir, owner)
+    }
     /// The owner's unknown outcomes not yet acknowledged, oldest first, including those of a
-    /// renderer session that ended (reload) in this process. In memory only: a process exit
-    /// loses them.
+    /// renderer session that ended (reload) in this process and, with a journal, those
+    /// restored from earlier runs (before a restart).
     pub fn unresolved_outcomes(&self, owner: OwnerId) -> UnresolvedOutcomes {
         self.0.execution.unresolved(owner)
     }
@@ -1964,7 +2289,7 @@ async fn expire(registry: Weak<Inner>, id: LeaseId, lease: Weak<Lease>) {
                 .conclude(false, EndReason::Expired, lease.diverged(), |end| {
                     inner
                         .execution
-                        .record_end(id, lease.owner, &lease.database, end)
+                        .record_end(id, lease.owner, &lease.origin, end)
                 })
                 .await;
         }
@@ -2004,6 +2329,9 @@ async fn run(mut plan: Plan) {
         };
         let lease_state = lease_guard.is_some().then_some(LeaseStateDto::Ended);
         end_lease_lost(&plan.registry, lease_guard.take());
+        if let Some(inner) = plan.registry.upgrade() {
+            inner.execution.concluded(plan.id.0);
+        }
         finish(&job, outcome, true, lease_state);
         return;
     };
@@ -2042,6 +2370,29 @@ async fn run(mut plan: Plan) {
         }
         if control.is_interrupted() {
             outcome = ExecutionOutcome::Cancelled;
+            break;
+        }
+        // Write-ahead: the statement about to be sent is journaled first (statement 0 was at
+        // submission). If that fails nothing more is sent and the job fails here.
+        if index > 0
+            && !plan.registry.upgrade().is_some_and(|inner| {
+                inner.execution.journal_job(
+                    plan.id,
+                    &plan.origin,
+                    plan.statements.len(),
+                    index,
+                    lease_guard.is_some(),
+                )
+            })
+        {
+            job.update(|progress| {
+                progress.statements[index].status = StatementStatusDto::Failed;
+                progress.statements[index].failure = Some(StatementFailure {
+                    constraint: None,
+                    sql_state: None,
+                });
+            });
+            outcome = ExecutionOutcome::Failed;
             break;
         }
         control.arm(plan.statement_deadline);
@@ -2180,9 +2531,17 @@ async fn run(mut plan: Plan) {
         None => drop(connection),
     }
     // Recorded before the final update is visible, so an unknown is never only in a job
-    // record that a reset or `TERMINAL_RETENTION` releases.
+    // record that a reset or `TERMINAL_RETENTION` releases. It replaces the job's in-flight
+    // journal entry; any other outcome removes that entry. Without the registry the entry
+    // stays (restored after a restart as unknown: shown again rather than lost).
+    let registry = plan.registry.upgrade();
+    if outcome != ExecutionOutcome::Unknown
+        && let Some(inner) = &registry
+    {
+        inner.execution.concluded(plan.id.0);
+    }
     if outcome == ExecutionOutcome::Unknown
-        && let Some(inner) = plan.registry.upgrade()
+        && let Some(inner) = registry
     {
         let reason = control.reason();
         let summary = {
@@ -2202,7 +2561,7 @@ async fn run(mut plan: Plan) {
         };
         inner
             .execution
-            .record_job(plan.id, job.owner, plan.target.database(), summary);
+            .record_job(plan.id, job.owner, &plan.origin, summary);
     }
     finish(&job, outcome, stop_confirmed, lease_state);
     drop(plan);
@@ -2243,6 +2602,7 @@ fn finish(
     job.finished.notify_waiters();
 }
 
+mod journal;
 #[cfg(test)]
 mod ssh_fixture;
 #[cfg(test)]

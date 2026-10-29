@@ -654,7 +654,8 @@ async fn conclude_records_unknown_before_sending_commit_or_rollback() {
         let seen = Mutex::new(Vec::new());
         let end = physical
             .conclude(commit, EndReason::Closed, false, |end| {
-                seen.lock().unwrap().push(end)
+                seen.lock().unwrap().push(end);
+                true
             })
             .await;
         let unknown = TransactionEnd {
@@ -1274,7 +1275,7 @@ fn p3_unresolved_unknowns_survive_eviction_pressure_and_resolved_ones_are_evicte
     let lease = LeaseId(Uuid::new_v4());
     let job = JobId(Uuid::new_v4());
     state.record_end(lease, owner, "app", unknown);
-    state.record_job(job, owner, "app".into(), job_facts());
+    state.record_job(job, owner, "app", job_facts());
     let own: Vec<_> = (0..3 * ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER)
         .map(|_| LeaseId(Uuid::new_v4()))
         .collect();
@@ -1377,7 +1378,7 @@ async fn p3_the_unresolved_cap_refuses_new_work_and_never_drops_an_outcome() {
         .map(|_| JobId(Uuid::new_v4()))
         .collect();
     for &id in &ids {
-        state.record_job(id, owner, "fixture.sqlite".into(), job_facts());
+        state.record_job(id, owner, "fixture.sqlite", job_facts());
     }
     for _ in 0..3 {
         assert_eq!(
@@ -1747,4 +1748,963 @@ async fn detached_jobs_are_pending_until_their_late_unknown_is_recorded() {
     assert_eq!(listed.outcomes.len(), 1);
     assert_eq!(listed.outcomes[0].outcome_id, job.opaque());
     connections.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Durable unknown-outcome journal (J-1..J-6). Journals live in the fixture's temporary
+// directory, never in the repository.
+
+use super::journal::Fault;
+
+fn journal_dir(fixture: &Fixture) -> PathBuf {
+    fixture.0.join("journal")
+}
+async fn open_journaled(fixture: &Fixture) -> (Connections, OwnerId, ConnectionId) {
+    let (connections, owner, handle) = open(fixture, Access::ReadWrite).await;
+    connections.require_outcome_journal();
+    assert_eq!(
+        connections.open_outcome_journal(&journal_dir(fixture), owner),
+        None
+    );
+    (connections, owner, handle)
+}
+fn inject(connections: &Connections, fault: Option<Fault>) {
+    connections
+        .0
+        .execution
+        .journal
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .inject(fault);
+}
+fn full_disk() -> Option<Fault> {
+    Some(Fault::Fail(std::io::ErrorKind::StorageFull))
+}
+fn sqlite_origin(fixture: &Fixture) -> Origin {
+    Origin::of(Engine::Sqlite, &Target::Sqlite(fixture.file()))
+}
+fn journal_entries(fixture: &Fixture) -> Vec<Entry> {
+    let bytes = std::fs::read(journal_dir(fixture).join(journal::FILE)).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    text.lines()
+        .skip(1)
+        .filter(|line| !line.starts_with("end "))
+        .map(|line| serde_json::from_str(&line[9..]).unwrap())
+        .collect()
+}
+/// Everything listed except what a restart legitimately changes (age, `restored`).
+fn facts(outcome: &UnresolvedOutcome) -> UnresolvedOutcome {
+    UnresolvedOutcome {
+        seconds_ago: 0,
+        restored: false,
+        ..outcome.clone()
+    }
+}
+
+/// J-1: a crash (the registry dropped without shutdown) loses nothing: an open lease, a lease
+/// end whose COMMIT may have been sent and an unknown job are restored by the next run with the
+/// same ids and facts, marked as recorded before a restart, for the new run's owner.
+#[tokio::test]
+async fn j1_a_crash_and_restart_restores_every_unknown_with_unchanged_facts() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new("INSERT INTO parent VALUES (61)");
+    options.lease = Some(lease);
+    let (_, update) = run(&connections, owner, handle, options).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    let state = &connections.0.execution;
+    let lost = LeaseId(Uuid::new_v4());
+    let sent = TransactionEnd {
+        commit_sent: true,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
+    assert!(state.record_end(lost, owner, sqlite_origin(&fixture), sent));
+    let job = JobId(Uuid::new_v4());
+    state.record_job(job, owner, sqlite_origin(&fixture), job_facts());
+    let before = connections.unresolved_outcomes(owner).outcomes;
+    assert_eq!(listed(state, owner), [lost.opaque(), job.opaque()]);
+    drop(connections);
+
+    let (restarted, next, _) = open(&fixture, Access::ReadWrite).await;
+    assert_eq!(
+        restarted.open_outcome_journal(&journal_dir(&fixture), next),
+        None
+    );
+    let after = restarted.unresolved_outcomes(next);
+    assert_eq!(after.journal, None);
+    let ids: Vec<_> = after
+        .outcomes
+        .iter()
+        .map(|o| o.outcome_id.clone())
+        .collect();
+    assert_eq!(ids, [lease.opaque(), lost.opaque(), job.opaque()]);
+    assert!(after.outcomes.iter().all(|outcome| outcome.restored));
+    assert_eq!(facts(&after.outcomes[1]), facts(&before[0]));
+    assert_eq!(facts(&after.outcomes[2]), facts(&before[1]));
+    let open_lease = &after.outcomes[0];
+    assert!(open_lease.app_exited && !after.outcomes[1].app_exited);
+    assert_eq!(
+        open_lease.transaction,
+        Some(TransactionEnd::unknown(EndReason::Closed).into())
+    );
+    assert_eq!(
+        (open_lease.engine.clone(), open_lease.database.as_str()),
+        (Some(EngineDto::Sqlite), "fixture.sqlite")
+    );
+    assert!(listed(&restarted.0.execution, OwnerId::new()).is_empty());
+    // The restored lease end still answers as recorded (never a second COMMIT).
+    assert_eq!(restarted.end_transaction(next, lost, true).await, Ok(sent));
+}
+
+/// J-2: acknowledgement is durable before it is reported. A failed one changes nothing (still
+/// listed, now and after a restart); a successful one stays acknowledged after a restart.
+#[tokio::test]
+async fn j2_acknowledgement_is_journaled_before_it_is_reported() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    let (first, second) = (JobId(Uuid::new_v4()), JobId(Uuid::new_v4()));
+    for id in [first, second] {
+        connections
+            .0
+            .execution
+            .record_job(id, owner, "fixture.sqlite", job_facts());
+    }
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    let id = OutcomeId::parse(&first.opaque()).unwrap();
+    inject(&connections, full_disk());
+    assert_eq!(
+        connections.acknowledge_outcome(owner, id),
+        Err(ExecutionError::JournalUnavailable)
+    );
+    assert_eq!(listed(&connections.0.execution, owner).len(), 2);
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert_eq!(
+        listed(&connections.0.execution, owner),
+        [first.opaque(), second.opaque()]
+    );
+    for _ in 0..2 {
+        let remaining = connections.acknowledge_outcome(owner, id).unwrap();
+        assert_eq!(remaining.outcomes.len(), 1);
+    }
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert_eq!(listed(&connections.0.execution, owner), [second.opaque()]);
+    // An outcome acknowledged in an earlier run no longer exists.
+    assert_eq!(
+        connections.acknowledge_outcome(owner, id),
+        Err(ExecutionError::Forbidden)
+    );
+}
+
+/// J-3: restored outcomes count toward the unresolved cap and are never evicted by the
+/// 32/256 retention bounds; once acknowledged they are bounded like any other record.
+#[tokio::test]
+async fn j3_restored_outcomes_count_toward_the_cap_and_are_never_evicted() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    let ids: Vec<_> = (0..ExecutionLimits::MAX_UNRESOLVED_OUTCOMES_PER_OWNER)
+        .map(|_| JobId(Uuid::new_v4()))
+        .collect();
+    for &id in &ids {
+        connections
+            .0
+            .execution
+            .record_job(id, owner, "fixture.sqlite", job_facts());
+    }
+    drop(connections);
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    assert_eq!(
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (62)")
+            )
+            .unwrap_err(),
+        ExecutionError::UnresolvedOutcomes
+    );
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::UnresolvedOutcomes
+    );
+    let state = &connections.0.execution;
+    let resolved = TransactionEnd {
+        outcome: Outcome::RolledBack,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
+    for _ in 0..2 * ExecutionLimits::MAX_ENDED_LEASES {
+        state.record_end(LeaseId(Uuid::new_v4()), owner, "db", resolved);
+    }
+    assert_eq!(
+        listed(state, owner),
+        ids.iter().map(|id| id.opaque()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        state.ended.lock().unwrap().len(),
+        ids.len() + ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER
+    );
+    connections
+        .acknowledge_outcome(owner, OutcomeId::parse(&ids[0].opaque()).unwrap())
+        .unwrap();
+    for _ in 0..ExecutionLimits::MAX_ENDED_LEASES_PER_OWNER {
+        state.record_end(LeaseId(Uuid::new_v4()), owner, "db", resolved);
+    }
+    assert!(state.recorded(LeaseId(ids[0].0), owner).is_none());
+    assert!(
+        !state
+            .ended
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|record| record.id == ids[0].0),
+        "acknowledged restored outcome evicted like a resolved one"
+    );
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (62)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    // Resolved work leaves nothing in the journal.
+    assert_eq!(journal_entries(&fixture).len(), ids.len() - 1);
+}
+
+/// J-4: a journal that cannot be used refuses new jobs and transactions before anything is
+/// sent; read-only queries are unaffected. A failed write blocks admission until the
+/// snapshot can be written again.
+#[tokio::test]
+async fn j4_an_unusable_journal_refuses_new_work_before_anything_is_sent() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new().await;
+    // Not opened yet, then insecure (group-accessible directory).
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    connections.require_outcome_journal();
+    let refused = |connections: &Connections| {
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (63)"),
+            )
+            .unwrap_err()
+    };
+    assert_eq!(refused(&connections), ExecutionError::JournalUnavailable);
+    let dir = journal_dir(&fixture);
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o770)).unwrap();
+    assert_eq!(
+        connections.open_outcome_journal(&dir, owner),
+        Some(JournalProblemDto::Insecure)
+    );
+    assert_eq!(refused(&connections), ExecutionError::JournalUnavailable);
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        connections.unresolved_outcomes(owner).journal,
+        Some(JournalProblemDto::Insecure)
+    );
+    let limits = crate::QueryLimits {
+        rows: 10,
+        bytes: 4096,
+        deadline: Duration::from_secs(3),
+    };
+    assert!(
+        connections
+            .read_only(owner, handle, "SELECT 1", limits)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        (connections.retained_jobs(), connections.open_transactions()),
+        (0, 0)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 63")
+            .await,
+        0
+    );
+    drop(connections);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    // A write failure (full disk) at begin: nothing opened; then admission refused until the
+    // snapshot can be written again.
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    inject(&connections, full_disk());
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(connections.open_transactions(), 0);
+    assert_eq!(
+        connections.unresolved_outcomes(owner).journal,
+        Some(JournalProblemDto::WriteFailed)
+    );
+    assert_eq!(
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (63)")
+            )
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 63")
+            .await,
+        0
+    );
+    inject(&connections, None);
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (63)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert_eq!(connections.unresolved_outcomes(owner).journal, None);
+}
+
+/// J-5: COMMIT is never sent unless its potential unknown is journaled first. With the journal
+/// failing, COMMIT is refused while the lease stays open (rollback still works); if the write
+/// fails only at the COMMIT itself, the lease is rolled back instead and nothing is committed.
+#[tokio::test]
+async fn j5_commit_is_sent_only_after_its_unknown_is_journaled() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let insert = |lease, id: u32| {
+        let mut options = JobOptions::new(format!("INSERT INTO parent VALUES ({id})"));
+        options.lease = Some(lease);
+        options
+    };
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let (_, update) = run(&connections, owner, handle, insert(lease, 64)).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    inject(&connections, full_disk());
+    // The refused job inside the lease records the failure; the lease is untouched.
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, insert(lease, 65))
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        connections.end_transaction(owner, lease, true).await,
+        Err(ExecutionError::JournalUnavailable)
+    );
+    assert_eq!(connections.open_transactions(), 1);
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!((end.outcome, end.commit_sent), (Outcome::RolledBack, false));
+    // Once the journal can be written again, COMMIT on the still-open lease works without any
+    // other work running first (the refusal retries the write).
+    inject(&connections, None);
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let (_, update) = run(&connections, owner, handle, insert(lease, 69)).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    inject(&connections, full_disk());
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, insert(lease, 70))
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        connections.end_transaction(owner, lease, true).await,
+        Err(ExecutionError::JournalUnavailable)
+    );
+    inject(&connections, None);
+    let end = connections
+        .end_transaction(owner, lease, true)
+        .await
+        .unwrap();
+    assert_eq!(end.outcome, Outcome::Committed);
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id IN (69, 70)")
+            .await,
+        1
+    );
+    // The write fails only once COMMIT is about to be sent.
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let (_, update) = run(&connections, owner, handle, insert(lease, 66)).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    inject(&connections, full_disk());
+    let end = connections
+        .end_transaction(owner, lease, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        end,
+        TransactionEnd {
+            outcome: Outcome::RolledBack,
+            reason: EndReason::Requested,
+            commit_sent: false,
+            rollback_sent: true,
+        }
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id IN (64, 65, 66)")
+            .await,
+        0
+    );
+
+    // Ordering: when COMMIT is about to be sent its unknown (commitSent) is already on disk.
+    inject(&connections, None);
+    let state = &connections.0.execution;
+    let id = LeaseId(Uuid::new_v4());
+    let mut physical = Target::Sqlite(fixture.file()).open().await.unwrap();
+    physical.begin().await.unwrap();
+    let on_disk = Mutex::new(Vec::new());
+    physical
+        .conclude(true, EndReason::Requested, false, |end| {
+            let durable = state.record_end(id, owner, sqlite_origin(&fixture), end);
+            let entry = journal_entries(&fixture)
+                .into_iter()
+                .find(|entry| entry.id == id.opaque());
+            on_disk
+                .lock()
+                .unwrap()
+                .push(entry.and_then(|entry| entry.transaction));
+            durable
+        })
+        .await;
+    let sent = TransactionEnd {
+        commit_sent: true,
+        ..TransactionEnd::unknown(EndReason::Requested)
+    };
+    assert_eq!(*on_disk.lock().unwrap(), [Some(sent.into()), None]);
+}
+
+/// J-6: each statement of a job is journaled before it is sent; when that write fails the job
+/// stops and the next statement is never sent.
+#[tokio::test]
+async fn j6_a_statement_is_never_sent_unless_journaled() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let mut blocker = fixture.observer().await;
+    blocker.execute("BEGIN IMMEDIATE").await.unwrap();
+    let (id, _) = connections
+        .submit_job(
+            owner,
+            handle,
+            JobOptions::new("INSERT INTO parent VALUES (67); INSERT INTO parent VALUES (68)"),
+        )
+        .unwrap();
+    let pending = journal_entries(&fixture);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(
+        (pending[0].id.as_str(), pending[0].in_flight),
+        (id.opaque().as_str(), true)
+    );
+    assert_eq!(pending[0].job.as_ref().unwrap().unknown_statement, Some(0));
+    inject(&connections, full_disk());
+    blocker.execute("ROLLBACK").await.unwrap();
+    let (_, update) = drain(&connections, owner, id).await;
+    assert_eq!(
+        statuses(&update),
+        [StatementStatusDto::Succeeded, StatementStatusDto::Failed]
+    );
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Failed));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 67")
+            .await,
+        1
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 68")
+            .await,
+        0
+    );
+}
+
+/// J-7: the journal never holds SQL, parameters, values, paths or credentials: real jobs and
+/// a lease with planted canaries (succeeded, unknown after cancel, in flight at a crash).
+#[tokio::test]
+async fn j7_the_journal_holds_no_sql_values_or_paths() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new(
+        "INSERT INTO item(id, parent, email, note) VALUES (901, 1, 'canary-email@example.test', 'CANARY_VALUE_7f3')",
+    );
+    options.lease = Some(lease);
+    let (_, update) = run(&connections, owner, handle, options).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    let end = connections
+        .end_transaction(owner, lease, true)
+        .await
+        .unwrap();
+    assert_eq!(end.outcome, Outcome::Committed);
+    let (id, _) = connections
+        .submit_job(
+            owner,
+            handle,
+            JobOptions::new(format!(
+                "{SLOW} /* CANARY_SQL_COMMENT */; UPDATE item SET note = 'CANARY_UPDATE_9q'"
+            )),
+        )
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    connections.cancel_job(owner, id).unwrap();
+    let (_, update) = drain(&connections, owner, id).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Unknown));
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    let mut options = JobOptions::new("DELETE FROM item WHERE email = 'canary-email@example.test'");
+    options.lease = Some(lease);
+    run(&connections, owner, handle, options).await;
+    // "Crash" with that lease open: its in-flight record stays.
+    let entries = journal_entries(&fixture);
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let mut bytes = Vec::new();
+    for file in std::fs::read_dir(journal_dir(&fixture)).unwrap() {
+        bytes.extend(std::fs::read(file.unwrap().path()).unwrap());
+    }
+    let text = String::from_utf8_lossy(&bytes).to_lowercase();
+    for canary in [
+        "canary",
+        "insert",
+        "update",
+        "delete",
+        "select",
+        "recursive",
+        "item",
+        "note",
+        "email",
+        "example.test",
+        &fixture.0.to_string_lossy().to_lowercase(),
+    ] {
+        assert!(!text.contains(canary), "journal contains {canary:?}");
+    }
+    assert!(text.contains("fixture.sqlite"));
+    drop(connections);
+}
+
+/// J-8: a damaged journal is preserved and reported through the registry, and new jobs and
+/// transactions stay refused until the user acknowledges the damage (the fresh journal itself
+/// is writable, so only this check refuses them). The report survives a restart until then.
+#[tokio::test]
+async fn j8_a_damaged_journal_refuses_new_work_until_acknowledged() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    let (first, second) = (JobId(Uuid::new_v4()), JobId(Uuid::new_v4()));
+    for id in [first, second] {
+        connections
+            .0
+            .execution
+            .record_job(id, owner, "fixture.sqlite", job_facts());
+    }
+    drop(connections);
+    let file = journal_dir(&fixture).join(journal::FILE);
+    let mut bytes = std::fs::read(&file).unwrap();
+    let last = bytes.iter().rposition(|&b| b == b'{').unwrap();
+    bytes[last + 2] ^= 0x04;
+    std::fs::write(&file, &bytes).unwrap();
+
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let reported = connections.unresolved_outcomes(owner);
+    assert_eq!(reported.journal, None, "the fresh journal is writable");
+    let damage = reported
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.journal_damage.is_some())
+        .unwrap()
+        .clone();
+    let report = damage.journal_damage.clone().unwrap();
+    assert_eq!(report.unreadable_records, Some(1));
+    let preserved = journal_dir(&fixture).join(report.preserved_as.clone().unwrap());
+    assert_eq!(std::fs::read(&preserved).unwrap(), bytes);
+    assert_eq!(
+        reported.outcomes.len(),
+        2,
+        "one record recovered plus the report"
+    );
+    let ids: Vec<_> = reported
+        .outcomes
+        .iter()
+        .map(|o| o.outcome_id.clone())
+        .collect();
+    assert_eq!(
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (71)")
+            )
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    assert_eq!(
+        (connections.retained_jobs(), connections.open_transactions()),
+        (0, 0)
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 71")
+            .await,
+        0
+    );
+    drop(connections);
+    // Still reported after a restart, and the work still refused.
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    assert_eq!(listed(&connections.0.execution, owner), ids);
+    assert_eq!(
+        connections
+            .begin_transaction(owner, handle)
+            .await
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+    connections
+        .acknowledge_outcome(owner, OutcomeId::parse(&damage.outcome_id).unwrap())
+        .unwrap();
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (71)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert!(
+        connections
+            .unresolved_outcomes(owner)
+            .outcomes
+            .iter()
+            .all(|outcome| outcome.journal_damage.is_none())
+    );
+    assert_eq!(
+        std::fs::read(&preserved).unwrap(),
+        bytes,
+        "the damaged copy is kept"
+    );
+}
+
+/// J-9: a crash or failed rewrite right after a damaged journal was preserved keeps the damage
+/// at the journal path: every later start reports it, restores the verified record and refuses
+/// new read-write work until the damage is acknowledged.
+#[tokio::test]
+async fn j9_damage_is_not_lost_when_the_rewrite_after_quarantine_fails() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    let job = JobId(Uuid::new_v4());
+    connections
+        .0
+        .execution
+        .record_job(job, owner, "fixture.sqlite", job_facts());
+    drop(connections);
+    let dir = journal_dir(&fixture);
+    let file = dir.join(journal::FILE);
+    let mut bytes = std::fs::read(&file).unwrap();
+    bytes.truncate(bytes.len() - 4);
+    std::fs::write(&file, &bytes).unwrap();
+    std::fs::create_dir(dir.join("unknown-outcomes.journal.tmp")).unwrap();
+    for planted in [true, false] {
+        if !planted {
+            std::fs::remove_dir(dir.join("unknown-outcomes.journal.tmp")).unwrap();
+        }
+        let (connections, owner, handle) = open_journaled_any(&fixture).await;
+        let listed = connections.unresolved_outcomes(owner);
+        assert!(
+            listed.outcomes.iter().any(|o| o.journal_damage.is_some()),
+            "planted={planted}"
+        );
+        assert!(listed.outcomes.iter().any(|o| o.outcome_id == job.opaque()));
+        assert_eq!(
+            connections
+                .begin_transaction(owner, handle)
+                .await
+                .unwrap_err(),
+            ExecutionError::JournalUnavailable
+        );
+        drop(connections);
+    }
+}
+async fn open_journaled_any(fixture: &Fixture) -> (Connections, OwnerId, ConnectionId) {
+    let (connections, owner, handle) = open(fixture, Access::ReadWrite).await;
+    connections.require_outcome_journal();
+    connections.open_outcome_journal(&journal_dir(fixture), owner);
+    (connections, owner, handle)
+}
+
+/// J-10: a failed acknowledgement never becomes durable later. With the rewrite failing (a
+/// directory planted at the temporary path) the acknowledgement is refused; once the plant is
+/// gone another write (admission, new work) succeeds, yet after a restart the outcome is still
+/// listed, unacknowledged. A real acknowledgement then persists.
+#[tokio::test]
+async fn j10_a_failed_acknowledgement_never_becomes_durable_later() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let job = JobId(Uuid::new_v4());
+    connections
+        .0
+        .execution
+        .record_job(job, owner, "fixture.sqlite", job_facts());
+    let id = OutcomeId::parse(&job.opaque()).unwrap();
+    let plant = journal_dir(&fixture).join("unknown-outcomes.journal.tmp");
+    std::fs::create_dir(&plant).unwrap();
+    assert_eq!(
+        connections.acknowledge_outcome(owner, id),
+        Err(ExecutionError::JournalUnavailable)
+    );
+    std::fs::remove_dir(&plant).unwrap();
+    let (_, update) = run(
+        &connections,
+        owner,
+        handle,
+        JobOptions::new("INSERT INTO parent VALUES (72)"),
+    )
+    .await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert_eq!(listed(&connections.0.execution, owner), [job.opaque()]);
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert_eq!(listed(&connections.0.execution, owner), [job.opaque()]);
+    connections.acknowledge_outcome(owner, id).unwrap();
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert!(listed(&connections.0.execution, owner).is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Journal cost measurement (not a pass/fail test). Rerun:
+//   cargo test --locked -p stoneql-runtime --lib perf_journal -- --ignored --nocapture
+
+fn summary(name: &str, samples: &mut [Duration]) {
+    samples.sort();
+    let at = |q: f64| samples[((samples.len() as f64 * q).ceil() as usize).saturating_sub(1)];
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    println!(
+        "{name}: n={} p50={:.2} ms p95={:.2} ms max={:.2} ms",
+        samples.len(),
+        ms(at(0.5)),
+        ms(at(0.95)),
+        ms(*samples.last().unwrap())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+#[ignore = "measurement; run with --ignored --nocapture"]
+async fn perf_journal_writes_admission_and_listing() {
+    let fixture = Fixture::new().await;
+    // 1. Snapshot write latency at 1, 16 and the full per-owner bound (16 + 2 leases + 8 jobs).
+    for size in [1usize, 16, 26] {
+        let dir = fixture.0.join(format!("perf-{size}"));
+        let mut journal = Journal::open(&dir);
+        let origin = sqlite_origin(&fixture);
+        let entry = |id: Uuid, index: u32| Entry {
+            id: id.to_string(),
+            recorded_at: journal::now(),
+            engine: origin.engine.clone(),
+            database: origin.database.clone(),
+            in_flight: true,
+            transaction: None,
+            job: Some(UnresolvedJob {
+                unknown_statement: Some(index),
+                statement_count: 100,
+                ..job_facts()
+            }),
+            damage: None,
+        };
+        for _ in 1..size {
+            assert!(journal.put(entry(Uuid::new_v4(), 0)));
+        }
+        let id = Uuid::new_v4();
+        let mut samples = Vec::new();
+        for index in 0..200 {
+            let started = std::time::Instant::now();
+            assert!(journal.put(entry(id, index)));
+            samples.push(started.elapsed());
+        }
+        let bytes = std::fs::metadata(dir.join(journal::FILE)).unwrap().len();
+        summary(
+            &format!("journal write, {size} records ({bytes} bytes)"),
+            &mut samples,
+        );
+    }
+
+    // 2. Admission (submit_job, which journals statement 0) with 8 concurrent submitters,
+    //    each on its own owner and handle, with and without a journal.
+    for journaled in [false, true] {
+        let connections =
+            Connections::new(16, Duration::from_secs(3), Duration::from_secs(600)).unwrap();
+        if journaled {
+            connections.require_outcome_journal();
+            assert_eq!(
+                connections.open_outcome_journal(&fixture.0.join("perf-admit"), OwnerId::new()),
+                None
+            );
+        }
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            let connections = connections.clone();
+            let file = fixture.file();
+            tasks.push(tokio::spawn(async move {
+                let owner = OwnerId::new();
+                let grant = connections.grant_sqlite_file(owner, &file).unwrap();
+                let handle = connections
+                    .connect_sqlite_with_access(owner, &grant, Access::ReadWrite)
+                    .await
+                    .unwrap();
+                let mut samples = Vec::new();
+                for _ in 0..25 {
+                    let started = std::time::Instant::now();
+                    let (id, _) = connections
+                        .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+                        .unwrap();
+                    samples.push(started.elapsed());
+                    drain(&connections, owner, id).await;
+                }
+                samples
+            }));
+        }
+        let mut samples = Vec::new();
+        for task in tasks {
+            samples.extend(task.await.unwrap());
+        }
+        summary(
+            &format!(
+                "submit_job admission, 8 concurrent submitters, {}",
+                if journaled {
+                    "journal"
+                } else {
+                    "no journal (baseline)"
+                }
+            ),
+            &mut samples,
+        );
+    }
+
+    // 3. Listing and acknowledging while another thread keeps writing the journal.
+    let (connections, owner, _) = {
+        let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+        connections.require_outcome_journal();
+        connections.open_outcome_journal(&fixture.0.join("perf-list"), owner);
+        (connections, owner, handle)
+    };
+    let state = &connections.0.execution;
+    let ids: Vec<_> = (0..16).map(|_| JobId(Uuid::new_v4())).collect();
+    for &id in &ids {
+        state.record_job(id, owner, "fixture.sqlite", job_facts());
+    }
+    let mut idle = Vec::new();
+    for _ in 0..200 {
+        let started = std::time::Instant::now();
+        std::hint::black_box(connections.unresolved_outcomes(owner));
+        idle.push(started.elapsed());
+    }
+    summary("list_unresolved_outcomes, idle", &mut idle);
+    let writer = {
+        let connections = connections.clone();
+        std::thread::spawn(move || {
+            let origin = Origin::from("fixture.sqlite");
+            for _ in 0..200 {
+                connections
+                    .0
+                    .execution
+                    .journal_job(JobId(Uuid::new_v4()), &origin, 1, 0, false);
+            }
+        })
+    };
+    let mut busy = Vec::new();
+    while !writer.is_finished() {
+        let started = std::time::Instant::now();
+        std::hint::black_box(connections.unresolved_outcomes(owner));
+        busy.push(started.elapsed());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    writer.join().unwrap();
+    summary("list_unresolved_outcomes, during journal writes", &mut busy);
+    let mut acks = Vec::new();
+    for id in ids {
+        let started = std::time::Instant::now();
+        connections
+            .acknowledge_outcome(owner, OutcomeId::parse(&id.opaque()).unwrap())
+            .unwrap();
+        acks.push(started.elapsed());
+    }
+    summary("acknowledge_outcome (durable removal)", &mut acks);
+}
+
+/// J-11: removing the record of work whose outcome is now known (a job that succeeded, a lease
+/// confirmed rolled back) is not undone by a failed write: it completes with the next
+/// successful write, so a restart never restores resolved work as an unknown outcome (nor
+/// counts it toward the cap). Acknowledgements keep the stricter rule (J-10).
+#[tokio::test]
+async fn j11_a_known_outcome_removal_completes_with_the_next_successful_write() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open_journaled(&fixture).await;
+    let plant = journal_dir(&fixture).join("unknown-outcomes.journal.tmp");
+    // A job journaled while writes work, finishing while they fail.
+    let mut blocker = fixture.observer().await;
+    blocker.execute("BEGIN IMMEDIATE").await.unwrap();
+    let (job, _) = connections
+        .submit_job(
+            owner,
+            handle,
+            JobOptions::new("INSERT INTO parent VALUES (73)"),
+        )
+        .unwrap();
+    std::fs::create_dir(&plant).unwrap();
+    blocker.execute("ROLLBACK").await.unwrap();
+    let (_, update) = drain(&connections, owner, job).await;
+    assert_eq!(update.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    // A lease journaled while writes work, rolled back (confirmed) while they fail.
+    std::fs::remove_dir(&plant).unwrap();
+    let lease = connections.begin_transaction(owner, handle).await.unwrap();
+    std::fs::create_dir(&plant).unwrap();
+    let end = connections
+        .end_transaction(owner, lease, false)
+        .await
+        .unwrap();
+    assert_eq!(end.outcome, Outcome::RolledBack);
+    assert_eq!(
+        connections.unresolved_outcomes(owner).journal,
+        Some(JournalProblemDto::WriteFailed)
+    );
+    std::fs::remove_dir(&plant).unwrap();
+    // An unrelated successful write.
+    let other = JobId(Uuid::new_v4());
+    connections
+        .0
+        .execution
+        .record_job(other, owner, "fixture.sqlite", job_facts());
+    drop(connections);
+    let (connections, owner, _) = open_journaled(&fixture).await;
+    assert_eq!(listed(&connections.0.execution, owner), [other.opaque()]);
 }

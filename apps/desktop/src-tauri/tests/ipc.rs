@@ -1,3 +1,4 @@
+mod common;
 use serde_json::{Value, json};
 use stoneql_contracts::v1::{CellValue, Envelope, HostInfo, ProbeResult};
 use tauri::{
@@ -10,8 +11,14 @@ use tauri::{
 fn build(builder: tauri::Builder<MockRuntime>) -> tauri::App<MockRuntime> {
     builder.build(tauri::generate_context!()).unwrap()
 }
-fn app() -> tauri::App<MockRuntime> {
-    build(stoneql_desktop::app_builder(mock_builder(), false))
+fn app() -> (tauri::App<MockRuntime>, common::TempJournal) {
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        journal.services(),
+    ));
+    (app, journal)
 }
 fn window(app: &tauri::App<MockRuntime>, label: &str) -> WebviewWindow<MockRuntime> {
     // Configured windows are created only by the real event loop; mock tests create theirs explicitly.
@@ -53,7 +60,7 @@ fn bootstrap(window: &WebviewWindow<MockRuntime>) -> Envelope<HostInfo> {
 }
 #[test]
 fn actual_ipc_preserves_values_and_rejects_foreign_sessions() {
-    let app = app();
+    let (app, _journal) = app();
     let webview = window(&app, "main");
     let info = bootstrap(&webview);
     assert!(info.payload.simulated);
@@ -85,7 +92,7 @@ fn actual_ipc_preserves_values_and_rejects_foreign_sessions() {
 }
 #[test]
 fn acl_denies_auxiliary_windows_remote_origins_and_ungranted_commands() {
-    let app = app();
+    let (app, _journal) = app();
     let main = window(&app, "main");
     let other = window(&app, "auxiliary");
     let request = json!({"version":1,"requestId":"r","payload":{"nonce":"nonce_1"}});
@@ -121,7 +128,7 @@ fn acl_denies_auxiliary_windows_remote_origins_and_ungranted_commands() {
 }
 #[test]
 fn actual_commands_reject_versions_unknown_fields_and_unready_acknowledgements() {
-    let app = app();
+    let (app, _journal) = app();
     let main = window(&app, "main");
     assert_eq!(
         invoke(
@@ -149,7 +156,7 @@ fn actual_commands_reject_versions_unknown_fields_and_unready_acknowledgements()
 
 #[test]
 fn native_close_requires_a_pending_os_request_and_preserves_cancelled_sessions() {
-    let app = app();
+    let (app, _journal) = app();
     let main = window(&app, "main");
     let session = bootstrap(&main).payload.session_id;
     let mut message = json!({"version":1,"requestId":"close_1","payload":{"sessionId":session,"action":"cancel"}});
@@ -177,7 +184,7 @@ fn native_close_requires_a_pending_os_request_and_preserves_cancelled_sessions()
 
 #[test]
 fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_network() {
-    let app = app();
+    let (app, _journal) = app();
     let main = window(&app, "main");
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
@@ -270,7 +277,7 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
 
 #[test]
 fn renderer_bootstrap_rotates_session_and_rejects_stale_probes() {
-    let app = app();
+    let (app, _journal) = app();
     let webview = window(&app, "main");
     let first = bootstrap(&webview);
     let retry = bootstrap(&webview);
@@ -317,6 +324,7 @@ impl stoneql_desktop::SecretStore for MemoryStore {
 #[test]
 fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
     let store = std::sync::Arc::new(MemoryStore::default());
+    let journal = common::TempJournal::new();
     let app = build(stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
@@ -324,6 +332,7 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
             secrets: store.clone(),
             agent_socket: None,
             read_write_sql: false,
+            outcome_journal: Some(journal.dir()),
         },
     ));
     let webview = window(&app, "main");
@@ -433,7 +442,7 @@ fn read_write_is_refused_natively_while_the_gate_is_off() {
     // Flipping the gate must be a deliberate, reviewed change to this test too.
     const { assert!(!stoneql_desktop::READ_WRITE_SQL_ENABLED) };
     assert!(!stoneql_desktop::HostServices::system().read_write_sql);
-    let app = app();
+    let (app, _journal) = app();
     let webview = window(&app, "main");
     let info = bootstrap(&webview);
     assert!(!info.payload.read_write_sql);

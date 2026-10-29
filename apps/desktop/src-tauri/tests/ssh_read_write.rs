@@ -2,6 +2,7 @@
 //! any Keychain lookup or network access, even in a host whose read-write gate is enabled.
 //! No Docker: the SSH endpoint is an unroutable documentation address and the secret store
 //! only records lookups.
+mod common;
 use serde_json::{Value, json};
 use std::{
     sync::{
@@ -36,6 +37,7 @@ impl SecretStore for RecordingStore {
 #[test]
 fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() {
     let store = Arc::new(RecordingStore::default());
+    let journal = common::TempJournal::new();
     let app = stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
@@ -44,6 +46,7 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
             agent_socket: None,
             // Test-only host: the production gate stays off (asserted in `ipc.rs`).
             read_write_sql: true,
+            outcome_journal: Some(journal.dir()),
         },
     )
     .build(tauri::generate_context!())

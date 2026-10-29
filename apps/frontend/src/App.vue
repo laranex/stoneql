@@ -57,7 +57,7 @@ import {
   Sun,
   Square,
 } from 'lucide-vue-next';
-import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome } from './services/liveConnections';
+import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -930,7 +930,7 @@ async function transaction(action: 'begin' | 'commit' | 'rollback') {
   try {
     if (action === 'begin') { await store.beginLiveTransaction(profileId); notify('Transaction started. Statements run in it until you commit or roll back.'); return; }
     if (action === 'commit' && !(await askConfirm({ title: 'Commit transaction?', acceptLabel: 'Commit', message: `Make this transaction's changes on “${store.connection.name}” permanent.` }))) return;
-    const notice = describeTransactionEnd(await store.endLiveTransaction(profileId, action));
+    const notice = describeTransactionEnd(await store.endLiveTransaction(profileId, action), action);
     notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
   } catch (error) { notify((error as Error).message, 'error'); }
 }
@@ -939,8 +939,11 @@ async function acknowledgeOutcome(outcomeId: string) {
   try { await store.acknowledgeUnresolvedOutcome(outcomeId); }
   catch (error) { notify((error as Error).message, 'error'); }
 }
-function outcomeProfile(outcomeId: string) {
-  const id = store.outcomeProfiles[outcomeId];
+/** Where an outcome comes from: this session's profile, an earlier session (reload) or an earlier run (restart). */
+function outcomeProfile(outcome: { outcomeId: string; restored: boolean; journalDamage: unknown }) {
+  if (outcome.journalDamage) return 'Unknown-outcome journal';
+  if (outcome.restored) return 'Before a restart';
+  const id = store.outcomeProfiles[outcome.outcomeId];
   return id ? store.connections.find((c) => c.id === id)?.name || 'Removed profile' : 'Before a reload';
 }
 function outcomeAge(seconds: number) {
@@ -1156,7 +1159,7 @@ function hasOpenLiveWork() {
   return Object.values(store.liveSessions).some((session) => session.lease) ||
     store.connections.some((c) => c.mode === 'live' && store.workspaces[c.id]?.queries.some((q) => q.running));
 }
-const LIVE_WORK_CLOSE_WARNING = 'A live transaction is open or a live statement is running. Closing StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. The outcome will not be shown.';
+const LIVE_WORK_CLOSE_WARNING = 'A live transaction is open or a live statement is running. Closing StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. An outcome the server did not confirm is listed the next time StoneQL starts, until you acknowledge it.';
 let reloadConfirmed = false;
 function beforeUnload(event: BeforeUnloadEvent) {
   if (!reloadConfirmed && (hasUnsavedChanges() || hasOpenLiveWork())) { event.preventDefault(); event.returnValue = ''; }
@@ -1167,7 +1170,7 @@ async function nativeReloadRequested() {
   if (nativeReloadHandling || nativeHostState.kind !== 'desktop') return;
   nativeReloadHandling = true;
   try {
-    if (!(await askDiscard(`A live transaction is open, or a live statement is running or has results not yet shown. Reloading StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. An outcome the server did not confirm is listed after the reload until you acknowledge it; quitting StoneQL loses that list.${hasUnsavedChanges() ? ' Unsaved changes are discarded too.' : ''} Reload StoneQL?`, 'Reload StoneQL'))) return;
+    if (!(await askDiscard(`A live transaction is open, or a live statement is running or has results not yet shown. Reloading StoneQL ends it: an open transaction is rolled back or ends with an unknown outcome, and a running statement may continue on the server. An outcome the server did not confirm is listed after the reload, and after a restart, until you acknowledge it.${hasUnsavedChanges() ? ' Unsaved changes are discarded too.' : ''} Reload StoneQL?`, 'Reload StoneQL'))) return;
     reloadConfirmed = true;
     await invalidateNativeSession();
     window.location.reload();
@@ -1217,14 +1220,15 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
-    <section v-if="store.unresolvedOutcomes.length || store.unresolvedError" class="unresolved-outcomes" role="alert" aria-label="Unknown outcomes">
+    <section v-if="store.unresolvedOutcomes.length || store.unresolvedError || store.journalProblem" class="unresolved-outcomes" role="alert" aria-label="Unknown outcomes">
       <div class="unresolved-heading">
         <AlertCircle :size="14" /><strong>Outcome unknown — the server may or may not have applied this work.</strong>
-        <span class="muted">Verify on the server. Acknowledging only hides an entry; it does not change it. Kept until you acknowledge it or quit StoneQL.</span>
+        <span class="muted">Verify on the server. Acknowledging only hides an entry; it does not change it. Kept, also across restarts, until you acknowledge it.</span>
       </div>
       <div v-if="store.unresolvedError" class="notice error"><span class="notice-message">{{ store.unresolvedError }}</span></div>
+      <div v-if="store.journalProblem" class="notice error journal-problem"><span class="notice-message">{{ describeJournalProblem(store.journalProblem) }}</span></div>
       <div v-for="outcome in store.unresolvedOutcomes" :key="outcome.outcomeId" class="notice error unresolved-outcome">
-        <span class="notice-message"><strong>{{ outcomeProfile(outcome.outcomeId) }}</strong> · {{ describeUnresolvedOutcome(outcome) }} <span class="unresolved-age">Recorded {{ outcomeAge(outcome.secondsAgo) }}.</span></span>
+        <span class="notice-message"><strong>{{ outcomeProfile(outcome) }}</strong> · {{ describeUnresolvedOutcome(outcome) }} <span class="unresolved-age">{{ outcome.restored ? `Recorded ${outcomeAge(outcome.secondsAgo)}, before StoneQL restarted.` : `Recorded ${outcomeAge(outcome.secondsAgo)}.` }}</span></span>
         <button class="button" type="button" :aria-label="`Acknowledge unknown outcome: ${describeUnresolvedOutcome(outcome)}`" @click="acknowledgeOutcome(outcome.outcomeId)">Acknowledge</button>
       </div>
     </section>

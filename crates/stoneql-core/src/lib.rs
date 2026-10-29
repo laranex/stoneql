@@ -90,6 +90,10 @@ pub enum ErrorCode {
     /// Too many unknown outcomes await the user's acknowledgement; new read-write work is
     /// refused until some are acknowledged. Nothing is dropped to make room.
     UnresolvedOutcomes,
+    /// The durable journal of unknown outcomes cannot be opened, validated or written, or a
+    /// damaged journal awaits acknowledgement: new read-write work is refused before anything
+    /// is sent.
+    OutcomeJournalUnavailable,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -130,6 +134,9 @@ impl ErrorCode {
             Self::Busy => "The connection is busy with another statement or an open transaction.",
             Self::UnresolvedOutcomes => {
                 "Unknown outcomes are waiting for acknowledgement; no new read-write work was started."
+            }
+            Self::OutcomeJournalUnavailable => {
+                "Unknown outcomes cannot be saved durably right now; no new read-write work was started."
             }
             Self::Internal => "The operation could not be completed.",
         }

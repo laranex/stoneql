@@ -306,6 +306,7 @@ mod tests {
                 secrets: std::sync::Arc::new(crate::secrets::tests::MemoryStore::default()),
                 agent_socket: None,
                 read_write_sql: false,
+                outcome_journal: None,
             },
         );
         let mut slots = Vec::new();
@@ -317,6 +318,27 @@ mod tests {
         );
         drop(slots.pop());
         assert!(admit(&session).is_ok());
+    }
+    /// Fail closed from construction: until the first bootstrap opens the journal, the
+    /// runtime reports it unopened (and refuses new read-write work).
+    #[test]
+    fn a_new_session_requires_the_outcome_journal_before_any_read_write_work() {
+        let session = NativeSession::new(
+            false,
+            crate::HostServices {
+                secrets: std::sync::Arc::new(crate::secrets::tests::MemoryStore::default()),
+                agent_socket: None,
+                read_write_sql: true,
+                outcome_journal: None,
+            },
+        );
+        assert_eq!(
+            session
+                .connections
+                .unresolved_outcomes(session.owner)
+                .journal,
+            Some(stoneql_contracts::v1::JournalProblemDto::NotOpened)
+        );
     }
     #[test]
     fn omitted_query_limits_use_runtime_maximums() {

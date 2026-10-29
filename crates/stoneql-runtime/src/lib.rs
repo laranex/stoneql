@@ -175,10 +175,12 @@ impl EnginePool {
 }
 /// What a registered handle reports about itself.
 struct Details {
+    engine: Engine,
     engine_version: String,
     access: Access,
 }
 struct Entry {
+    engine: Engine,
     engine_version: String,
     owner: OwnerId,
     pool: EnginePool,
@@ -302,6 +304,7 @@ impl Connections {
         access: Access,
     ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
+        let engine = config.engine;
         // Gate (D025-9): read-write over SSH stays unavailable until the user enables it
         // separately; tunnelled cancellation under forwarding-slot exhaustion is fixture-tested
         // (`execution::ssh_fixture`). Refused before any network access.
@@ -363,6 +366,7 @@ impl Connections {
             tunnel,
             permit,
             Details {
+                engine,
                 engine_version: version,
                 access,
             },
@@ -517,12 +521,14 @@ impl Connections {
         let generation = self.0.generation.load(Ordering::SeqCst);
         let permit = self.permit()?;
         let (pool, version) = sqlite::open(&path, self.0.deadline).await?;
+        let engine = Engine::Sqlite;
         self.register_or_close(
             owner,
             EnginePool::Sqlite(pool),
             None,
             permit,
             Details {
+                engine,
                 engine_version: version,
                 access,
             },
@@ -576,6 +582,7 @@ impl Connections {
         generation: u64,
     ) -> Result<ConnectionId, LifecycleError> {
         let Details {
+            engine,
             engine_version,
             access,
         } = details;
@@ -593,6 +600,7 @@ impl Connections {
             entries.insert(
                 id,
                 Entry {
+                    engine,
                     engine_version,
                     owner,
                     pool,
@@ -755,6 +763,7 @@ mod tests {
     }
     fn details() -> Details {
         Details {
+            engine: Engine::MySql,
             engine_version: "fixture".into(),
             access: Access::ReadOnly,
         }

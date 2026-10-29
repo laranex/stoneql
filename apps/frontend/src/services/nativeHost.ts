@@ -81,9 +81,10 @@ const nativeMessages: Record<string,string> = {
   BUSY: 'This connection is busy with another statement or an open transaction. Nothing was queued or sent.',
   CONFLICT: 'A statement in this transaction failed; only rollback is possible.',
   UNRESOLVED_OUTCOMES: 'Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them.',
+  OUTCOME_JOURNAL_UNAVAILABLE: 'Nothing was sent: StoneQL cannot save unknown outcomes durably right now. See the notice about the unknown-outcome journal.',
 };
 // The host's own fixed text is more specific for these codes (it never contains SQL or values).
-const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOMES']);
+const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOMES', 'OUTCOME_JOURNAL_UNAVAILABLE']);
 /**
  * Renderer waits never end before the native worst case: end_transaction is COMMIT (10 s) +
  * ROLLBACK (2 s) + close (2 s); disconnect releases jobs/leases (5 s) then closes the pool and tunnel.

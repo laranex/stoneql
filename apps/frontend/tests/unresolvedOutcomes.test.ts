@@ -6,13 +6,13 @@ const preferences = new Map<string, string>();
 Object.assign(globalThis, { localStorage: { getItem: (key: string) => preferences.get(key) ?? null, setItem: (key: string, value: string) => preferences.set(key, value) } });
 const { useWorkspace } = await loadModule('../../src/stores/workspace.ts');
 const { bootstrapNativeHost } = await loadModule('../../src/services/nativeHost.ts');
-const { describeUnresolvedOutcome } = await loadModule('../../src/services/liveConnections.ts');
+const { describeUnresolvedOutcome, describeJournalProblem, describeTransactionEnd } = await loadModule('../../src/services/liveConnections.ts');
 const { connections } = await loadModule('../../src/data/sample.ts');
 
 const lostCommit = { outcomeId: 'lease_1', database: 'shop', secondsAgo: 5, transaction: { outcome: 'unknown', reason: 'requested', commitSent: true, rollbackSent: false }, job: null };
 const interrupted = { outcomeId: 'job_1', database: 'shop', secondsAgo: 2, transaction: null, job: { statementCount: 3, unknownStatement: 1, inTransaction: false, cancellation: 'requested', serverCancelSent: true, deadlineExceeded: false } };
 /** A desktop host that, like the native runtime, keeps unknown outcomes across sessions until acknowledged. */
-function host(initial: any[], options: { failAck?: boolean; jobOutcome?: string; refuse?: boolean } = {}) {
+function host(initial: any[], options: { failAck?: boolean; jobOutcome?: string; refuse?: boolean | string; journal?: string } = {}) {
   const outcomes = [...initial], calls: Array<{ command: string; payload: any }> = [];
   let sessions = 0;
   const reply = (command: string, payload: any) => {
@@ -20,7 +20,7 @@ function host(initial: any[], options: { failAck?: boolean; jobOutcome?: string;
       case 'host_info': return { runtime: 'desktop', appVersion: '0.1.0', sessionId: `session_${++sessions}`, nonce: payload.nonce, simulated: true };
       case 'contract_probe': return { values: payload.values, simulated: true };
       case 'connect_direct': return { handle: 'h', engineVersion: 'v', database: 'shop', expiresAfterSeconds: 3600, access: 'read_write' };
-      case 'list_unresolved_outcomes': return { outcomes: [...outcomes], limit: 16 };
+      case 'list_unresolved_outcomes': return { outcomes: [...outcomes], limit: 16, ...(options.journal ? { journal: options.journal } : {}) };
       case 'acknowledge_outcome': {
         if (options.failAck) throw { code: 'DEADLINE_EXCEEDED', message: 'timeout' };
         const index = outcomes.findIndex((o) => o.outcomeId === payload.outcomeId);
@@ -29,9 +29,13 @@ function host(initial: any[], options: { failAck?: boolean; jobOutcome?: string;
         return { outcomes: [...outcomes], limit: 16 };
       }
       case 'submit_job':
+        if (options.refuse === 'journal') throw { code: 'OUTCOME_JOURNAL_UNAVAILABLE', message: 'Nothing was sent: StoneQL cannot save unknown outcomes durably right now. See the notice about the unknown-outcome journal.' };
         if (options.refuse) throw { code: 'UNRESOLVED_OUTCOMES', message: 'Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them.' };
         if (options.jobOutcome === 'unknown') outcomes.push(interrupted);
         return { jobId: 'job_1', statementCount: 3 };
+      case 'begin_transaction':
+        if (options.refuse === 'journal') throw { code: 'OUTCOME_JOURNAL_UNAVAILABLE', message: 'Nothing was sent: StoneQL cannot save unknown outcomes durably right now. See the notice about the unknown-outcome journal.' };
+        return { leaseId: 'lease_new', idleSeconds: 60 };
       case 'fetch_job': return { jobId: 'job_1', state: 'finished', outcome: options.jobOutcome ?? 'succeeded', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [], batch: null, lease: null, done: true };
       default: throw { code: 'INTERNAL', message: command };
     }
@@ -133,5 +137,61 @@ test('a job the reload detached is listed once it records its outcome, without u
   t.mock.timers.tick(10_000);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(quiet.calls.filter((c) => c.command === 'list_unresolved_outcomes').length, 1);
+  await bootstrapNativeHost({});
+});
+
+const restoredLease = { outcomeId: 'lease_r', engine: 'mariadb', database: 'shop', secondsAgo: 90, restored: true, appExited: true, transaction: { outcome: 'unknown', reason: 'closed', commitSent: false, rollbackSent: false }, job: null, journalDamage: null };
+const restoredJob = { outcomeId: 'job_r', engine: 'postgresql', database: 'ledger', secondsAgo: 90, restored: true, appExited: true, transaction: null, job: { statementCount: 3, unknownStatement: 0, inTransaction: true, cancellation: 'none', serverCancelSent: false, deadlineExceeded: false }, journalDamage: null };
+const damaged = { outcomeId: 'damage_r', engine: null, database: '', secondsAgo: 1, restored: true, appExited: false, transaction: null, job: null, journalDamage: { unreadableRecords: null, preservedAs: null } };
+
+test('outcomes from before a restart, a damaged journal and journal problems are described plainly', () => {
+  const lease = describeUnresolvedOutcome(restoredLease);
+  assert.match(lease, /^Transaction on MariaDB “shop” was still open when StoneQL quit or crashed\. Outcome unknown/);
+  assert.match(lease, /StoneQL never sent COMMIT; .* not confirmed\./);
+  const job = describeUnresolvedOutcome(restoredJob);
+  assert.match(job, /^SQL job on PostgreSQL “ledger” inside a transaction was running when StoneQL quit or crashed\./);
+  assert.match(job, /Statement 1 of 3 may have been sent; later ones were not\./);
+  for (const text of [lease, job]) assert.doesNotMatch(text, /committed|rolled back|succeeded|success/i);
+  // The same restored record that ended before the exit reads as an ordinary unknown end.
+  assert.match(describeUnresolvedOutcome({ ...restoredLease, appExited: false, transaction: { ...restoredLease.transaction, reason: 'requested', commitSent: true } }), /COMMIT may have been sent and was not confirmed/);
+  // An exit while COMMIT was in flight never claims COMMIT was not sent.
+  const exitedCommit = describeUnresolvedOutcome({ ...restoredLease, transaction: { ...restoredLease.transaction, commitSent: true } });
+  assert.match(exitedCommit, /quit or crashed\..*COMMIT may have been sent and was not confirmed\./);
+  assert.doesNotMatch(exitedCommit, /never sent COMMIT/);
+  const damage = describeUnresolvedOutcome(damaged);
+  assert.match(damage, /could not be read intact.*How many recorded outcomes could not be read is unknown\..*could not be set aside and was left unchanged\..*stay refused until you acknowledge this/);
+  assert.match(describeUnresolvedOutcome({ ...damaged, journalDamage: { unreadableRecords: 1, preservedAs: 'x.damaged' } }), /1 recorded outcome could not be read and is not listed\. The damaged file was kept unchanged as “x\.damaged”/);
+  assert.match(describeUnresolvedOutcome({ ...damaged, journalDamage: { unreadableRecords: 0, preservedAs: 'x.damaged' } }), /Every recorded outcome in it was recovered/);
+  for (const problem of ['not_opened', 'unavailable', 'insecure', 'in_use', 'unsupported_version', 'damaged_not_preserved', 'write_failed']) {
+    const text = describeJournalProblem(problem);
+    assert.match(text, /New live writes and transactions are refused .* read-only queries still work\. Nothing was deleted\.$/, problem);
+  }
+  assert.match(describeJournalProblem('write_failed'), /disk is full/);
+  // A COMMIT the host refused to send (journal write failed) and replaced by a confirmed rollback.
+  const fallback = describeTransactionEnd({ outcome: 'rolled_back', reason: 'requested', commitSent: false, rollbackSent: true }, 'commit');
+  assert.equal(fallback.kind, 'error');
+  assert.match(fallback.text, /COMMIT was not sent.*rolled back instead \(confirmed by the server\); nothing was committed\./);
+  assert.equal(describeTransactionEnd({ outcome: 'rolled_back', reason: 'requested', commitSent: false, rollbackSent: true }, 'rollback').kind, 'success');
+});
+
+test('the journal problem is kept from the listing and a journal refusal lists again', async () => {
+  const native = host([restoredLease, damaged], { journal: 'write_failed', refuse: 'journal' });
+  const store = await storeOn(native.global);
+  await store.refreshUnresolvedOutcomes();
+  assert.equal(store.journalProblem, 'write_failed');
+  assert.deepEqual(store.unresolvedOutcomes.map((o: any) => [o.outcomeId, o.restored]), [['lease_r', true], ['damage_r', true]]);
+  const profile = { ...connections[0], mode: 'live', transport: { type: 'direct' } };
+  store.connections.push(profile);
+  await store.connectLiveProfile(profile, undefined, 'read_write');
+  const before = native.calls.filter((c) => c.command === 'list_unresolved_outcomes').length;
+  await assert.rejects(store.runLiveJob(profile.id, 'UPDATE t SET a = 1'), { code: 'OUTCOME_JOURNAL_UNAVAILABLE', message: /^Nothing was sent: StoneQL cannot save unknown outcomes durably/ });
+  assert.equal(native.calls.filter((c) => c.command === 'list_unresolved_outcomes').length, before + 1);
+  // The same refusal when starting a transaction also lists again; no lease is kept.
+  await assert.rejects(store.beginLiveTransaction(profile.id), { code: 'OUTCOME_JOURNAL_UNAVAILABLE' });
+  assert.equal(native.calls.filter((c) => c.command === 'list_unresolved_outcomes').length, before + 2);
+  // An older host (no `journal` field) reports no problem.
+  const older = await storeOn(host([lostCommit]).global);
+  await older.refreshUnresolvedOutcomes();
+  assert.equal(older.journalProblem, null);
   await bootstrapNativeHost({});
 });

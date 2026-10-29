@@ -1,4 +1,5 @@
 //! Explicitly opted-in, owning-fixture IPC integration. Never reads saved profiles or arbitrary URLs.
+mod common;
 use serde_json::{Value, json};
 use sqlx::{
     ConnectOptions, Connection, MySqlConnection,
@@ -105,7 +106,8 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .map_err(|_| "observer close failed")
             .unwrap();
     });
-    let app = stoneql_desktop::app_builder(mock_builder(), false)
+    let journal = common::TempJournal::new();
+    let app = stoneql_desktop::app_builder_with(mock_builder(), false, journal.services())
         .build(tauri::generate_context!())
         .unwrap();
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))

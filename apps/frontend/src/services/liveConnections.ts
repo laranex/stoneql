@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -149,16 +149,33 @@ export async function endLiveTransaction(leaseId: string, action: TransactionAct
   }
 }
 /**
- * Unknown outcomes the native host recorded for this app process and the user has not
- * acknowledged, including those from before a reload. In memory only: quitting StoneQL loses them.
+ * Unknown outcomes the native host recorded and the user has not acknowledged: those from before
+ * a reload and, from its durable journal, those from before a restart (quit or crash).
  */
 export const listUnresolvedOutcomes = () => nativeDatabase<UnresolvedOutcomes>('list_unresolved_outcomes', {});
 /** Hides one listed outcome. It never changes what was recorded; nothing is sent to a database. */
 export const acknowledgeOutcome = (outcomeId: string) => nativeDatabase<UnresolvedOutcomes>('acknowledge_outcome', { outcomeId });
+const engineNames: Record<EngineDto, string> = { mysql: 'MySQL', mariadb: 'MariaDB', postgresql: 'PostgreSQL', sqlite: 'SQLite' };
 /** Plain text for a listed unknown outcome; never claims success or rollback. */
 export function describeUnresolvedOutcome(outcome: UnresolvedOutcome): string {
-  const where = outcome.database ? ` on “${outcome.database}”` : '';
+  if (outcome.journalDamage) {
+    const damage = outcome.journalDamage;
+    const lost = damage.unreadableRecords === null ? 'How many recorded outcomes could not be read is unknown.'
+      : damage.unreadableRecords === 0 ? 'Every recorded outcome in it was recovered and is listed.'
+      : `${damage.unreadableRecords} recorded outcome${damage.unreadableRecords === 1 ? '' : 's'} could not be read and ${damage.unreadableRecords === 1 ? 'is' : 'are'} not listed.`;
+    const kept = damage.preservedAs ? `The damaged file was kept unchanged as “${damage.preservedAs}” in the outcome-journal folder.` : 'The damaged file could not be set aside and was left unchanged.';
+    return `The unknown-outcome journal could not be read intact when StoneQL started. ${lost} ${kept} Verify recent live writes on your servers. New live writes stay refused until you acknowledge this.`;
+  }
+  const engine = outcome.engine ? `${engineNames[outcome.engine]} ` : '';
+  const where = outcome.database ? ` on ${engine}“${outcome.database}”` : engine ? ` on ${engine.trim()}` : '';
   const base = 'Outcome unknown — the server may or may not have applied it.';
+  if (outcome.transaction && outcome.appExited) {
+    const end = outcome.transaction;
+    const sent = end.commitSent ? 'COMMIT may have been sent and was not confirmed.'
+      : end.rollbackSent ? 'ROLLBACK may have been sent and was not confirmed; StoneQL never sent COMMIT.'
+      : "StoneQL never sent COMMIT; the server normally discards an open transaction's work when its session ends, but this was not confirmed.";
+    return `Transaction${where} was still open when StoneQL quit or crashed. ${base} ${sent} Verify on the server; StoneQL never retries.`;
+  }
   if (outcome.transaction) {
     const end = outcome.transaction;
     const why = end.reason === 'expired' ? 'expired after being idle' : end.reason === 'connection_lost' ? 'lost its connection' : end.reason === 'closed' ? 'was closed (disconnect, reload or quit)' : 'was ended';
@@ -169,14 +186,36 @@ export function describeUnresolvedOutcome(outcome: UnresolvedOutcome): string {
     return `Transaction${where} ${why}. ${base} ${sent} Verify on the server; StoneQL never retries.`;
   }
   const job = outcome.job!;
+  if (outcome.appExited) {
+    const at = job.unknownStatement === null ? '' : ` Statement ${job.unknownStatement + 1} of ${job.statementCount} may have been sent${job.unknownStatement > 0 ? ' (the statements before it were sent)' : ''}; later ones were not.`;
+    return `SQL job${where}${job.inTransaction ? ' inside a transaction' : ''} was running when StoneQL quit or crashed. ${base}${at} Verify on the server; StoneQL never retries.`;
+  }
   const at = job.unknownStatement === null ? ' (the session state after it did not match)' : ` at statement ${job.unknownStatement + 1} of ${job.statementCount}`;
   const how = job.cancellation === 'requested' ? ' Cancellation was requested, not confirmed; it may still be running on the server.' : job.cancellation === 'confirmed' ? ' It was interrupted.' : '';
   return `SQL job${where}${at}${job.inTransaction ? ' inside a transaction' : ''}${job.deadlineExceeded ? ' after the deadline' : ''}. ${base}${how} Verify on the server; StoneQL never retries.`;
 }
+/** Why unknown outcomes cannot be saved durably; new live writes are refused meanwhile. */
+export function describeJournalProblem(problem: JournalProblemDto): string {
+  const why: Record<JournalProblemDto, string> = {
+    not_opened: 'StoneQL has not opened its unknown-outcome journal.',
+    unavailable: 'The unknown-outcome journal folder could not be created, read or locked.',
+    insecure: 'The unknown-outcome journal is a symbolic link, is not owned by you, or can be read by other users, so StoneQL does not use it.',
+    in_use: 'Another running StoneQL is using the unknown-outcome journal.',
+    unsupported_version: 'The unknown-outcome journal was written by a newer StoneQL and was left untouched.',
+    damaged_not_preserved: 'The unknown-outcome journal is damaged and could not be set aside; it was left untouched.',
+    write_failed: 'The unknown-outcome journal could not be saved (for example, the disk is full).',
+  };
+  return `${why[problem]} New live writes and transactions are refused until unknown outcomes can be saved again; read-only queries still work. Nothing was deleted.`;
+}
 export type OutcomeNotice = { kind: 'success' | 'warning' | 'error'; text: string };
-/** Transaction end as the server confirmed it; anything unconfirmed is unknown. */
-export function describeTransactionEnd(end: TransactionEnd): OutcomeNotice {
+/**
+ * Transaction end as the server confirmed it; anything unconfirmed is unknown. `requested`: the
+ * user's action, so a COMMIT the host refused to send (its unknown outcome could not be saved
+ * durably first) and replaced by a confirmed rollback is not mistaken for a plain rollback.
+ */
+export function describeTransactionEnd(end: TransactionEnd, requested?: TransactionActionDto): OutcomeNotice {
   const reason = end.reason === 'expired' ? ' The transaction had expired after being idle.' : end.reason === 'connection_lost' ? ' Its connection was lost.' : end.reason === 'closed' ? ' Its connection was closed.' : '';
+  if (requested === 'commit' && end.outcome === 'rolled_back' && !end.commitSent) return { kind: 'error', text: `COMMIT was not sent: StoneQL could not save its possible unknown outcome durably first. The transaction was rolled back instead (confirmed by the server); nothing was committed.${reason}` };
   if (end.outcome === 'committed') return { kind: 'success', text: `Transaction committed (confirmed by the server).${reason}` };
   if (end.outcome === 'rolled_back') return { kind: 'success', text: `Transaction rolled back (confirmed by the server).${reason}` };
   // commitSent/rollbackSent mean "attempted": the bytes may not have reached the server.

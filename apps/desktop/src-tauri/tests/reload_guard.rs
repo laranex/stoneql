@@ -2,6 +2,7 @@
 //! MockRuntime never runs navigation handlers, so these tests drive the decision function the
 //! guard calls against real host state (actual IPC handlers, temporary SQLite file). The hook
 //! itself is exercised in a real WKWebView by `real_window_reload`.
+mod common;
 use serde_json::{Value, json};
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::path::{Path, PathBuf};
@@ -48,7 +49,8 @@ fn reload_is_refused_natively_while_a_lease_or_job_is_held_and_allowed_after_rot
     let temp = TempDir(std::fs::canonicalize(&root).unwrap());
     let file = temp.0.join("fixture.sqlite");
     sqlite(&file, "CREATE TABLE t(id INTEGER PRIMARY KEY)");
-    let app = rw_app();
+    let journal = common::TempJournal::new();
+    let app = rw_app(&journal);
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
         .build()
         .unwrap();
@@ -229,13 +231,13 @@ fn reload_is_refused_natively_while_a_lease_or_job_is_held_and_allowed_after_rot
 }
 
 type Invoke<'a> = Box<dyn Fn(&str, Value) -> Result<Value, Value> + 'a>;
-fn rw_app() -> tauri::App<tauri::test::MockRuntime> {
+fn rw_app(journal: &common::TempJournal) -> tauri::App<tauri::test::MockRuntime> {
     stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
         stoneql_desktop::HostServices {
             read_write_sql: true,
-            ..stoneql_desktop::HostServices::system()
+            ..journal.services()
         },
     )
     .build(tauri::generate_context!())
@@ -259,7 +261,8 @@ fn unknown_outcomes_survive_the_reload_rotation_until_acknowledged_and_stay_owne
     let temp = TempDir(std::fs::canonicalize(&root).unwrap());
     let file = temp.0.join("outcomes.sqlite");
     sqlite(&file, "CREATE TABLE t(id INTEGER PRIMARY KEY)");
-    let app = rw_app();
+    let journal = common::TempJournal::new();
+    let app = rw_app(&journal);
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
         .build()
         .unwrap();
@@ -308,7 +311,7 @@ fn unknown_outcomes_survive_the_reload_rotation_until_acknowledged_and_stay_owne
     std::thread::sleep(std::time::Duration::from_millis(200));
     assert_eq!(
         invoke("list_unresolved_outcomes", json!({"sessionId": first})).unwrap()["payload"],
-        json!({"outcomes": [], "limit": 16, "pending": 0})
+        json!({"outcomes": [], "limit": 16, "pending": 0, "journal": null})
     );
     assert!(!stoneql_desktop::navigation_allowed(app.handle()));
 
@@ -346,7 +349,8 @@ fn unknown_outcomes_survive_the_reload_rotation_until_acknowledged_and_stay_owne
     );
 
     // Another app instance has its own owner: it neither sees nor acknowledges the outcome.
-    let other_app = rw_app();
+    let other_journal = common::TempJournal::new();
+    let other_app = rw_app(&other_journal);
     let other_window =
         WebviewWindowBuilder::new(&other_app, "main", WebviewUrl::App("index.html".into()))
             .build()
@@ -432,7 +436,8 @@ fn a_terminated_web_content_process_resets_the_session_and_releases_reload() {
     let temp = TempDir(std::fs::canonicalize(&root).unwrap());
     let file = temp.0.join("crash.sqlite");
     sqlite(&file, "CREATE TABLE t(id INTEGER PRIMARY KEY)");
-    let app = rw_app();
+    let journal = common::TempJournal::new();
+    let app = rw_app(&journal);
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
         .build()
         .unwrap();
@@ -510,5 +515,194 @@ fn a_terminated_web_content_process_resets_the_session_and_releases_reload() {
         )
         .unwrap()["payload"],
         json!({"outcome": "rolled_back", "reason": "closed", "commitSent": false, "rollbackSent": true})
+    );
+}
+
+/// Durable journal across an app restart: app instances share journal directories. While the
+/// first runs, a second instance on the same directory cannot use it (fails closed: listed
+/// problem, new transactions refused). A crash leaves the journal as it is on disk at that
+/// moment; MockRuntime apps cannot be torn down in-process, so each restart starts a new
+/// instance on a byte-for-byte copy of that image (same modes). The next instance lists the
+/// open transaction and the unknown job as recorded before a restart, with the same ids and
+/// facts; acknowledgement is durable across a further restart.
+#[test]
+fn unknown_outcomes_survive_an_app_restart_through_the_journal() {
+    let root = std::env::temp_dir().join(format!("stoneql-restart-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let temp = TempDir(std::fs::canonicalize(&root).unwrap());
+    let file = temp.0.join("restart.sqlite");
+    sqlite(&file, "CREATE TABLE t(id INTEGER PRIMARY KEY)");
+    let start = |journal: &common::TempJournal, nonce: &str| {
+        let app = rw_app(journal);
+        let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
+            .build()
+            .unwrap();
+        let session =
+            invoker(&window)("host_info", json!({"nonce": nonce})).unwrap()["payload"]["sessionId"]
+                .clone();
+        (app, window, session)
+    };
+    let crash_image = |from: &common::TempJournal| {
+        use std::os::unix::fs::DirBuilderExt;
+        let to = common::TempJournal::new();
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(to.dir())
+            .unwrap();
+        for entry in std::fs::read_dir(from.dir()).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), to.dir().join(entry.file_name())).unwrap();
+        }
+        to
+    };
+    let journal = common::TempJournal::new();
+    let (first_app, first_window, session) = start(&journal, "restart_nonce_1");
+    let invoke = invoker(&first_window);
+    let connect = || {
+        let grant = stoneql_desktop::authorize_sqlite_file(first_app.handle(), &file)
+            .unwrap()
+            .grant
+            .unwrap();
+        invoke(
+            "connect_sqlite",
+            json!({"sessionId": session, "grant": grant, "access": "read_write"}),
+        )
+        .unwrap()["payload"]["handle"]
+            .clone()
+    };
+    let (leased, running) = (connect(), connect());
+    let lease = invoke(
+        "begin_transaction",
+        json!({"sessionId": session, "handle": leased}),
+    )
+    .unwrap()["payload"]["leaseId"]
+        .clone();
+    let insert = invoke(
+        "submit_job",
+        json!({"sessionId": session, "handle": leased, "sql": "INSERT INTO t VALUES (1)", "leaseId": lease}),
+    )
+    .unwrap()["payload"]["jobId"]
+        .clone();
+    while invoke(
+        "fetch_job",
+        json!({"sessionId": session, "jobId": insert, "waitMs": 1000}),
+    )
+    .unwrap()["payload"]["done"]
+        != true
+    {}
+    let job = invoke(
+        "submit_job",
+        json!({"sessionId": session, "handle": running, "sql": "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 1000000000) SELECT count(*) FROM c"}),
+    )
+    .unwrap()["payload"]["jobId"]
+        .clone();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    invoke("cancel_job", json!({"sessionId": session, "jobId": job})).unwrap();
+    while invoke(
+        "fetch_job",
+        json!({"sessionId": session, "jobId": job, "waitMs": 1000}),
+    )
+    .unwrap()["payload"]["done"]
+        != true
+    {}
+    let before =
+        invoke("list_unresolved_outcomes", json!({"sessionId": session})).unwrap()["payload"]
+            .clone();
+    assert_eq!(before["journal"], Value::Null, "{before}");
+    let before = before["outcomes"].as_array().unwrap().clone();
+    assert_eq!(before.len(), 1);
+    assert_eq!(
+        (&before[0]["outcomeId"], &before[0]["restored"]),
+        (&job, &json!(false))
+    );
+
+    // A second instance while the first runs: the journal is in use, so it fails closed.
+    let (second_app, second_window, second) = start(&journal, "restart_nonce_busy");
+    let other = invoker(&second_window);
+    let listed =
+        other("list_unresolved_outcomes", json!({"sessionId": second})).unwrap()["payload"].clone();
+    assert_eq!(
+        (&listed["journal"], &listed["outcomes"]),
+        (&json!("in_use"), &json!([]))
+    );
+    let grant = stoneql_desktop::authorize_sqlite_file(second_app.handle(), &file)
+        .unwrap()
+        .grant
+        .unwrap();
+    let handle = other(
+        "connect_sqlite",
+        json!({"sessionId": second, "grant": grant, "access": "read_write"}),
+    )
+    .unwrap()["payload"]["handle"]
+        .clone();
+    let refused = other(
+        "begin_transaction",
+        json!({"sessionId": second, "handle": handle}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        (&refused["code"], &refused["outcome"]),
+        (&json!("OUTCOME_JOURNAL_UNAVAILABLE"), &json!("rejected"))
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Nothing was sent")
+    );
+
+    // Crash of the first instance: its lease never concluded. Restart on that disk image.
+    let restarted = crash_image(&journal);
+    let (_app, window, next) = start(&restarted, "restart_nonce_2");
+    let invoke = invoker(&window);
+    let listed =
+        invoke("list_unresolved_outcomes", json!({"sessionId": next})).unwrap()["payload"].clone();
+    assert_eq!(listed["journal"], Value::Null, "{listed}");
+    let outcomes = listed["outcomes"].as_array().unwrap();
+    assert_eq!(outcomes.len(), 2, "{listed}");
+    let restored_lease = outcomes.iter().find(|o| o["outcomeId"] == lease).unwrap();
+    assert_eq!(
+        (
+            &restored_lease["restored"],
+            &restored_lease["appExited"],
+            &restored_lease["engine"],
+            &restored_lease["database"],
+            &restored_lease["transaction"]
+        ),
+        (
+            &json!(true),
+            &json!(true),
+            &json!("sqlite"),
+            &json!("restart.sqlite"),
+            &json!({"outcome": "unknown", "reason": "closed", "commitSent": false, "rollbackSent": false})
+        )
+    );
+    let restored_job = outcomes.iter().find(|o| o["outcomeId"] == job).unwrap();
+    let mut expected = before[0].clone();
+    expected["restored"] = json!(true);
+    expected["secondsAgo"] = restored_job["secondsAgo"].clone();
+    assert_eq!(restored_job, &expected);
+    for _ in 0..2 {
+        invoke(
+            "acknowledge_outcome",
+            json!({"sessionId": next, "outcomeId": job}),
+        )
+        .unwrap();
+    }
+    // Restart again: the acknowledgement held; the open transaction is still listed.
+    let (_last_app, last_window, last) = start(&crash_image(&restarted), "restart_nonce_3");
+    let listed = invoker(&last_window)("list_unresolved_outcomes", json!({"sessionId": last}))
+        .unwrap()["payload"]
+        .clone();
+    let ids: Vec<_> = listed["outcomes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["outcomeId"].clone())
+        .collect();
+    assert_eq!(
+        ids,
+        std::slice::from_ref(&lease),
+        "acknowledged before the restart: {listed}"
     );
 }

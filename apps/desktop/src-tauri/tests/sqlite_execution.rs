@@ -1,5 +1,6 @@
 //! M006 job and transaction commands through the actual Tauri handlers (MockRuntime) against a
 //! temporary SQLite file. Network engines are covered by `npm run test:execution`.
+mod common;
 use serde_json::{Value, json};
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::path::PathBuf;
@@ -56,12 +57,13 @@ fn read_write_jobs_and_leases_cross_ipc_with_strict_ownership() {
     });
     // Execution tests enable the read-write gate through the trusted host-services injection
     // path only; the production builder keeps it off (see `read_write_is_refused_natively…`).
+    let journal = common::TempJournal::new();
     let app = stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
         stoneql_desktop::HostServices {
             read_write_sql: true,
-            ..stoneql_desktop::HostServices::system()
+            ..journal.services()
         },
     )
     .build(tauri::generate_context!())

@@ -1,6 +1,6 @@
 import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd, listUnresolvedOutcomes, acknowledgeOutcome } from '../services/liveConnections';
 import {NativeOperationError, hostState} from '../services/nativeHost';
-import type {AccessModeDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
+import type {AccessModeDto, JournalProblemDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
@@ -97,11 +97,14 @@ export const useWorkspace = defineStore('workspace', () => {
   const liveSessions = ref<Record<string,{status:'connecting'|'connected'|'disconnected'|'error';info?:LiveConnection;error?:string;lease?:{id:string;state:'active'|'rollback_only'}}>>({});
   const liveGenerations = new Map<string,number>();
   /**
-   * Unknown outcomes the native host keeps for this app process until the user acknowledges
-   * them (also those from before a reload). `outcomeProfiles` names the profile of a lease or
-   * job started in this renderer session; earlier sessions' outcomes have no profile name.
+   * Unknown outcomes the native host keeps until the user acknowledges them: from before a
+   * reload and, through its durable journal, from before a restart (`restored`).
+   * `outcomeProfiles` names the profile of a lease or job started in this renderer session;
+   * earlier sessions' outcomes have no profile name. `journalProblem`: why unknown outcomes
+   * cannot be saved durably (new live writes are refused meanwhile).
    */
   const unresolvedOutcomes = ref<UnresolvedOutcome[]>([]);
+  const journalProblem = ref<JournalProblemDto|null>(null);
   const unresolvedError = ref('');
   const outcomeProfiles = ref<Record<string,string>>({});
   /** Only an unconfirmed (or unreadable) end can add an unresolved outcome. */
@@ -112,8 +115,9 @@ export const useWorkspace = defineStore('workspace', () => {
    * while the host reports any pending, list again each second. The host ends each one within
    * its job deadline, so this stops; it also stops on a listing error.
    */
-  function applyUnresolved(list:{outcomes:UnresolvedOutcome[];pending?:number}) {
+  function applyUnresolved(list:{outcomes:UnresolvedOutcome[];pending?:number;journal?:JournalProblemDto|null}) {
     unresolvedOutcomes.value=list.outcomes;
+    journalProblem.value=list.journal??null;
     clearTimeout(pendingTimer); pendingTimer=undefined;
     if((list.pending??0)>0)pendingTimer=setTimeout(()=>{ pendingTimer=undefined; void refreshUnresolvedOutcomes(); },1000);
   }
@@ -218,7 +222,7 @@ export const useWorkspace = defineStore('workspace', () => {
     try { result=await runLiveJob(current.info.handle,sql,{leaseId:lease?.id,onJob:jobId=>{accepted=true;outcomeProfiles.value[jobId]=id;onJob?.(jobId);}}); }
     catch(error){
       // An accepted job may have ended unknown; a refusal for unresolved outcomes lists them.
-      if(accepted||(error instanceof NativeOperationError&&error.code==='UNRESOLVED_OUTCOMES'))await refreshUnresolvedOutcomes();
+      if(accepted||(error instanceof NativeOperationError&&(error.code==='UNRESOLVED_OUTCOMES'||error.code==='OUTCOME_JOURNAL_UNAVAILABLE')))await refreshUnresolvedOutcomes();
       // A job on a lease that already ended (for example idle-expired) is refused before
       // anything is sent; report why the transaction ended instead of a connection problem.
       if(lease&&!accepted&&error instanceof NativeOperationError&&error.code==='FORBIDDEN'&&liveGenerations.get(id)===generation)
@@ -239,7 +243,7 @@ export const useWorkspace = defineStore('workspace', () => {
     if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile first.');
     let lease;
     try { lease=await beginLiveTransaction(current.info.handle); }
-    catch(error){ if(error instanceof NativeOperationError&&error.code==='UNRESOLVED_OUTCOMES')await refreshUnresolvedOutcomes(); throw error; }
+    catch(error){ if(error instanceof NativeOperationError&&(error.code==='UNRESOLVED_OUTCOMES'||error.code==='OUTCOME_JOURNAL_UNAVAILABLE'))await refreshUnresolvedOutcomes(); throw error; }
     current.lease={id:lease.leaseId,state:'active'};
     outcomeProfiles.value[lease.leaseId]=id;
   }
@@ -421,7 +425,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
     liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus,
-    unresolvedOutcomes, unresolvedError, outcomeProfiles, refreshUnresolvedOutcomes, acknowledgeUnresolvedOutcome,
+    unresolvedOutcomes, unresolvedError, journalProblem, outcomeProfiles, refreshUnresolvedOutcomes, acknowledgeUnresolvedOutcome,
     runLiveJob: runLiveJobFor, beginLiveTransaction: beginLiveTransaction_, endLiveTransaction: endLiveTransaction_,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,
     connections,
