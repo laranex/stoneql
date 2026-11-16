@@ -31,6 +31,18 @@ export function reportLeaseEnd(end: TransactionEnd | null | undefined, notify: (
   const notice = describeTransactionEnd(end);
   notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
 }
+/** Keychain service holding saved references, named so a user can remove a stuck item by hand. */
+export const CREDENTIAL_SERVICE = 'app.dbadmin.desktop.credentials';
+/** Deletes every reference; returns how many could not be removed (failures are never swallowed). */
+async function deleteReferences(references: string[]): Promise<number> {
+  let failed = 0;
+  for (const reference of references) {
+    try { await deleteSecret(reference); } catch { failed++; }
+  }
+  return failed;
+}
+const credentialsLeft = (count: number) =>
+  `${count} saved credential${count === 1 ? '' : 's'} could not be removed from the Keychain (service ${CREDENTIAL_SERVICE}).`;
 export interface ConnectionWorkflowOptions {
   manager: Ref<boolean>;
   notify: (message: string, type?: string) => void;
@@ -199,7 +211,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
         ssh.passphraseRef = await keep(ssh.auth === 'private-key' && ssh.rememberPassphrase, ssh.passphrase, ssh.passphraseRef, 'ssh_passphrase');
       }
     } catch (error) {
-      for (const reference of created) await deleteSecret(reference).catch(() => undefined);
+      const failed = await deleteReferences(created);
+      if (failed) throw new Error(`${(error as Error).message} ${credentialsLeft(failed).replace('saved credential', 'newly saved credential')}`);
       throw error;
     }
     const kept = secretReferences(draft);
@@ -280,7 +293,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if(connectNow || store.activeId===draft.id)store.connect(draft.id);
       const workspace=store.workspaces[draft.id];
       if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
-      for(const reference of obsolete)await deleteSecret(reference).catch(()=>undefined);
+      const leftOver=await deleteReferences(obsolete);
+      if(leftOver)notify(`Saved, but ${credentialsLeft(leftOver).replace(/^\d+ saved/, `${leftOver} old`)}`,'error');
       const access=ssh?undefined:draft.access;
       if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value, access);}
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
@@ -329,16 +343,30 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       action: async () => {
         // The lease warning is part of this confirmation; no second dialog.
         if (!(await disconnectIfLive(id, false))) return;
-        // Forget saved credentials with the profile; a failure leaves only an unreachable item.
-        if (nativeHostState.kind === 'desktop') for (const reference of secretReferences(store.connections.find((c) => c.id === id))) await deleteSecret(reference).catch(() => undefined);
-        store.connections = store.connections.filter((c) => c.id !== id);
-        store.opened = store.opened.filter((c) => c !== id);
-        delete store.workspaces[id];
-        if (store.activeId === id && store.connections[0]) store.connect(store.connections[0].id);
-        if (!store.connections.length) manager.value = true;
-        notify('Connection removed.');
+        // Forget saved credentials with the profile. A failure keeps the profile and asks again;
+        // without the desktop host the references cannot be removed, which is also reported.
+        const references = secretReferences(store.connections.find((c) => c.id === id));
+        const failed = nativeHostState.kind === 'desktop' ? await deleteReferences(references) : references.length;
+        if (failed) {
+          confirm({
+            title: 'Credentials not removed',
+            acceptLabel: 'Remove anyway',
+            message: `${credentialsLeft(failed)} Remove the profile anyway? The item stays in the Keychain until you delete it there.`,
+            action: () => forgetProfile(id),
+          });
+          return;
+        }
+        forgetProfile(id);
       },
     });
+  }
+  function forgetProfile(id: string) {
+    store.connections = store.connections.filter((c) => c.id !== id);
+    store.opened = store.opened.filter((c) => c !== id);
+    delete store.workspaces[id];
+    if (store.activeId === id && store.connections[0]) store.connect(store.connections[0].id);
+    if (!store.connections.length) manager.value = true;
+    notify('Connection removed.');
   }
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,

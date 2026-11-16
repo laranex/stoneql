@@ -389,3 +389,61 @@ test('a lease that ends during a job reports its recorded reason', async () => {
   assert.equal(store.liveSessions[id].lease, undefined);
   assert.equal(store.liveSessions[id].error, 'The transaction ended during this job. Transaction outcome unknown. Its connection was lost. Neither COMMIT nor ROLLBACK was sent or confirmed. Verify on the server; StoneQL never retries.');
 });
+/** A native fixture whose delete_secret fails (locked or denied Keychain), and optionally store_secret too. */
+function failingDeletes(failStoreAfter = Infinity) {
+  const native = nativeFixture();
+  const invoke = native.global.__TAURI__.core.invoke;
+  let stores = 0;
+  native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
+    const request = JSON.parse(args.message);
+    if (command === 'delete_secret') { native.calls.push({ command, payload: request.payload }); throw { code: 'SECRET_UNAVAILABLE', message: 'keychain locked' }; }
+    if (command === 'store_secret' && ++stores > failStoreAfter) { native.calls.push({ command, payload: request.payload }); throw { code: 'SECRET_UNAVAILABLE', message: 'keychain locked' }; }
+    return invoke(command, args);
+  };
+  return native;
+}
+test('F-10: a failed credential deletion on removal keeps the profile and offers Remove anyway', async () => {
+  const native = failingDeletes();
+  const { store, flow, notices } = await setup(native.global);
+  liveDraft(flow);
+  flow.connectionDraft.value.rememberPassword = true;
+  await flow.saveConnection(false);
+  const id = flow.connectionDraft.value.id;
+  const remove = await setupRemoval(flow, id);
+  await remove();
+  assert.equal(store.connections.some((c: any) => c.id === id), true, 'profile kept');
+  assert.equal(lastConfirmation.acceptLabel, 'Remove anyway');
+  assert.match(lastConfirmation.message, /1 saved credential could not be removed from the Keychain \(service app\.dbadmin\.desktop\.credentials\)/);
+  await lastConfirmation.action();
+  assert.equal(store.connections.some((c: any) => c.id === id), false);
+  assert.equal(notices.at(-1), 'success:Connection removed.');
+});
+test('F-10: a save whose old credential cannot be deleted stands but warns with the count', async () => {
+  const native = failingDeletes();
+  const { store, flow, notices } = await setup(native.global);
+  liveDraft(flow);
+  flow.connectionDraft.value.rememberPassword = true;
+  await flow.saveConnection(false);
+  const id = flow.connectionDraft.value.id;
+  flow.newConnection(store.connections.find((c: any) => c.id === id));
+  flow.connectionDraft.value.rememberPassword = false;
+  await flow.saveConnection(false);
+  assert.equal(flow.connectionError.value, '');
+  assert.equal(store.connections.find((c: any) => c.id === id).passwordRef, undefined);
+  assert.ok(notices.includes('error:Saved, but 1 old credential could not be removed from the Keychain (service app.dbadmin.desktop.credentials).'), notices.join('\n'));
+});
+test('F-10: when saving fails, a rollback deletion failure is reported, not hidden', async () => {
+  const native = failingDeletes(1);
+  const { store, flow } = await setup(native.global);
+  sshDraft(flow, 'password');
+  Object.assign(flow.connectionDraft.value, { rememberPassword: true });
+  Object.assign(flow.connectionDraft.value.transport, { password: 'synthetic-ssh', rememberPassword: true, hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  await flow.saveConnection(false);
+  assert.match(flow.connectionError.value, /1 newly saved credential could not be removed from the Keychain/);
+  assert.equal(store.connections.some((c: any) => c.name === flow.connectionDraft.value.name), false);
+});
+test('F-10: no secret deletion failure is swallowed in the workflow source', async () => {
+  const { readFileSync } = await import('node:fs');
+  const source = readFileSync(new URL('../src/composables/useConnectionWorkflow.ts', import.meta.url), 'utf8');
+  assert.equal(/deleteSecret\([^)]*\)\s*\.catch\(/.test(source), false);
+});

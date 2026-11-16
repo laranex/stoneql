@@ -626,3 +626,57 @@ fn ssh_requests_reject_unknown_credential_fields() {
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }
+/// Keychain whose deletions fail (locked or denied), for F-10.
+#[derive(Default)]
+struct UndeletableStore(MemoryStore);
+impl stoneql_desktop::SecretStore for UndeletableStore {
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), stoneql_desktop::SecretError> {
+        self.0.set(account, value)
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, stoneql_desktop::SecretError> {
+        self.0.get(account)
+    }
+    fn delete(&self, _account: &str) -> Result<(), stoneql_desktop::SecretError> {
+        Err(stoneql_desktop::SecretError::Failed)
+    }
+}
+/// M005 F-10: a failed deletion is reported as `SECRET_UNAVAILABLE`, never as success.
+#[test]
+fn failed_secret_deletion_is_reported_and_the_item_remains() {
+    let store = std::sync::Arc::new(UndeletableStore::default());
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            secrets: store.clone(),
+            agent_socket: None,
+            read_write_sql: false,
+            outcome_journal: Some(journal.dir()),
+        },
+    ));
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let target = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader"});
+    let reference = invoke(
+        &webview,
+        "store_secret",
+        json!({"version":1,"requestId":"store","payload":{"sessionId":session,"purpose":"database_password","target":target,"secret":"synthetic-secret"}}),
+        "tauri://localhost",
+    )
+    .unwrap()["payload"]["reference"]
+        .clone();
+    let error = invoke(
+        &webview,
+        "delete_secret",
+        json!({"version":1,"requestId":"delete","payload":{"sessionId":session,"reference":reference}}),
+        "tauri://localhost",
+    )
+    .unwrap_err();
+    assert_eq!(error["code"], "SECRET_UNAVAILABLE");
+    assert_eq!(
+        store.0.0.lock().unwrap().len(),
+        1,
+        "the item is still present"
+    );
+}
