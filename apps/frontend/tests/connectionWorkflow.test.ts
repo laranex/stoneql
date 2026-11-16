@@ -14,9 +14,10 @@ const { useConnectionWorkflow } = await loadModule('../../src/composables/useCon
 const { useWorkspace } = await loadModule('../../src/stores/workspace.ts');
 const { bootstrapNativeHost } = await loadModule('../../src/services/nativeHost.ts');
 const HOST_KEY = { algorithm: 'ssh-ed25519', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl', fingerprint: 'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M' };
-function nativeFixture(failConnect: boolean | string = false, pickerCancelled = false) {
+function nativeFixture(failConnect: boolean | string = false, pickerCancelled = false, hostKeys: { enrolled?: boolean; declineTrust?: boolean } = {}) {
   const calls: Array<{ command: string; payload: any }> = [];
-  let references = 0, cancel: (() => void) | undefined;
+  let references = 0, cancel: (() => void) | undefined, enrolled = !!hostKeys.enrolled;
+  const trusted = () => ({ trusted: enrolled ? { algorithm: HOST_KEY.algorithm, fingerprint: HOST_KEY.fingerprint } : null });
   const global = { __TAURI__: { core: { async invoke(command: string, args: { message: string }) {
     const request = JSON.parse(args.message);
     calls.push({ command, payload: request.payload });
@@ -26,6 +27,14 @@ function nativeFixture(failConnect: boolean | string = false, pickerCancelled = 
     if (command === 'store_secret') return { version: 1, requestId: request.requestId, payload: { reference: `00000000-0000-4000-8000-${String(++references).padStart(12, '0')}` } };
     if (command === 'delete_secret') return { version: 1, requestId: request.requestId, payload: { reference: request.payload.reference } };
     if (command === 'ssh_host_key') return { version: 1, requestId: request.requestId, payload: HOST_KEY };
+    if (command === 'ssh_host_key_status') return { version: 1, requestId: request.requestId, payload: trusted() };
+    if (command === 'trust_ssh_host_key') {
+      if (hostKeys.declineTrust) throw { code: 'CANCELLED', message: 'declined' };
+      if (request.payload.fingerprint !== HOST_KEY.fingerprint) throw { code: 'INVALID_REQUEST', message: 'no matching scan' };
+      enrolled = true;
+      return { version: 1, requestId: request.requestId, payload: trusted() };
+    }
+    if (command === 'forget_ssh_host_key') { enrolled = false; return { version: 1, requestId: request.requestId, payload: trusted() }; }
     if (command === 'pick_ssh_key_file') return { version: 1, requestId: request.requestId, payload: { grant: 'opaque_key_grant', fileName: 'id_ed25519' } };
     const payload = command === 'host_info' ? { runtime: 'desktop', appVersion: '0.1.0', sessionId: 'test_session', nonce: request.payload.nonce, simulated: true }
       : command === 'contract_probe' ? { values: request.payload.values, simulated: true }
@@ -212,49 +221,87 @@ test('live SQLite uses a native file grant, sends no path and never persists the
   assert.ok(persisted.includes('chosen.sqlite') && !persisted.includes('opaque_grant'));
 });
 
-function sshDraft(flow: any, auth: 'agent' | 'password' | 'private-key' = 'password') {
+async function sshDraft(flow: any, auth: 'agent' | 'password' | 'private-key' = 'password') {
   liveDraft(flow);
   flow.changeTransport('ssh');
   Object.assign(flow.connectionDraft.value.transport, { host: 'bastion.internal', user: 'deploy', auth });
+  await flow.refreshHostKeyTrust();
 }
-test('live SSH requires explicit host-key enrollment before any connection attempt', async () => {
+test('F-01: live SSH requires native host-key enrollment before any connection attempt', async () => {
   const native = nativeFixture();
   const { store, flow } = await setup(native.global);
-  sshDraft(flow);
+  await sshDraft(flow);
+  assert.equal(flow.hostKeyTrust.value, null, 'not enrolled natively');
   await flow.testConnection();
   assert.ok(!native.calls.some((c) => c.command === 'connect_direct'), 'no connect without an enrolled key');
   assert.deepEqual(flow.pendingHostKey.value, HOST_KEY);
   assert.match(flow.testMessage.value, /Verify and trust the SSH host key/);
   flow.rejectHostKey();
   assert.equal(flow.pendingHostKey.value, undefined);
-  assert.equal(flow.connectionDraft.value.transport.hostKey, undefined);
   const before = store.connections.length;
   await flow.saveConnection();
   assert.equal(flow.connectionError.value, 'Fetch, verify and trust the SSH host key before saving a live SSH profile.');
   assert.equal(store.connections.length, before);
   await flow.fetchHostKey();
-  flow.trustHostKey();
-  assert.equal(flow.connectionDraft.value.transport.hostKey, HOST_KEY.publicKey);
-  assert.equal(flow.connectionDraft.value.transport.hostKeyFingerprint, HOST_KEY.fingerprint);
+  await flow.trustHostKey();
+  assert.deepEqual(native.calls.find((c) => c.command === 'trust_ssh_host_key')!.payload, { host: 'bastion.internal', port: 22, fingerprint: HOST_KEY.fingerprint, sessionId: 'test_session' });
+  assert.deepEqual(flow.hostKeyTrust.value, { algorithm: HOST_KEY.algorithm, fingerprint: HOST_KEY.fingerprint });
+  assert.equal(flow.pendingHostKey.value, undefined);
+  assert.equal('hostKey' in flow.connectionDraft.value.transport, false, 'the renderer never holds the key');
   await flow.testConnection();
   assert.equal(flow.testOk.value, true);
   assert.match(flow.testMessage.value, /Verified SSH host key and TLS/);
   const connect = native.calls.find((c) => c.command === 'connect_direct')!.payload;
-  assert.deepEqual(connect.ssh, { host: 'bastion.internal', port: 22, username: 'deploy', hostKey: HOST_KEY.publicKey, auth: { method: 'password' } });
+  assert.deepEqual(connect.ssh, { host: 'bastion.internal', port: 22, username: 'deploy', auth: { method: 'password' } });
   assert.match(connect.attemptId, /^attempt_[0-9a-f-]+$/);
   flow.forgetHostKey();
-  assert.equal(flow.connectionDraft.value.transport.hostKey, undefined);
+  assert.equal(lastConfirmation.acceptLabel, 'Forget host key');
+  assert.match(lastConfirmation.message, /bastion\.internal:22\? All profiles using this SSH server will be refused/);
+  await lastConfirmation.action();
+  assert.equal(flow.hostKeyTrust.value, null);
+  assert.ok(native.calls.some((c) => c.command === 'forget_ssh_host_key'));
+});
+test('F-01: declining the native trust dialog changes nothing', async () => {
+  const native = nativeFixture(false, false, { declineTrust: true });
+  const { flow } = await setup(native.global);
+  await sshDraft(flow);
+  await flow.fetchHostKey();
+  await flow.trustHostKey();
+  assert.equal(flow.hostKeyTrust.value, null);
+  assert.deepEqual(flow.pendingHostKey.value, HOST_KEY, 'the scanned key stays for review');
+  assert.equal(flow.connectionError.value, '');
+});
+test('F-04: editing the SSH host or port clears the pending key and the shown trust, then re-queries', async () => {
+  const native = nativeFixture(false, false, { enrolled: true });
+  const { flow } = await setup(native.global);
+  await sshDraft(flow);
+  assert.ok(flow.hostKeyTrust.value);
+  await flow.fetchHostKey();
+  assert.deepEqual(flow.pendingHostKey.value, HOST_KEY);
+  for (const change of [{ host: 'other.internal' }, { port: 2222 }]) {
+    Object.assign(flow.connectionDraft.value.transport, change);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(flow.pendingHostKey.value, undefined, JSON.stringify(change));
+    assert.equal(flow.hostKeyTrust.value, undefined, 'unknown until re-queried');
+    native.calls.length = 0;
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    // The native host is global in tests, so an earlier flow's timer may also report here.
+    const { host, port } = flow.connectionDraft.value.transport;
+    assert.ok(native.calls.some((c) => c.command === 'ssh_host_key_status' && c.payload.host === host && c.payload.port === port), `${host}:${port} re-queried`);
+    assert.ok(flow.hostKeyTrust.value, 'trust state of the new endpoint shown');
+    await flow.fetchHostKey();
+  }
 });
 test('a changed SSH host key is a hard failure without a trust prompt', async () => {
-  const native = nativeFixture('SSH_HOST_KEY_CHANGED');
+  const native = nativeFixture('SSH_HOST_KEY_CHANGED', false, { enrolled: true });
   const { flow } = await setup(native.global);
-  sshDraft(flow, 'agent');
-  Object.assign(flow.connectionDraft.value.transport, { hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  await sshDraft(flow, 'agent');
   await flow.testConnection();
   assert.equal(flow.testOk.value, false);
   assert.match(flow.testMessage.value, /host key changed — connection refused/);
   assert.equal(flow.pendingHostKey.value, undefined);
-  assert.equal(flow.connectionDraft.value.transport.hostKey, HOST_KEY.publicKey, 'the enrolled key is never replaced automatically');
+  assert.ok(flow.hostKeyTrust.value, 'the enrolled key is never replaced automatically');
+  assert.ok(!native.calls.some((c) => c.command === 'trust_ssh_host_key'));
   assert.deepEqual(native.calls.find((c) => c.command === 'connect_direct')!.payload.ssh.auth, { method: 'agent' });
 });
 test('connection setup can be cancelled while the native host is connecting', async () => {
@@ -273,13 +320,13 @@ test('connection setup can be cancelled while the native host is connecting', as
   assert.equal(flow.testing.value, false);
 });
 test('remembered secrets become bound OS references; profiles persist references, never secrets or grants', async () => {
-  const native = nativeFixture();
+  const native = nativeFixture(false, false, { enrolled: true });
   const { store, flow } = await setup(native.global);
   const { connectionSnapshot } = await loadModule('../../src/services/connectionPreferences.ts');
-  sshDraft(flow, 'private-key');
+  await sshDraft(flow, 'private-key');
   Object.assign(flow.connectionDraft.value, { rememberPassword: true });
   await flow.chooseSshKeyFile();
-  Object.assign(flow.connectionDraft.value.transport, { passphrase: 'synthetic-passphrase', rememberPassphrase: true, hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  Object.assign(flow.connectionDraft.value.transport, { passphrase: 'synthetic-passphrase', rememberPassphrase: true });
   assert.equal(flow.connectionDraft.value.transport.keyGrant, 'opaque_key_grant');
   await flow.saveConnection();
   assert.equal(flow.connectionError.value, '');
@@ -293,9 +340,11 @@ test('remembered secrets become bound OS references; profiles persist references
   const saved = store.connections.find((c: any) => c.id === id);
   const serialized = JSON.stringify(connectionSnapshot(store.connections, store.groups));
   for (const secret of ['synthetic-password', 'synthetic-passphrase', 'opaque_key_grant', 'remember']) assert.ok(!serialized.includes(secret), secret);
-  for (const kept of [saved.passwordRef, saved.transport.passphraseRef, HOST_KEY.publicKey, HOST_KEY.fingerprint, 'id_ed25519']) assert.ok(serialized.includes(kept), kept);
+  for (const kept of [saved.passwordRef, saved.transport.passphraseRef, 'id_ed25519']) assert.ok(serialized.includes(kept), kept);
+  for (const native of [HOST_KEY.publicKey, HOST_KEY.fingerprint]) assert.ok(!serialized.includes(native), 'host-key trust is native only');
   // A later connect uses references only.
   flow.newConnection(saved);
+  await flow.refreshHostKeyTrust();
   assert.equal(flow.connectionDraft.value.rememberPassword, true);
   assert.equal(flow.connectionDraft.value.transport.rememberPassphrase, true);
   await flow.testConnection();
@@ -390,8 +439,8 @@ test('a lease that ends during a job reports its recorded reason', async () => {
   assert.equal(store.liveSessions[id].error, 'The transaction ended during this job. Transaction outcome unknown. Its connection was lost. Neither COMMIT nor ROLLBACK was sent or confirmed. Verify on the server; StoneQL never retries.');
 });
 /** A native fixture whose delete_secret fails (locked or denied Keychain), and optionally store_secret too. */
-function failingDeletes(failStoreAfter = Infinity) {
-  const native = nativeFixture();
+function failingDeletes(failStoreAfter = Infinity, enrolled = false) {
+  const native = nativeFixture(false, false, { enrolled });
   const invoke = native.global.__TAURI__.core.invoke;
   let stores = 0;
   native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
@@ -433,11 +482,11 @@ test('F-10: a save whose old credential cannot be deleted stands but warns with 
   assert.ok(notices.includes('error:Saved, but 1 old credential could not be removed from the Keychain (service app.dbadmin.desktop.credentials).'), notices.join('\n'));
 });
 test('F-10: when saving fails, a rollback deletion failure is reported, not hidden', async () => {
-  const native = failingDeletes(1);
+  const native = failingDeletes(1, true);
   const { store, flow } = await setup(native.global);
-  sshDraft(flow, 'password');
+  await sshDraft(flow, 'password');
   Object.assign(flow.connectionDraft.value, { rememberPassword: true });
-  Object.assign(flow.connectionDraft.value.transport, { password: 'synthetic-ssh', rememberPassword: true, hostKey: HOST_KEY.publicKey, hostKeyFingerprint: HOST_KEY.fingerprint });
+  Object.assign(flow.connectionDraft.value.transport, { password: 'synthetic-ssh', rememberPassword: true });
   await flow.saveConnection(false);
   assert.match(flow.connectionError.value, /1 newly saved credential could not be removed from the Keychain/);
   assert.equal(store.connections.some((c: any) => c.name === flow.connectionDraft.value.name), false);

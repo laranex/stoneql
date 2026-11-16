@@ -50,7 +50,7 @@ test('live PostgreSQL uses the network engine id and SQLite requires a native gr
  assert.ok(!f.calls.some(c=>c.command==='connect_sqlite'),'SQLite never gains a network tunnel');
  await bootstrapNativeHost({});
 });
-test('SSH requests name an enrolled key, opaque references and native grants, never key material',async()=>{
+test('F-01: SSH requests carry opaque references and native grants, never key material or a host key',async()=>{
  const f=fixture();await bootstrapNativeHost(f.global);
  const ssh={type:'ssh' as const,host:'bastion',port:2222,user:'deploy',hostKey:'ssh-ed25519 AAAA',hostKeyFingerprint:'SHA256:x'};
  await openLive({...profile,password:'',passwordRef:'db-ref',transport:{...ssh,auth:'password',passwordRef:'ssh-ref'}},'attempt_1');
@@ -58,19 +58,20 @@ test('SSH requests name an enrolled key, opaque references and native grants, ne
  await openLive({...profile,transport:{...ssh,auth:'agent',hostKey:undefined}});
  const sent=f.calls.filter(c=>c.command==='connect_direct').map(c=>c.payload);
  assert.equal(sent[0].passwordRef,'db-ref');assert.equal(sent[0].password,'');assert.equal(sent[0].attemptId,'attempt_1');
- assert.deepEqual(sent[0].ssh,{host:'bastion',port:2222,username:'deploy',hostKey:'ssh-ed25519 AAAA',auth:{method:'password',passwordRef:'ssh-ref'}});
+ assert.deepEqual(sent[0].ssh,{host:'bastion',port:2222,username:'deploy',auth:{method:'password',passwordRef:'ssh-ref'}},'legacy hostKey fields are never sent');
  assert.equal(sent[1].passwordRef,undefined,'a typed password wins over a reference');
  assert.deepEqual(sent[1].ssh.auth,{method:'key_file',grant:'grant',passphrase:'typed'});
  assert.ok(!JSON.stringify(sent).includes('PRIVATE KEY'));
- assert.deepEqual(sent[2].ssh,{host:'bastion',port:2222,username:'deploy',auth:{method:'agent'}},'an unenrolled key is omitted, so the host refuses');
+ assert.deepEqual(sent[2].ssh,{host:'bastion',port:2222,username:'deploy',auth:{method:'agent'}});
+ assert.ok(!JSON.stringify(sent).includes('hostKey'));
  await assert.rejects(openLive({...profile,transport:{...ssh,auth:'private-key'}}),/Choose the SSH key file again/);
  await bootstrapNativeHost({});
 });
-test('profile storage keeps host keys and secret references but drops secrets, grants and malformed values',()=>{
+test('profile storage keeps secret references but drops secrets, grants, legacy host keys and malformed values',()=>{
  const live={...profile,passwordRef:'00000000-0000-4000-8000-000000000001',rememberPassword:true,transport:{type:'ssh' as const,host:'b',port:22,user:'d',auth:'private-key' as const,hostKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl',hostKeyFingerprint:'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M',passphraseRef:'00000000-0000-4000-8000-000000000002',keyGrant:'grant-secret',keyFileName:'../id_ed25519',passphrase:'synthetic-passphrase',privateKey:'synthetic-key',rememberPassphrase:true}};
  const saved=JSON.parse(JSON.stringify(connectionSnapshot([live],[]))).connections[0];
  assert.equal(saved.passwordRef,live.passwordRef);
- assert.deepEqual(saved.transport,{type:'ssh',host:'b',port:22,user:'d',auth:'private-key',hostKey:live.transport.hostKey,hostKeyFingerprint:live.transport.hostKeyFingerprint,passphraseRef:live.transport.passphraseRef,keyFileName:'..id_ed25519'});
+ assert.deepEqual(saved.transport,{type:'ssh',host:'b',port:22,user:'d',auth:'private-key',passphraseRef:live.transport.passphraseRef,keyFileName:'..id_ed25519'},'F-01: trust lives natively; legacy keys are dropped');
  for(const secret of ['synthetic-password','synthetic-passphrase','synthetic-key','grant-secret','remember'])assert.ok(!JSON.stringify(saved).includes(secret),secret);
  const tampered=JSON.parse(JSON.stringify(connectionSnapshot([{...live,passwordRef:'../../etc',transport:{...live.transport,hostKey:'ssh-rsa AAAA; rm -rf',passphraseRef:'x'}}],[]))).connections[0];
  assert.equal(tampered.passwordRef,undefined);assert.equal(tampered.transport.hostKey,undefined);assert.equal(tampered.transport.hostKeyFingerprint,undefined);assert.equal(tampered.transport.passphraseRef,undefined);

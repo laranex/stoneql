@@ -14,8 +14,6 @@ export type Transport =
       privateKey?: string;
       passphrase?: string;
       /** Enrolled OpenSSH public host key and its SHA256 fingerprint (non-secret, persisted). */
-      hostKey?: string;
-      hostKeyFingerprint?: string;
       /** Opaque OS secret references (desktop live only, persisted). */
       passwordRef?: string;
       passphraseRef?: string;

@@ -1,11 +1,11 @@
-import { ref, type Ref } from 'vue';
+import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
-import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
+import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
 import type { Connection, Transport } from '../types';
-import type { SecretPurpose, SshHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
+import type { SecretPurpose, SshHostKey, SshTrustedHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
 type SshTransport = Extract<Transport, { type: 'ssh' }>;
 /** Opaque OS secret references held by a profile. */
 function secretReferences(connection?: Connection): string[] {
@@ -65,6 +65,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     testOk = ref(false),
     connectionEditing = ref(false),
     pendingHostKey = ref<SshHostKey>(),
+    /** Native trust of the draft's SSH endpoint: null = not enrolled, undefined = unknown/loading. */
+    hostKeyTrust = ref<SshTrustedHostKey | null>(),
     attemptId = ref('');
   const sshOf = (draft = connectionDraft.value): SshTransport | undefined => draft?.transport.type === 'ssh' ? draft.transport : undefined;
   const liveSsh = (draft = connectionDraft.value) => draft?.mode === 'live' && draft.engine !== 'SQLite' ? sshOf(draft) : undefined;
@@ -130,11 +132,34 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if (ssh) { ssh.rememberPassword = !!ssh.passwordRef; ssh.rememberPassphrase = !!ssh.passphraseRef; }
     }
     pendingHostKey.value = undefined;
+    hostKeyTrust.value = undefined;
     testMessage.value = '';
     connectionError.value = '';
     connectionDraftInitial.value = JSON.stringify(connectionDraft.value);
     connectionDialog.value = true;
+    void refreshHostKeyTrust();
   }
+  /** Reads the native trust state for the draft's SSH endpoint (no network). */
+  async function refreshHostKeyTrust() {
+    const draft = connectionDraft.value, ssh = liveSsh(draft);
+    if (!ssh || !ssh.host.trim() || nativeHostState.kind !== 'desktop') { hostKeyTrust.value = null; return; }
+    const endpoint = `${ssh.host.trim()}:${ssh.port}`;
+    try {
+      const status = await hostKeyStatus(ssh.host.trim(), ssh.port);
+      const now = liveSsh(connectionDraft.value);
+      if (connectionDraft.value === draft && now && `${now.host.trim()}:${now.port}` === endpoint) hostKeyTrust.value = status.trusted;
+    } catch (error) { if (connectionDraft.value === draft) { hostKeyTrust.value = null; connectionError.value = (error as Error).message; } }
+  }
+  // F-04: editing the SSH host or port invalidates the shown trust and any pending scan at once;
+  // the native state of the new endpoint is read after a short pause.
+  let trustTimer: ReturnType<typeof setTimeout> | undefined;
+  watch(() => { const ssh = liveSsh(); return ssh ? `${ssh.host}:${ssh.port}` : ''; }, (now, before) => {
+    if (now === before) return;
+    pendingHostKey.value = undefined;
+    hostKeyTrust.value = undefined;
+    clearTimeout(trustTimer);
+    trustTimer = setTimeout(() => void refreshHostKeyTrust(), 300);
+  });
   async function closeConnectionDialog() {
     if(testing.value)return;
     if (
@@ -159,23 +184,37 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     } catch (error) { connectionError.value = (error as Error).message; }
     finally { testing.value = false; }
   }
-  /** Explicit enrollment after the user confirmed the displayed fingerprint. */
-  function trustHostKey() {
-    const ssh = sshOf(), key = pendingHostKey.value;
-    if (!ssh || !key) return;
-    ssh.hostKey = key.publicKey;
-    ssh.hostKeyFingerprint = key.fingerprint;
-    pendingHostKey.value = undefined;
-    testMessage.value = '';
+  /** Explicit enrollment: the host confirms natively and stores the key it scanned itself. */
+  async function trustHostKey() {
+    const draft = connectionDraft.value, ssh = sshOf(draft), key = pendingHostKey.value;
+    if (!ssh || !key || testing.value) return;
+    connectionError.value = '';
+    testing.value = true;
+    try {
+      const status = await trustScannedHostKey(ssh.host.trim(), ssh.port, key.fingerprint);
+      if (connectionDraft.value === draft) { hostKeyTrust.value = status.trusted; pendingHostKey.value = undefined; testMessage.value = ''; }
+    } catch (error) {
+      // Declined in the native dialog: nothing changed; the pending key stays for review.
+      if ((error as { code?: string }).code !== 'CANCELLED') connectionError.value = (error as Error).message;
+    } finally { testing.value = false; }
   }
   function rejectHostKey() { pendingHostKey.value = undefined; }
   /** Rotation is deliberate: a changed key is refused until the old one is forgotten here. */
   function forgetHostKey() {
-    const ssh = sshOf();
+    const draft = connectionDraft.value, ssh = sshOf(draft);
     if (!ssh || testing.value) return;
-    ssh.hostKey = undefined;
-    ssh.hostKeyFingerprint = undefined;
-    pendingHostKey.value = undefined;
+    const host = ssh.host.trim(), port = ssh.port;
+    confirm({
+      title: 'Forget SSH host key?',
+      acceptLabel: 'Forget host key',
+      message: `Forget the trusted host key for ${host}:${port}? All profiles using this SSH server will be refused until it is verified again. Saved SSH passwords for it must be re-entered.`,
+      action: async () => {
+        try {
+          const status = await forgetTrustedHostKey(host, port);
+          if (connectionDraft.value === draft) { hostKeyTrust.value = status.trusted; pendingHostKey.value = undefined; }
+        } catch (error) { connectionError.value = (error as Error).message; }
+      },
+    });
   }
   async function chooseSshKeyFile() {
     const draft = connectionDraft.value, ssh = sshOf(draft);
@@ -253,7 +292,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   async function testConnection() {
     if (!connectionDraft.value) return;
     const ssh = liveSsh();
-    if (ssh && !ssh.hostKey) {
+    if (ssh && !hostKeyTrust.value) {
       await fetchHostKey();
       testMessage.value = 'Verify and trust the SSH host key, then test again.'; testOk.value = false;
       return;
@@ -276,7 +315,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   async function saveLiveConnection(draft: Connection, connectNow: boolean) {
     if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database||(draft.engine==='SQLite'&&!draft.sqliteGrant)){connectionError.value=draft.engine==='SQLite'?'Live SQLite requires the desktop app, Direct transport and a file chosen with Choose file.':'Live connections require the desktop app, MySQL, MariaDB or PostgreSQL over Direct or SSH and a database name.';return;}
     const ssh=liveSsh(draft);
-    if(ssh&&!ssh.hostKey){connectionError.value='Fetch, verify and trust the SSH host key before saving a live SSH profile.';return;}
+    if(ssh&&!hostKeyTrust.value){connectionError.value='Fetch, verify and trust the SSH host key before saving a live SSH profile.';return;}
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
@@ -370,7 +409,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-    testing, testMessage, testOk, pendingHostKey, attemptId,
+    testing, testMessage, testOk, pendingHostKey, hostKeyTrust, refreshHostKeyTrust, attemptId,
     newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
     fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
     testConnection, saveConnection, removeConnection, closeConnection,

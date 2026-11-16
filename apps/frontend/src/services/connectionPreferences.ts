@@ -24,8 +24,6 @@ export interface ConnectionPreferences {
 const text = (value: unknown, fallback = '') => (typeof value === 'string' ? value : fallback);
 const reference = (value: unknown) =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) ? value : undefined;
-const hostKey = (value: unknown) =>
-  typeof value === 'string' && value.length <= 2048 && /^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]+={0,2}$/.test(value) ? value : undefined;
 /** Drops undefined members so serialized profiles never contain placeholder keys. */
 const defined = <T extends object>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, member]) => member !== undefined)) as T;
@@ -70,8 +68,7 @@ export function sanitizeConnection(value: Connection, groups: ConnectionGroup[])
               ? source.transport.auth
               : 'agent',
             ...defined({
-              hostKey: hostKey(source.transport.hostKey),
-              hostKeyFingerprint: hostKey(source.transport.hostKey) && /^SHA256:[A-Za-z0-9+/]{43}$/.test(text(source.transport.hostKeyFingerprint)) ? source.transport.hostKeyFingerprint : undefined,
+              // Host keys are trusted natively (F-01); legacy hostKey/hostKeyFingerprint are dropped.
               passwordRef: source.mode === 'live' ? reference(source.transport.passwordRef) : undefined,
               passphraseRef: source.mode === 'live' ? reference(source.transport.passphraseRef) : undefined,
               keyFileName: text(source.transport.keyFileName).replace(/[\\/]/g, '').slice(0, 255) || undefined,

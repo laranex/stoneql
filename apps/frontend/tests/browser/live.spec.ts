@@ -142,7 +142,8 @@ for(const theme of ['light','dark'])test(`${theme}: live SQLite opens a natively
 for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit host-key trust, keeps secrets out of profiles and refuses a changed key`,async({page})=>{
  await page.addInitScript(theme=>{
   localStorage.setItem('stoneql-theme',theme);
-  (window as any).liveCalls=[];let references=0;(window as any).rotateHostKey=false;
+  (window as any).liveCalls=[];let references=0;(window as any).rotateHostKey=false;let enrolled=false;
+  const fingerprint='SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M';
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
    const request=JSON.parse(args.message);const p=request.payload;(window as any).liveCalls.push({command,payload:p});
    let payload:any;
@@ -150,10 +151,14 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
    else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='ssh_host_key')payload={algorithm:'ssh-ed25519',publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl',fingerprint:'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M'};
+   else if(command==='ssh_host_key_status')payload={trusted:enrolled?{algorithm:'ssh-ed25519',fingerprint}:null};
+   else if(command==='trust_ssh_host_key'){if(p.fingerprint!==fingerprint)throw{code:'INVALID_REQUEST'};enrolled=true;payload={trusted:{algorithm:'ssh-ed25519',fingerprint}};}
+   else if(command==='forget_ssh_host_key'){enrolled=false;payload={trusted:null};}
    else if(command==='store_secret')payload={reference:`00000000-0000-4000-8000-${String(++references).padStart(12,'0')}`};
    else if(command==='delete_secret')payload={reference:p.reference};
    else if(command==='connect_direct'){
-    if(!p.ssh?.hostKey)throw{code:'SSH_HOST_KEY_UNKNOWN'};
+    if(p.ssh&&'hostKey' in p.ssh)throw{code:'INVALID_REQUEST'};
+    if(p.ssh&&!enrolled)throw{code:'SSH_HOST_KEY_UNKNOWN'};
     if((window as any).rotateHostKey)throw{code:'SSH_HOST_KEY_CHANGED'};
     payload={handle:'00000000-0000-0000-0000-000000000005',engineVersion:'MySQL fixture 8.4.6',database:p.database,expiresAfterSeconds:3600};
    }else if(command==='disconnect_database')payload={connected:false};
@@ -190,12 +195,15 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
  await expect(page.locator('.footer-session')).toContainText('Live read-only · connected');
  const calls=await page.evaluate(()=>(window as any).liveCalls);
  const connect=calls.filter((c:any)=>c.command==='connect_direct').at(-1).payload;
- expect(connect.ssh).toEqual({host:'bastion.internal',port:22,username:'deploy',hostKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl',auth:{method:'password',password:'synthetic-ssh-password'}});
+ expect(connect.ssh).toEqual({host:'bastion.internal',port:22,username:'deploy',auth:{method:'password',password:'synthetic-ssh-password'}});
+ expect(calls.find((c:any)=>c.command==='trust_ssh_host_key').payload).toEqual({host:'bastion.internal',port:22,fingerprint:'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M',sessionId:'fixture_session'});
  expect(calls.filter((c:any)=>c.command==='store_secret').map((c:any)=>c.payload.purpose)).toEqual(['ssh_password']);
  const serialized=await page.evaluate(()=>localStorage.getItem('stoneql-connections')!);
  for(const secret of ['synthetic-db-password','synthetic-ssh-password','remember'])expect(serialized).not.toContain(secret);
  expect(serialized).toContain('"passwordRef":"00000000-0000-4000-8000-000000000001"');
- expect(serialized).toContain('SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M');
+ // F-01: host-key trust lives in the native store only.
+ expect(serialized).not.toContain('SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M');
+ expect(serialized).not.toContain('hostKey');
  // The server key rotates: a hard failure; the dialog never offers to trust the new key.
  await page.evaluate(()=>{(window as any).rotateHostKey=true;});
  await page.getByRole('button',{name:'Disconnect',exact:true}).click();

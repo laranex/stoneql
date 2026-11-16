@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -13,6 +13,11 @@ export const pickSqliteFile = () => nativeDatabase<SqliteFileGrant>('pick_sqlite
 export const pickSshKeyFile = () => nativeDatabase<SshKeyFileGrant>('pick_ssh_key_file', {});
 /** Presented host key for explicit user verification. Scanning never trusts it. */
 export const scanHostKey = (host: string, port: number) => nativeDatabase<SshHostKey>('ssh_host_key', { host, port });
+/** Native trust state of an SSH endpoint (no network). */
+export const hostKeyStatus = (host: string, port: number) => nativeDatabase<SshHostKeyStatus>('ssh_host_key_status', { host, port });
+/** Enrolls the key a native scan presented; the host asks for confirmation in its own dialog. */
+export const trustScannedHostKey = (host: string, port: number, fingerprint: string) => nativeDatabase<SshHostKeyStatus>('trust_ssh_host_key', { host, port, fingerprint });
+export const forgetTrustedHostKey = (host: string, port: number) => nativeDatabase<SshHostKeyStatus>('forget_ssh_host_key', { host, port });
 export const cancelConnect = (attemptId: string) => nativeDatabase<CancelConnectResult>('cancel_connect', { attemptId });
 export async function storeSecret(purpose: SecretPurpose, connection: Connection, secret: string): Promise<string> {
   return (await nativeDatabase<SecretReference>('store_secret', { purpose, target: secretTarget(connection), secret })).reference;
@@ -37,7 +42,7 @@ function sshTunnel(connection: Connection): SshTunnelRequest | undefined {
     if (!transport.keyGrant) throw new Error('Choose the SSH key file again; key access is granted for this app session only.');
     auth = { method: 'key_file', grant: transport.keyGrant, ...(transport.passphrase ? { passphrase: transport.passphrase } : transport.passphraseRef ? { passphraseRef: transport.passphraseRef } : {}) };
   }
-  return { host: transport.host, port: transport.port, username: transport.user, ...(transport.hostKey ? { hostKey: transport.hostKey } : {}), auth };
+  return { host: transport.host, port: transport.port, username: transport.user, auth };
 }
 /** Read-only unless `access` is the explicit, per-session `read_write` opt-in. */
 export async function openLive(connection: Connection, attemptId?: string, access: AccessModeDto = 'read_only'): Promise<LiveConnection> {

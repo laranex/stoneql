@@ -797,7 +797,7 @@ const columnDraftInitial = ref('');
 const manager = ref(false);
 const {
   connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-  testing, testMessage, testOk, pendingHostKey, attemptId,
+  testing, testMessage, testOk, pendingHostKey, hostKeyTrust, attemptId,
   newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
   fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
   testConnection, saveConnection, removeConnection, closeConnection,
@@ -2792,7 +2792,7 @@ onBeforeUnmount(() => {
                 <p v-if="connectionDraft.transport.auth === 'agent'" class="muted">
                   Uses the SSH agent available to StoneQL (SSH_AUTH_SOCK). Agent forwarding is never requested.
                 </p>
-                <div class="form-label">Host key<div class="sqlite-file"><button v-if="!connectionDraft.transport.hostKey" type="button" class="button" :disabled="testing" @click="fetchHostKey">Fetch host key</button><button v-else type="button" class="button" :disabled="testing" @click="forgetHostKey">Forget host key</button><span :class="{ muted: !connectionDraft.transport.hostKey }">{{ connectionDraft.transport.hostKey ? `Trusted · ${connectionDraft.transport.hostKeyFingerprint || connectionDraft.transport.hostKey.split(' ')[0]}` : 'Not enrolled · connections are refused until you verify and trust the key' }}</span></div></div>
+                <div class="form-label">Host key<div class="sqlite-file"><button v-if="!hostKeyTrust" type="button" class="button" :disabled="testing || hostKeyTrust === undefined" @click="fetchHostKey">Fetch host key</button><button v-else type="button" class="button" :disabled="testing" @click="forgetHostKey">Forget host key</button><span :class="{ muted: !hostKeyTrust }" data-testid="host-key-trust">{{ hostKeyTrust ? `Trusted · ${hostKeyTrust.fingerprint}` : hostKeyTrust === undefined ? 'Checking trust…' : 'Not enrolled · connections are refused until you verify and trust the key' }}</span></div></div>
                 <div v-if="pendingHostKey" class="notice host-key-check" role="group" aria-label="Verify SSH host key">
                   <div>
                     <strong>Verify this host key before trusting it</strong>
