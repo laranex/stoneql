@@ -20,6 +20,7 @@ stoneql-contracts = { path = "../../../crates/stoneql-contracts" }
 serde_json.workspace = true
 serde.workspace = true
 uuid.workspace = true
+tokio.workspace = true
 
 # D005 desktop secret provider: macOS Keychain only; other OSes are explicitly unsupported.
 [target.'cfg(target_os = "macos")'.dependencies]

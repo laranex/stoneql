@@ -241,6 +241,20 @@ impl Drop for AttemptGuard {
         self.0.pending.lock().expect("pending lock").remove(&self.1);
     }
 }
+/// A registered, cancellable connection setup (F-02). A host registers it before work that may
+/// block (for example resolving saved secrets), so [`Connections::cancel_connect`] and a reset
+/// reach that work too. Dropping it unregisters the setup.
+pub struct Attempt {
+    _guard: AttemptGuard,
+    cancelled: oneshot::Receiver<()>,
+}
+impl Attempt {
+    /// Resolves when the setup is cancelled or the registry is reset. Cancel-safe: may be raced
+    /// repeatedly against other work.
+    pub async fn cancelled(&mut self) {
+        let _ = (&mut self.cancelled).await;
+    }
+}
 /// Clone shares one bounded registry; every handle is scoped to its trusted owner.
 #[derive(Clone)]
 pub struct Connections(Arc<Inner>);
@@ -303,6 +317,21 @@ impl Connections {
         attempt: Option<&str>,
         access: Access,
     ) -> Result<ConnectionId, LifecycleError> {
+        let attempt = self.begin_attempt(owner, attempt)?;
+        self.connect_attempt(owner, config, tunnel, attempt, access)
+            .await
+    }
+    /// As [`Connections::connect_with_access`], inside an attempt the caller registered first
+    /// with [`Connections::begin_attempt`]. The capacity permit is taken here, after any work
+    /// the caller did inside the attempt, so a slow secret prompt never holds a slot.
+    pub async fn connect_attempt(
+        &self,
+        owner: OwnerId,
+        config: DirectServer,
+        tunnel: Option<SshConfig>,
+        mut attempt: Attempt,
+        access: Access,
+    ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
         let engine = config.engine;
         // Gate (D025-9): read-write over SSH stays unavailable until the user enables it
@@ -323,7 +352,6 @@ impl Connections {
         };
         let generation = self.0.generation.load(Ordering::SeqCst);
         let permit = self.permit()?;
-        let (_guard, cancelled) = self.begin_attempt(owner, attempt)?;
         let deadline = self.0.deadline;
         let setup = async {
             let tunnel = match tunnel {
@@ -358,7 +386,7 @@ impl Connections {
             result = tokio::time::timeout(deadline * 2, setup) => {
                 result.map_err(|_| LifecycleError::Timeout)??
             }
-            _ = cancelled => return Err(LifecycleError::Cancelled),
+            _ = attempt.cancelled() => return Err(LifecycleError::Cancelled),
         };
         self.register_or_close(
             owner,
@@ -374,11 +402,12 @@ impl Connections {
         )
         .await
     }
-    fn begin_attempt(
+    /// Registers an owned setup; a duplicate attempt name for the same owner is refused.
+    pub fn begin_attempt(
         &self,
         owner: OwnerId,
         attempt: Option<&str>,
-    ) -> Result<(AttemptGuard, oneshot::Receiver<()>), LifecycleError> {
+    ) -> Result<Attempt, LifecycleError> {
         let (cancel, cancelled) = oneshot::channel();
         let mut pending = self.0.pending.lock().expect("pending lock");
         if attempt.is_some_and(|attempt| {
@@ -397,7 +426,10 @@ impl Connections {
                 cancel,
             },
         );
-        Ok((AttemptGuard(self.0.clone(), id), cancelled))
+        Ok(Attempt {
+            _guard: AttemptGuard(self.0.clone(), id),
+            cancelled,
+        })
     }
     /// Cancels an owned in-flight setup. Returns false if it already finished or is unknown.
     pub fn cancel_connect(&self, owner: OwnerId, attempt: &str) -> bool {
@@ -789,6 +821,29 @@ mod tests {
                 .min_connections(0)
                 .connect_lazy_with(mysql::options(&config(), None).unwrap()),
         )
+    }
+    /// F-02: a host-registered attempt is reached by reset and unregistered when dropped.
+    #[tokio::test]
+    async fn host_attempts_are_cancelled_by_reset_and_released_on_drop() {
+        let connections =
+            Connections::new(8, Duration::from_secs(3), Duration::from_secs(60)).unwrap();
+        let owner = OwnerId::new();
+        let mut held = connections.begin_attempt(owner, Some("attempt_1")).unwrap();
+        assert!(
+            connections.begin_attempt(owner, Some("attempt_1")).is_err(),
+            "duplicate name"
+        );
+        assert_eq!(connections.pending_setups(), 1);
+        connections.reset().await;
+        tokio::time::timeout(Duration::from_secs(1), held.cancelled())
+            .await
+            .expect("reset cancels a held attempt");
+        let dropped = connections.begin_attempt(owner, Some("attempt_2")).unwrap();
+        assert_eq!(connections.pending_setups(), 1);
+        drop(dropped);
+        assert_eq!(connections.pending_setups(), 0);
+        assert!(connections.begin_attempt(owner, Some("attempt_2")).is_ok());
+        drop(held);
     }
     #[tokio::test]
     async fn handles_are_owner_scoped_and_disconnect_releases_capacity() {

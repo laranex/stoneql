@@ -56,6 +56,7 @@ fn ssh_commands_use_owned_fixture() {
             agent_socket: Some(var("STONEQL_SSH_AGENT").into()),
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
+            secret_deadline: std::time::Duration::from_secs(60),
         },
     )
     .build(tauri::generate_context!())

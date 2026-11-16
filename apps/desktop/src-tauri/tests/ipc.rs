@@ -333,6 +333,7 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
             agent_socket: None,
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
+            secret_deadline: std::time::Duration::from_secs(60),
         },
     ));
     let webview = window(&app, "main");
@@ -653,6 +654,7 @@ fn failed_secret_deletion_is_reported_and_the_item_remains() {
             agent_socket: None,
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
+            secret_deadline: std::time::Duration::from_secs(60),
         },
     ));
     let webview = window(&app, "main");
@@ -679,4 +681,161 @@ fn failed_secret_deletion_is_reported_and_the_item_remains() {
         1,
         "the item is still present"
     );
+}
+/// Keychain stand-in for F-02: `get` signals entry, then blocks until released (a prompt the
+/// user has not answered) or fails at once (`locked`).
+#[derive(Default)]
+struct PromptStore {
+    inner: MemoryStore,
+    locked: bool,
+    /// (prompts entered, released) behind one mutex for the condition variable.
+    state: std::sync::Mutex<(usize, bool)>,
+    changed: std::sync::Condvar,
+}
+impl PromptStore {
+    fn wait_entered(&self, count: usize) {
+        let guard = self.state.lock().unwrap();
+        let (_guard, timeout) = self
+            .changed
+            .wait_timeout_while(guard, std::time::Duration::from_secs(5), |s| s.0 < count)
+            .unwrap();
+        assert!(!timeout.timed_out(), "resolution never started");
+    }
+    fn set_released(&self, released: bool) {
+        self.state.lock().unwrap().1 = released;
+        self.changed.notify_all();
+    }
+}
+impl stoneql_desktop::SecretStore for PromptStore {
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), stoneql_desktop::SecretError> {
+        self.inner.set(account, value)
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, stoneql_desktop::SecretError> {
+        if self.locked {
+            return Err(stoneql_desktop::SecretError::Failed);
+        }
+        let mut guard = self.state.lock().unwrap();
+        guard.0 += 1;
+        self.changed.notify_all();
+        let _unused = self
+            .changed
+            .wait_timeout_while(guard, std::time::Duration::from_secs(10), |s| !s.1)
+            .unwrap();
+        self.inner.get(account)
+    }
+    fn delete(&self, account: &str) -> Result<(), stoneql_desktop::SecretError> {
+        self.inner.delete(account)
+    }
+}
+fn prompt_app(
+    store: std::sync::Arc<PromptStore>,
+    deadline: std::time::Duration,
+) -> (tauri::App<MockRuntime>, common::TempJournal) {
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            secrets: store,
+            agent_socket: None,
+            read_write_sql: false,
+            outcome_journal: Some(journal.dir()),
+            secret_deadline: deadline,
+        },
+    ));
+    (app, journal)
+}
+/// Stores a database password reference for the unroutable test target.
+fn saved_reference(webview: &WebviewWindow<MockRuntime>, session: &Value) -> Value {
+    let target = json!({"engine":"mysql","host":"192.0.2.1","port":9,"username":"reader"});
+    invoke(
+        webview,
+        "store_secret",
+        json!({"version":1,"requestId":"store","payload":{"sessionId":session,"purpose":"database_password","target":target,"secret":"synthetic-secret"}}),
+        "tauri://localhost",
+    )
+    .unwrap()["payload"]["reference"]
+        .clone()
+}
+fn connect_with_reference(
+    webview: &WebviewWindow<MockRuntime>,
+    session: &Value,
+    reference: &Value,
+    attempt: &str,
+) -> Result<Value, Value> {
+    invoke(
+        webview,
+        "connect_direct",
+        json!({"version":1,"requestId":"connect","payload":{"sessionId":session,"engine":"mysql","host":"192.0.2.1","port":9,"username":"reader","password":"","passwordRef":reference,"database":"d","rootCertificatePem":null,"attemptId":attempt}}),
+        "tauri://localhost",
+    )
+}
+/// M005 F-02 (T1): cancel reaches a pending Keychain prompt; the late result is dropped and the
+/// attempt is unregistered. 20 cycles leave no pending setup behind (the same attempt name is
+/// accepted again each time). The unroutable target is never dialled.
+#[test]
+fn cancel_reaches_secret_resolution_and_leaves_nothing_behind() {
+    let store = std::sync::Arc::new(PromptStore::default());
+    let (app, _journal) = prompt_app(store.clone(), std::time::Duration::from_secs(30));
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let session = json!(session);
+    let reference = saved_reference(&webview, &session);
+    for cycle in 1..=20 {
+        store.set_released(false);
+        std::thread::scope(|scope| {
+            let connecting =
+                scope.spawn(|| connect_with_reference(&webview, &session, &reference, "attempt_1"));
+            store.wait_entered(cycle);
+            let cancelled = invoke(
+                &webview,
+                "cancel_connect",
+                json!({"version":1,"requestId":"cancel","payload":{"sessionId":session,"attemptId":"attempt_1"}}),
+                "tauri://localhost",
+            )
+            .unwrap();
+            assert_eq!(cancelled["payload"]["cancelled"], true, "cycle {cycle}");
+            let started = std::time::Instant::now();
+            let error = connecting.join().unwrap().unwrap_err();
+            assert_eq!(error["code"], "CANCELLED", "cycle {cycle}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(1));
+            assert!(!error.to_string().contains("synthetic-secret"));
+            store.set_released(true);
+        });
+    }
+    // Nothing is pending: a cancel for the finished attempt finds nothing.
+    let none = invoke(
+        &webview,
+        "cancel_connect",
+        json!({"version":1,"requestId":"cancel","payload":{"sessionId":session,"attemptId":"attempt_1"}}),
+        "tauri://localhost",
+    )
+    .unwrap();
+    assert_eq!(none["payload"]["cancelled"], false);
+}
+/// M005 F-02 (T1): an unanswered prompt ends at the secret deadline; a locked Keychain fails.
+#[test]
+fn secret_resolution_is_bounded_and_locked_keychains_fail_closed() {
+    let store = std::sync::Arc::new(PromptStore::default());
+    let (app, _journal) = prompt_app(store.clone(), std::time::Duration::from_millis(300));
+    let webview = window(&app, "main");
+    let session = json!(bootstrap(&webview).payload.session_id);
+    let reference = saved_reference(&webview, &session);
+    let started = std::time::Instant::now();
+    let error =
+        connect_with_reference(&webview, &session, &reference, "attempt_deadline").unwrap_err();
+    assert_eq!(error["code"], "DEADLINE_EXCEEDED");
+    assert!(started.elapsed() < std::time::Duration::from_millis(800));
+    store.set_released(true);
+    let locked = std::sync::Arc::new(PromptStore {
+        locked: true,
+        ..Default::default()
+    });
+    let (app, _journal) = prompt_app(locked, std::time::Duration::from_secs(30));
+    let webview = window(&app, "main");
+    let session = json!(bootstrap(&webview).payload.session_id);
+    let reference = saved_reference(&webview, &session);
+    let error =
+        connect_with_reference(&webview, &session, &reference, "attempt_locked").unwrap_err();
+    assert_eq!(error["code"], "SECRET_UNAVAILABLE");
 }

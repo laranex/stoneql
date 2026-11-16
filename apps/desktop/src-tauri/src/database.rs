@@ -132,6 +132,12 @@ pub async fn connect_direct<R: Runtime>(
         return Err(invalid());
     }
     let mode = access(&session, input.access, input.ssh.is_some())?;
+    // F-02: the attempt is registered before resolution, so cancel_connect and a renderer reset
+    // reach a pending Keychain prompt. The capacity permit is only taken after resolution.
+    let mut attempt = session
+        .connections
+        .begin_attempt(session.owner, input.attempt_id.as_deref())
+        .map_err(lifecycle)?;
     // References are resolved here, for this exact target and route, off the async workers.
     let scope = database_scope(
         &input.engine,
@@ -143,18 +149,26 @@ pub async fn connect_direct<R: Runtime>(
     let secrets = session.secrets.clone();
     let agent_socket = session.agent_socket.clone();
     let (password, password_ref, tunnel) = (input.password, input.password_ref, input.ssh);
-    let (password, tunnel) = blocking(move || {
+    let resolve = blocking(move || {
         let password = choose(secrets.as_ref(), Some(password), password_ref, || scope)?;
         let tunnel = tunnel
             .map(|tunnel| tunnel_config(secrets.as_ref(), tunnel, agent_socket))
             .transpose()?;
         Ok((password.unwrap_or_default(), tunnel))
-    })
-    .await?;
+    });
+    // A blocking OS call cannot be aborted: after a cancel or the deadline it may finish later,
+    // but its result is dropped unused (no handle, no tunnel, no network I/O).
+    let (password, tunnel) = tokio::select! {
+        resolved = resolve => resolved?,
+        _ = attempt.cancelled() => return Err(lifecycle(LifecycleError::Cancelled)),
+        _ = tokio::time::sleep(session.secret_deadline) => {
+            return Err(lifecycle(LifecycleError::Timeout));
+        }
+    };
     let database = input.database.clone();
     let handle = session
         .connections
-        .connect_with_access(
+        .connect_attempt(
             session.owner,
             DirectServer {
                 engine,
@@ -166,7 +180,7 @@ pub async fn connect_direct<R: Runtime>(
                 root_certificate_pem: input.root_certificate_pem.map(String::into_bytes),
             },
             tunnel,
-            input.attempt_id.as_deref(),
+            attempt,
             mode,
         )
         .await;
@@ -307,6 +321,7 @@ mod tests {
                 agent_socket: None,
                 read_write_sql: false,
                 outcome_journal: None,
+                secret_deadline: std::time::Duration::from_secs(60),
             },
         );
         let mut slots = Vec::new();
@@ -330,6 +345,7 @@ mod tests {
                 agent_socket: None,
                 read_write_sql: true,
                 outcome_journal: None,
+                secret_deadline: std::time::Duration::from_secs(60),
             },
         );
         assert_eq!(

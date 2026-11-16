@@ -47,8 +47,13 @@ pub struct HostServices {
     /// Directory of the durable unknown-outcome journal; `None` means
     /// `<app data dir>/outcome-journal` (macOS: `~/Library/Application Support/<identifier>/`).
     pub outcome_journal: Option<PathBuf>,
+    /// Bound on resolving saved secrets (a Keychain prompt) inside a connect attempt (F-02).
+    pub secret_deadline: std::time::Duration,
 }
 impl HostServices {
+    /// Proposed (M005 alpha fix plan T1, awaiting approval): long enough to answer a Keychain
+    /// prompt; the renderer waits 75 s when a saved reference is used.
+    pub const SECRET_DEADLINE: std::time::Duration = std::time::Duration::from_secs(60);
     /// Production: the OS credential store, the agent named by `SSH_AUTH_SOCK` at startup, the
     /// compiled-in read-write gate and the journal in the app data directory.
     pub fn system() -> Self {
@@ -59,6 +64,7 @@ impl HostServices {
                 .filter(|path| path.is_absolute()),
             read_write_sql: READ_WRITE_SQL_ENABLED,
             outcome_journal: None,
+            secret_deadline: Self::SECRET_DEADLINE,
         }
     }
 }
@@ -68,6 +74,7 @@ pub struct NativeSession {
     secrets: Arc<dyn SecretStore>,
     agent_socket: Option<PathBuf>,
     read_write_sql: bool,
+    secret_deadline: std::time::Duration,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
@@ -141,6 +148,7 @@ impl NativeSession {
             secrets: services.secrets,
             agent_socket: services.agent_socket,
             read_write_sql: services.read_write_sql,
+            secret_deadline: services.secret_deadline,
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
