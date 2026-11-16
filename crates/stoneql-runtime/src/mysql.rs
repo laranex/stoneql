@@ -25,7 +25,13 @@ pub(crate) fn options(
         .username(&config.username)
         .password(&config.password)
         .database(&config.database)
-        .ssl_mode(MySqlSslMode::VerifyIdentity)
+        // Verified TLS, or (explicit, loopback only, validated above) no TLS at all: never
+        // `Preferred`, so a TLS failure cannot silently become plaintext.
+        .ssl_mode(if config.tls {
+            MySqlSslMode::VerifyIdentity
+        } else {
+            MySqlSslMode::Disabled
+        })
         .statement_cache_capacity(0)
         .max_receive_packet_size(
             std::num::NonZeroUsize::new(2 * 1024 * 1024).expect("nonzero packet limit"),
@@ -44,6 +50,10 @@ pub(crate) fn options(
         options = options.ssl_ca_from_pem(pem.clone());
     }
     if let Some(endpoint) = endpoint {
+        // Plaintext is for this computer only; an SSH-tunnelled server is remote.
+        if !config.tls {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
         options = options.socket(&endpoint.socket);
     }
     Ok(options)
@@ -55,6 +65,16 @@ pub(crate) async fn open(
     deadline: Duration,
 ) -> Result<(MySqlPool, String), LifecycleError> {
     let options = options(config, endpoint)?;
+    // Plaintext to `localhost` only if the name resolves to loopback addresses alone.
+    if !config.tls && config.host.eq_ignore_ascii_case("localhost") {
+        let resolved: Vec<_> = tokio::net::lookup_host((config.host.as_str(), config.port))
+            .await
+            .map_err(|_| LifecycleError::Unavailable)?
+            .collect();
+        if resolved.is_empty() || !resolved.iter().all(|address| address.ip().is_loopback()) {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
+    }
     let pool = tokio::time::timeout(
         deadline,
         MySqlPoolOptions::new()

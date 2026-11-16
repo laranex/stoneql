@@ -70,8 +70,35 @@ async function setup(host: unknown = {}, options: { discard?: boolean } = {}) {
 }
 function liveDraft(flow: any) {
   flow.newConnection();
-  Object.assign(flow.connectionDraft.value, { name: 'Live fixture', mode: 'live', password: 'synthetic-password', rootCertificatePem: 'synthetic-public-ca' });
+  // These fixtures use verified TLS with a session CA (a new local draft starts with TLS off).
+  Object.assign(flow.connectionDraft.value, { name: 'Live fixture', mode: 'live', password: 'synthetic-password', rootCertificatePem: 'synthetic-public-ca', tls: true });
 }
+test('new local drafts start with TLS off, connect without TLS, and a verified-TLS failure on loopback says how to turn it off', async () => {
+  const native = nativeFixture();
+  const { flow, notices } = await setup(native.global);
+  flow.newConnection();
+  assert.equal(flow.connectionDraft.value.tls, false);
+  Object.assign(flow.connectionDraft.value, { name: 'Local', mode: 'live', password: 'synthetic-password', host: 'localhost' });
+  await flow.testConnection();
+  assert.match(flow.testMessage.value, /^Connected without TLS \(this computer only\)/);
+  assert.equal(native.calls.find((c) => c.command === 'connect_direct')!.payload.tls, false);
+  await flow.saveConnection();
+  assert.equal(notices.at(-1), 'success:Live read-only connection opened without TLS (this computer only).');
+  // Editing the saved profile keeps TLS off; it is stored as an explicit choice.
+  const saved = JSON.parse(preferences.get('stoneql-connections')!).connections.find((c: any) => c.name === 'Local');
+  assert.equal(saved.tls, false);
+});
+test('a verified-TLS failure on loopback suggests turning TLS off; remote failures do not', async () => {
+  const native = nativeFixture(true);
+  const { flow } = await setup(native.global);
+  liveDraft(flow);
+  await flow.testConnection();
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability. If this local server has no certificate trusted for this host name, turn off Use TLS and try again.');
+  assert.equal(native.calls.filter((c) => c.command === 'connect_direct').length, 1, 'never retried without TLS');
+  flow.connectionDraft.value.host = 'db.example.com';
+  await flow.testConnection();
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+});
 test('mock save validates required fields, then tests, stores and opens the connection', async () => {
   const { store, flow, manager, notices } = await setup();
   flow.newConnection();
@@ -139,7 +166,7 @@ test('live connection failures surface a fixed message and leave the dialog open
   liveDraft(flow);
   await flow.saveConnection();
   const id = flow.connectionDraft.value.id;
-  assert.equal(flow.connectionError.value, 'Connection failed. Check authentication, TLS and availability.');
+  assert.equal(flow.connectionError.value, 'Connection failed. Check authentication, TLS and availability. If this local server has no certificate trusted for this host name, turn off Use TLS and try again.');
   assert.equal(flow.connectionDialog.value, true);
   assert.equal(flow.testing.value, false);
   assert.equal(store.liveSessions[id].status, 'error');
@@ -150,14 +177,14 @@ test('a failed test followed by a failed save shows the error once, not in both 
   const { flow } = await setup(native.global);
   liveDraft(flow);
   await flow.testConnection();
-  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability. If this local server has no certificate trusted for this host name, turn off Use TLS and try again.');
   await flow.saveConnection();
-  assert.equal(flow.connectionError.value, 'Connection failed. Check authentication, TLS and availability.');
+  assert.equal(flow.connectionError.value, 'Connection failed. Check authentication, TLS and availability. If this local server has no certificate trusted for this host name, turn off Use TLS and try again.');
   assert.equal(flow.testMessage.value, '');
   // Testing again replaces the save error instead of adding a second notice.
   await flow.testConnection();
   assert.equal(flow.connectionError.value, '');
-  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability. If this local server has no certificate trusted for this host name, turn off Use TLS and try again.');
 });
 test('cancelling a live draft clears the password and CA from memory', async () => {
   const native = nativeFixture();

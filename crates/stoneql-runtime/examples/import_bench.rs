@@ -179,6 +179,7 @@ async fn main() -> Result<(), Failure> {
                 password: password.clone(),
                 database: database.into(),
                 root_certificate_pem: Some(ca.clone()),
+                tls: true,
             },
             None,
             None,

@@ -121,6 +121,129 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .clone();
     let config = json!({"sessionId":session,"engine":engine,"host":"127.0.0.1","port":port,"username":"stoneql_reader","password":password,"database":"stoneql_m001_fixture","rootCertificatePem":ca});
     let first = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
+    // Use TLS, both loopback modes and the remote requirement. The fixture listens on
+    // 127.0.0.1; `stoneql_plain` has no REQUIRE SSL, `stoneql_reader` does.
+    let tls_mode = |user: &str, host: &str, tls: bool, ca: Option<&str>| json!({"sessionId":session,"engine":engine,"host":host,"port":port,"username":user,"password":password,"database":"stoneql_m001_fixture","rootCertificatePem":ca,"tls":tls});
+    let close = |handle: &Value| {
+        invoke(
+            "disconnect_database",
+            json!({"sessionId":session,"handle":handle}),
+        )
+        .unwrap();
+    };
+    // Remote with TLS off: refused before any network or secret work.
+    let started = std::time::Instant::now();
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_plain", "192.0.2.1", false, None)
+        )
+        .unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    // A CA with TLS off is refused rather than ignored.
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_plain", "127.0.0.1", false, Some(&ca))
+        )
+        .unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    // The fixture server starts with require_secure_transport=ON: plaintext is refused by the
+    // server and reported as ENCRYPTED_LOGIN_REQUIRED, never retried with or without TLS.
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_plain", "127.0.0.1", false, None)
+        )
+        .unwrap_err()["code"],
+        "ENCRYPTED_LOGIN_REQUIRED"
+    );
+    // The fixture administrator (verified TLS) relaxes it for the plaintext cases only.
+    let secure_transport = |on: bool| {
+        let admin = options.clone().username("root");
+        tauri::async_runtime::block_on(async {
+            let mut connection = MySqlConnection::connect_with(&admin)
+                .await
+                .map_err(|_| "fixture admin TLS failed")
+                .unwrap();
+            sqlx::raw_sql(if on {
+                "SET GLOBAL require_secure_transport = ON"
+            } else {
+                "SET GLOBAL require_secure_transport = OFF"
+            })
+            .execute(&mut connection)
+            .await
+            .map_err(|_| "fixture admin setting failed")
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+    };
+    secure_transport(false);
+    // Loopback, TLS off, first sign-in: MariaDB's default mysql_native_password works over
+    // plaintext; MySQL's caching_sha2_password needs an encrypted first sign-in in this build.
+    let cold = invoke(
+        "connect_direct",
+        tls_mode("stoneql_plain", "127.0.0.1", false, None),
+    );
+    if engine == "mysql" {
+        assert_eq!(cold.unwrap_err()["code"], "ENCRYPTED_LOGIN_REQUIRED");
+    } else {
+        close(&cold.unwrap()["payload"]["handle"]);
+    }
+    // Loopback, TLS on: the certificate and host name are verified (the fixture CA).
+    let verified = invoke(
+        "connect_direct",
+        tls_mode("stoneql_plain", "127.0.0.1", true, Some(&ca)),
+    )
+    .unwrap()["payload"]
+        .clone();
+    close(&verified["handle"]);
+    // Loopback, TLS off, after that sign-in: works on both engines and returns data.
+    let plain = invoke(
+        "connect_direct",
+        tls_mode("stoneql_plain", "127.0.0.1", false, None),
+    )
+    .unwrap()["payload"]
+        .clone();
+    let rows = invoke(
+        "read_only_query",
+        json!({"sessionId":session,"handle":plain["handle"],"sql":"SELECT id FROM raw_values ORDER BY id"}),
+    )
+    .unwrap();
+    assert!(!rows["payload"]["rows"].as_array().unwrap().is_empty());
+    close(&plain["handle"]);
+    // Plaintext is really plaintext: an account that requires SSL is refused.
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_reader", "127.0.0.1", false, None)
+        )
+        .unwrap_err()["code"],
+        "CONNECTION_UNAVAILABLE"
+    );
+    // TLS on never falls back: system trust roots do not trust the fixture CA, so this fails
+    // although the same account would sign in over plaintext.
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_plain", "127.0.0.1", true, None)
+        )
+        .unwrap_err()["code"],
+        "CONNECTION_UNAVAILABLE"
+    );
+    // TLS on with the right CA but a host name the certificate does not name: refused.
+    assert_eq!(
+        invoke(
+            "connect_direct",
+            tls_mode("stoneql_plain", "localhost", true, Some(&ca))
+        )
+        .unwrap_err()["code"],
+        "CONNECTION_UNAVAILABLE"
+    );
+    secure_transport(true);
     let second = invoke("connect_direct", config.clone()).unwrap()["payload"].clone();
     assert_ne!(first["handle"], second["handle"]);
     assert!(!first["engineVersion"].as_str().unwrap().is_empty());
@@ -442,6 +565,6 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         .map_err(|_| "reload observer close failed")
         .unwrap();
     println!(
-        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true,\"defaultQueryLimits\":true}}"
+        "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true,\"defaultQueryLimits\":true,\"tlsModes\":true}}"
     );
 }

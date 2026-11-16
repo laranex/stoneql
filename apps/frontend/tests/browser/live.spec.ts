@@ -30,6 +30,8 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
  await page.getByPlaceholder('e.g. Local development').fill('Live fixture');
  await page.getByLabel('Password',{exact:true}).fill('synthetic-password');
+ // A new connection to this computer starts with TLS off; this one verifies TLS with a session CA.
+ await page.getByTestId('tls-option').getByRole('checkbox',{name:'Use TLS'}).check();
  await page.getByLabel('Trusted CA certificate',{exact:true}).setInputFiles({name:'ca.pem',mimeType:'application/x-pem-file',buffer:Buffer.from('-----BEGIN CERTIFICATE-----\nsynthetic-public-root\n-----END CERTIFICATE-----')});
  await expect(page.getByText('CA certificate loaded for this session.',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Test connection',exact:true}).click();

@@ -73,6 +73,7 @@ pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
         LifecycleError::AgentUnavailable => ErrorCode::SshAgentUnavailable,
         LifecycleError::Unsupported => ErrorCode::UnsupportedCapability,
         LifecycleError::Cancelled => ErrorCode::Cancelled,
+        LifecycleError::EncryptedLoginRequired => ErrorCode::EncryptedLoginRequired,
     })
     .into()
 }
@@ -131,6 +132,17 @@ pub async fn connect_direct<R: Runtime>(
     {
         return Err(invalid());
     }
+    // TLS off is an explicit choice for this computer only, refused here before any secret is
+    // resolved or network I/O (the runtime checks the same rule again).
+    let tls = input.tls.unwrap_or(true);
+    if !tls
+        && (input.ssh.is_some()
+            || !matches!(engine, Engine::MySql | Engine::MariaDb)
+            || !stoneql_runtime::is_loopback_host(&input.host)
+            || input.root_certificate_pem.is_some())
+    {
+        return Err(invalid());
+    }
     let mode = access(&session, input.access, input.ssh.is_some())?;
     // F-01: the trusted key comes only from the native store; an unenrolled endpoint is refused
     // before any secret is resolved, key file read or network I/O.
@@ -186,6 +198,7 @@ pub async fn connect_direct<R: Runtime>(
                 password,
                 database: input.database,
                 root_certificate_pem: input.root_certificate_pem.map(String::into_bytes),
+                tls,
             },
             tunnel,
             attempt,

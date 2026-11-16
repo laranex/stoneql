@@ -57,7 +57,7 @@ import {
   Sun,
   Square,
 } from 'lucide-vue-next';
-import { cancelLiveJob, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
+import { cancelLiveJob, tlsOptional, usesTls, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -2775,7 +2775,11 @@ onBeforeUnmount(() => {
           <div class="modal-body">
             <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
             <label v-if="connectionDraft.mode==='live'" class="form-label">Session access<select :disabled="testing" :value="connectionDraft.access || 'read_only'" aria-label="Session access" @change="connectionDraft.access = ($event.target as HTMLSelectElement).value === 'read_write' ? 'read_write' : undefined"><option value="read_only">Read-only (default)</option><option value="read_write" :disabled="!readWriteAvailable || connectionDraft.transport.type==='ssh'">{{ !readWriteAvailable ? 'Read-write — pending safety approval' : `Read-write — this session only${connectionDraft.transport.type==='ssh' ? ' (not available over SSH yet)' : ''}` }}</option></select><span class="muted">{{ connectionDraft.access==='read_write' ? `Scripts and transactions can change data. Not saved; the next connection starts read-only.${connectionDraft.environment==='Production' ? ' PROD requires confirmation.' : ''}` : 'Engine-enforced read-only SELECT subset.' }}</span></label>
-            <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite'" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. Certificate and hostname verification cannot be disabled.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
+            <div v-if="connectionDraft.mode==='live' && (connectionDraft.engine==='MySQL' || connectionDraft.engine==='MariaDB') && connectionDraft.transport.type==='direct'" class="form-label" data-testid="tls-option">
+              <label v-if="tlsOptional(connectionDraft)" class="compact-choice"><input type="checkbox" :disabled="testing" :checked="connectionDraft.tls !== false" @change="connectionDraft.tls = ($event.target as HTMLInputElement).checked ? undefined : false" /> Use TLS</label>
+              <span class="muted">{{ !tlsOptional(connectionDraft) ? 'Verified TLS is required for connections to other computers.' : usesTls(connectionDraft) ? 'The server certificate and host name are verified.' : 'TLS off: traffic to this computer is not encrypted. Turn on to verify the certificate and host name.' }}</span>
+            </div>
+            <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite' && usesTls(connectionDraft)" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. With TLS on, the certificate and host name are always verified.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">
               <label class="form-label"
                 >Connection name<input :disabled="testing"

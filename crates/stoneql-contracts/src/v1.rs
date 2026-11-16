@@ -189,6 +189,7 @@ pub enum ErrorCodeDto {
     Busy,
     UnresolvedOutcomes,
     OutcomeJournalUnavailable,
+    EncryptedLoginRequired,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -230,6 +231,7 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::Busy => ErrorCodeDto::Busy,
             ErrorCode::UnresolvedOutcomes => ErrorCodeDto::UnresolvedOutcomes,
             ErrorCode::OutcomeJournalUnavailable => ErrorCodeDto::OutcomeJournalUnavailable,
+            ErrorCode::EncryptedLoginRequired => ErrorCodeDto::EncryptedLoginRequired,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -344,6 +346,12 @@ pub struct DirectConnectionRequest {
     pub password: String,
     pub database: String,
     pub root_certificate_pem: Option<String>,
+    // Omitted or true: verified TLS (certificate chain and host name). False: no TLS at all,
+    // accepted only for direct MySQL/MariaDB to localhost, 127.0.0.1 or ::1 without a CA.
+    // A TLS failure is never retried without TLS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tls: Option<bool>,
     // Opaque OS secret reference used when `password` is empty. Resolved only by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

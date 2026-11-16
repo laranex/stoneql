@@ -164,6 +164,7 @@ async fn profile() -> Result<(), Box<dyn std::error::Error>> {
                         password: password.clone(),
                         database: "stoneql_m001_fixture".into(),
                         root_certificate_pem: Some(ca.clone()),
+                        tls: true,
                     },
                 )
                 .await?,

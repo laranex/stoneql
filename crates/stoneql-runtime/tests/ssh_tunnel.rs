@@ -77,6 +77,7 @@ impl Fixture {
             password: self.db_password.clone(),
             database: "stoneql_m001_fixture".into(),
             root_certificate_pem: Some(self.ca.clone()),
+            tls: true,
         }
     }
     fn direct(&self) -> DirectServer {

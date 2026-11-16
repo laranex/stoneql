@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bootstrapNativeHost,NativeOperationError} from '../src/services/nativeHost.ts';
-import {openLive,queryLive,closeLive} from '../src/services/liveConnections.ts';
+import {openLive,queryLive,closeLive,isLoopbackHost,tlsOptional,usesTls} from '../src/services/liveConnections.ts';
 import {connectionSnapshot,loadConnectionPreferences} from '../src/services/connectionPreferences.ts';
 import {connections} from '../src/data/sample.ts';
 const profile={...connections[0]!,mode:'live' as const,password:'synthetic-password',rootCertificatePem:'synthetic-public-ca',transport:{type:'direct' as const}};
@@ -77,4 +77,30 @@ test('profile storage keeps secret references but drops secrets, grants, legacy 
  assert.equal(tampered.passwordRef,undefined);assert.equal(tampered.transport.hostKey,undefined);assert.equal(tampered.transport.hostKeyFingerprint,undefined);assert.equal(tampered.transport.passphraseRef,undefined);
  const mock=JSON.parse(JSON.stringify(connectionSnapshot([{...live,mode:'mock'}],[]))).connections[0];
  assert.equal(mock.passwordRef,undefined,'mock profiles never carry OS secret references');
+});
+test('Use TLS: off only when chosen for this computer; remote and saved profiles keep verified TLS; never sent without TLS otherwise',async()=>{
+ const f=fixture();await bootstrapNativeHost(f.global);
+ const sent=()=>f.calls.filter(c=>c.command==='connect_direct').at(-1)!.payload;
+ for(const host of ['localhost','127.0.0.1','::1']){
+  const local={...profile,engine:'MySQL' as const,host,tls:false};
+  assert.equal(tlsOptional(local),true);assert.equal(usesTls(local),false);
+  await openLive(local);
+  assert.equal(sent().tls,false);assert.equal(sent().rootCertificatePem,null,'no CA without TLS');
+ }
+ // Loopback with TLS on (or a saved profile from before the option): verified TLS, CA kept.
+ for(const local of [{...profile,host:'127.0.0.1',tls:true},{...profile,host:'127.0.0.1',tls:undefined}]){
+  assert.equal(usesTls(local),true);await openLive(local);
+  assert.equal('tls' in sent(),false);assert.equal(sent().rootCertificatePem,'synthetic-public-ca');
+ }
+ // Remote, PostgreSQL and SSH ignore a stored "off": TLS is required and nothing asks for plaintext.
+ for(const other of [{...profile,host:'db.example.com',tls:false},{...profile,engine:'PostgreSQL' as const,port:5432,host:'127.0.0.1',tls:false},{...profile,host:'127.0.0.1',tls:false,transport:{type:'ssh' as const,host:'bastion',port:22,user:'deploy',auth:'agent' as const}}]){
+  assert.equal(tlsOptional(other),false);assert.equal(usesTls(other),true);
+  await openLive(other);assert.equal('tls' in sent(),false);
+ }
+ assert.equal(isLoopbackHost('LOCALHOST'),true);
+ for(const host of ['127.0.0.2','localhost.example.com','[::1]','0.0.0.0'])assert.equal(isLoopbackHost(host),false,host);
+ // Saved preferences keep an explicit "off" and nothing else.
+ const saved=loadConnectionPreferences({getItem:()=>JSON.stringify(connectionSnapshot([{...profile,host:'127.0.0.1',tls:false},{...profile,id:'b',tls:true},{...profile,id:'c'}],[]))},[]).connections;
+ assert.deepEqual(saved.map(c=>c.tls),[false,undefined,undefined]);
+ await bootstrapNativeHost({});
 });

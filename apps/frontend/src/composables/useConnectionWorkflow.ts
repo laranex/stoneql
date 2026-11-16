@@ -1,6 +1,6 @@
 import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
-import { openLive, closeLive, liveSupported, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
+import { openLive, closeLive, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
@@ -116,6 +116,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           user: 'root',
           password: '',
           database: 'acme_store',
+          // New connections to this computer start with TLS off; other hosts always verify TLS.
+          tls: false,
           color: connectionColors[0]!.value,
           environment: 'Development',
           customEnvironment: '',
@@ -289,6 +291,13 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     }catch(error){connectionError.value=(error as Error).message;}
     finally{testing.value=false;}
   }
+  /** A verified-TLS failure to this computer says how to connect without TLS; never automatic. */
+  function withTlsHint(error: unknown, draft?: Connection): string {
+    const message = (error as Error).message;
+    return draft && (error as { code?: string }).code === 'CONNECTION_UNAVAILABLE' && tlsOptional(draft) && usesTls(draft)
+      ? `${message} If this local server has no certificate trusted for this host name, turn off Use TLS and try again.`
+      : message;
+  }
   async function testConnection() {
     if (!connectionDraft.value) return;
     // One notice per attempt: a new test replaces an earlier save error (and vice versa).
@@ -305,13 +314,13 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
         attemptId.value=`attempt_${crypto.randomUUID()}`;
         const info=await openLive(connectionDraft.value, attemptId.value);
         await closeLive(info.handle);
-        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':'Verified TLS connection successful'} · ${info.engineVersion} · Test session closed.`;
+        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':usesTls(connectionDraft.value)?'Verified TLS connection successful':'Connected without TLS (this computer only)'} · ${info.engineVersion} · Test session closed.`;
         testOk.value=true;
       } else {
         const result=await mockTransport.test(connectionDraft.value);
         testMessage.value=result.message;testOk.value=result.ok;
       }
-    }catch(error){testMessage.value=(error as Error).message;testOk.value=false;}
+    }catch(error){testMessage.value=withTlsHint(error, connectionDraft.value);testOk.value=false;}
     finally{testing.value=false;attemptId.value='';}
   }
   async function saveLiveConnection(draft: Connection, connectNow: boolean) {
@@ -341,8 +350,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
       const mode=access==='read_write'?'read-write':'read-only';
-      notify(connectNow?(draft.engine==='SQLite'?`Live ${mode} SQLite file opened.`:ssh?`Live ${mode} connection opened over SSH and verified TLS.`:`Live ${mode} connection opened over verified TLS.`):'Live profile saved; connect explicitly before executing SQL.');
-    }catch(error){connectionError.value=(error as Error).message;}
+      notify(connectNow?(draft.engine==='SQLite'?`Live ${mode} SQLite file opened.`:ssh?`Live ${mode} connection opened over SSH and verified TLS.`:usesTls(draft)?`Live ${mode} connection opened over verified TLS.`:`Live ${mode} connection opened without TLS (this computer only).`):'Live profile saved; connect explicitly before executing SQL.');
+    }catch(error){connectionError.value=withTlsHint(error, draft);}
     finally{testing.value=false;attemptId.value='';}
   }
   async function saveConnection(connectNow = true) {

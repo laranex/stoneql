@@ -45,6 +45,19 @@ function sshTunnel(connection: Connection): SshTunnelRequest | undefined {
   }
   return { host: transport.host, port: transport.port, username: transport.user, auth };
 }
+/** Hosts that mean this computer; only these may turn TLS off (the host enforces the same rule). */
+export function isLoopbackHost(host: string): boolean {
+  return host.toLowerCase() === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+/** "Use TLS" is offered only for a live direct MySQL/MariaDB connection to this computer. */
+export function tlsOptional(connection: Connection): boolean {
+  return connection.mode === 'live' && (connection.engine === 'MySQL' || connection.engine === 'MariaDB')
+    && connection.transport.type === 'direct' && isLoopbackHost(connection.host);
+}
+/** Verified TLS unless TLS was explicitly turned off for this computer. */
+export function usesTls(connection: Connection): boolean {
+  return !tlsOptional(connection) || connection.tls !== false;
+}
 /** Read-only unless `access` is the explicit, per-session `read_write` opt-in. */
 export async function openLive(connection: Connection, attemptId?: string, access: AccessModeDto = 'read_only'): Promise<LiveConnection> {
   if (!liveSupported(connection)) throw new Error('Live connections support MySQL, MariaDB and PostgreSQL over Direct or SSH, or a chosen SQLite file.');
@@ -53,12 +66,14 @@ export async function openLive(connection: Connection, attemptId?: string, acces
     if (!connection.sqliteGrant) throw new Error('Choose the SQLite file again; file access is granted for this app session only.');
     return nativeDatabase<LiveConnection>('connect_sqlite', { grant: connection.sqliteGrant, ...mode });
   }
-  const ssh = sshTunnel(connection);
+  const ssh = sshTunnel(connection), tls = usesTls(connection);
   try {
     return await nativeDatabase<LiveConnection>('connect_direct', {
     engine: networkEngines[connection.engine], host: connection.host, port: connection.port,
     username: connection.user, password: connection.password || '', database: connection.database,
-    rootCertificatePem: connection.rootCertificatePem || null,
+    // TLS off sends no CA (a CA has no meaning without TLS) and never falls back the other way.
+    rootCertificatePem: tls ? connection.rootCertificatePem || null : null,
+    ...(tls ? {} : { tls: false }),
     ...(!connection.password && connection.passwordRef ? { passwordRef: connection.passwordRef } : {}),
     ...(ssh ? { ssh } : {}),
     ...(attemptId ? { attemptId } : {}),

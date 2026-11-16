@@ -1197,3 +1197,43 @@ fn sql_import_grants_are_native_and_commands_refuse_before_reading() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Use TLS: turning TLS off is accepted only for direct MySQL/MariaDB to this computer without a
+/// CA. Every other request is refused before secrets, SSH or network work (no timeout).
+#[test]
+fn plaintext_is_refused_natively_except_for_direct_loopback_mysql() {
+    let (app, _journal) = app();
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let base = json!({"sessionId":session,"engine":"mysql","host":"192.0.2.1","port":3306,"username":"u","password":"","database":"app","rootCertificatePem":null,"tls":false});
+    let with = |changes: Value| {
+        let mut payload = base.clone();
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        payload
+    };
+    for payload in [
+        base.clone(),
+        with(json!({"host":"localhost.example.com"})),
+        with(json!({"engine":"postgresql","host":"127.0.0.1","port":5432})),
+        with(
+            json!({"host":"127.0.0.1","rootCertificatePem":"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"}),
+        ),
+        with(
+            json!({"host":"127.0.0.1","ssh":{"host":"192.0.2.2","port":22,"username":"deploy","auth":{"method":"agent"}}}),
+        ),
+    ] {
+        let started = std::time::Instant::now();
+        let error = invoke(
+            &webview,
+            "connect_direct",
+            json!({"version":1,"requestId":"tls","payload":payload}),
+            "tauri://localhost",
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "INVALID_REQUEST", "{payload}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+}

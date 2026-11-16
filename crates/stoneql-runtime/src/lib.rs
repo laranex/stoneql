@@ -77,9 +77,24 @@ pub struct DirectServer {
     pub password: String,
     pub database: String,
     pub root_certificate_pem: Option<Vec<u8>>,
+    /// Verified TLS (certificate chain and host name). `false` is accepted only for a direct
+    /// MySQL/MariaDB connection to this computer (`localhost`, `127.0.0.1`, `::1`), without a CA,
+    /// and then no TLS is attempted at all. A TLS failure never falls back to plaintext.
+    pub tls: bool,
+}
+/// Loopback host names for which plaintext MySQL/MariaDB may be chosen explicitly.
+pub fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 impl DirectServer {
     fn validate(&self) -> Result<(), LifecycleError> {
+        if !self.tls
+            && (!matches!(self.engine, Engine::MySql | Engine::MariaDb)
+                || !is_loopback_host(&self.host)
+                || self.root_certificate_pem.is_some())
+        {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
         if !matches!(
             self.engine,
             Engine::MySql | Engine::MariaDb | Engine::PostgreSql
@@ -125,6 +140,10 @@ pub enum LifecycleError {
     /// Recognized but unsupported on this host/build (for example RSA SSH keys).
     Unsupported,
     Cancelled,
+    /// Plaintext (TLS off) was refused: the server requires secure transport, or the account's
+    /// first sign-in needs an encrypted connection (`caching_sha2_password` full authentication,
+    /// which this build performs only over TLS).
+    EncryptedLoginRequired,
 }
 impl fmt::Display for LifecycleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,15 +160,32 @@ impl fmt::Display for LifecycleError {
             Self::AgentUnavailable => "The SSH agent is unavailable.",
             Self::Unsupported => "This transport option is not supported.",
             Self::Cancelled => "Connection setup was cancelled.",
+            Self::EncryptedLoginRequired => {
+                "The server requires an encrypted sign-in for this account; use TLS."
+            }
         })
     }
 }
 impl std::error::Error for LifecycleError {}
 fn connect_error(error: sqlx::Error) -> LifecycleError {
-    if matches!(error, sqlx::Error::PoolTimedOut) {
-        LifecycleError::Timeout
-    } else {
-        LifecycleError::Unavailable
+    match &error {
+        sqlx::Error::PoolTimedOut => LifecycleError::Timeout,
+        // The driver's fixed text when `caching_sha2_password` full authentication needs RSA
+        // over a plaintext connection (the RSA backend is not built).
+        sqlx::Error::Configuration(message)
+            if message.to_string().starts_with("RSA auth backend disabled") =>
+        {
+            LifecycleError::EncryptedLoginRequired
+        }
+        // ER_SECURE_TRANSPORT_REQUIRED: the server refuses insecure transport.
+        _ if error
+            .as_database_error()
+            .and_then(|error| error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+            .is_some_and(|error| error.number() == 3159) =>
+        {
+            LifecycleError::EncryptedLoginRequired
+        }
+        _ => LifecycleError::Unavailable,
     }
 }
 /// One bounded single-connection pool per logical handle. Engine-specific work stays in the
@@ -829,7 +865,80 @@ mod tests {
             password: "do_not_log_secret".into(),
             database: "fixture".into(),
             root_certificate_pem: None,
+            tls: true,
         }
+    }
+    #[test]
+    fn plaintext_is_only_an_explicit_loopback_mysql_choice_and_tls_options_never_fall_back() {
+        let plain = |engine: Engine, host: &str| DirectServer {
+            engine,
+            host: host.into(),
+            tls: false,
+            ..config()
+        };
+        for host in ["localhost", "LOCALHOST", "127.0.0.1", "::1"] {
+            assert!(is_loopback_host(host));
+            for engine in [Engine::MySql, Engine::MariaDb] {
+                assert_eq!(plain(engine, host).validate(), Ok(()), "{host}");
+                let options = mysql::options(&plain(engine, host), None).unwrap();
+                assert!(matches!(
+                    options.get_ssl_mode(),
+                    sqlx::mysql::MySqlSslMode::Disabled
+                ));
+            }
+        }
+        for host in [
+            "127.0.0.2",
+            "0.0.0.0",
+            "db.example.com",
+            "localhost.example.com",
+            "::ffff:127.0.0.1",
+            "[::1]",
+        ] {
+            assert_eq!(
+                plain(Engine::MySql, host).validate(),
+                Err(LifecycleError::InvalidConfiguration),
+                "{host}"
+            );
+        }
+        assert_eq!(
+            plain(Engine::PostgreSql, "127.0.0.1").validate(),
+            Err(LifecycleError::InvalidConfiguration)
+        );
+        // A CA has no meaning without TLS: refused instead of silently ignored.
+        let mut with_ca = plain(Engine::MySql, "127.0.0.1");
+        with_ca.root_certificate_pem = Some(b"-----BEGIN CERTIFICATE-----".to_vec());
+        assert_eq!(
+            with_ca.validate(),
+            Err(LifecycleError::InvalidConfiguration)
+        );
+        // TLS on: always verify-identity, on loopback and remote alike.
+        for host in ["127.0.0.1", "db.example.com"] {
+            let options = mysql::options(
+                &DirectServer {
+                    host: host.into(),
+                    ..config()
+                },
+                None,
+            )
+            .unwrap();
+            assert!(matches!(
+                options.get_ssl_mode(),
+                sqlx::mysql::MySqlSslMode::VerifyIdentity
+            ));
+        }
+        // The driver's plaintext-RSA refusal and secure-transport refusal are classified, not
+        // reported as a generic failure.
+        assert_eq!(
+            connect_error(sqlx::Error::Configuration(
+                "RSA auth backend disabled; enable feature `mysql-rsa` (or `rsa` if using sqlx-mysql directly) or use TLS.".into()
+            )),
+            LifecycleError::EncryptedLoginRequired
+        );
+        assert_eq!(
+            connect_error(sqlx::Error::Protocol("other".into())),
+            LifecycleError::Unavailable
+        );
     }
     fn details() -> Details {
         Details {

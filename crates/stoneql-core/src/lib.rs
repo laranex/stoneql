@@ -94,6 +94,9 @@ pub enum ErrorCode {
     /// damaged journal awaits acknowledgement: new read-write work is refused before anything
     /// is sent.
     OutcomeJournalUnavailable,
+    /// A plaintext (TLS off) MySQL/MariaDB connection was refused because the server requires
+    /// secure transport or the account's first sign-in needs encryption. Never retried.
+    EncryptedLoginRequired,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -137,6 +140,9 @@ impl ErrorCode {
             }
             Self::OutcomeJournalUnavailable => {
                 "Unknown outcomes cannot be saved durably right now; no new read-write work was started."
+            }
+            Self::EncryptedLoginRequired => {
+                "The server requires an encrypted sign-in for this account; nothing was retried without TLS."
             }
             Self::Internal => "The operation could not be completed.",
         }

@@ -1768,6 +1768,7 @@ async fn harness() -> Result<(), Failure> {
         password: password.clone(),
         database: database.into(),
         root_certificate_pem: Some(ca.clone()),
+        tls: true,
     };
     let connections = Connections::new(4, Duration::from_secs(3), Duration::from_secs(3600))?;
     let owner = OwnerId::new();

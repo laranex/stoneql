@@ -55,6 +55,8 @@ export function sanitizeConnection(value: Connection, groups: ConnectionGroup[])
     groupId: groups.some((g) => g.id === source.groupId) ? source.groupId : '',
     // Opaque OS secret reference only; the secret itself is never serialized.
     ...defined({ passwordRef: source.mode === 'live' ? reference(source.passwordRef) : undefined }),
+    // Only an explicit "TLS off" is stored; anything else means verified TLS.
+    ...defined({ tls: source.mode === 'live' && source.tls === false ? (false as const) : undefined }),
     // Deliberately reconstruct transport. Never serialize credential fields, grants or unknown
     // fields; only the enrolled public host key, its fingerprint, references and a file name.
     transport:

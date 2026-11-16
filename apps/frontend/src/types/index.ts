@@ -35,6 +35,11 @@ export interface ConnectionGroup {
 export interface Connection {
   mode?: 'mock'|'live';
   rootCertificatePem?: string;
+  /**
+   * Live direct MySQL/MariaDB to this computer only: `false` turns TLS off. Omitted means
+   * verified TLS, which saved profiles from before this option keep. Ignored for other hosts.
+   */
+  tls?: boolean;
   /** Live connect choice for this session only, never persisted; omitted means read-only. */
   access?: 'read_only' | 'read_write';
   /** Opaque native SQLite file grant; session-only, never persisted. */
