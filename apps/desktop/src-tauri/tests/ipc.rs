@@ -594,3 +594,35 @@ fn ssh_and_secret_commands_refuse_forged_sessions() {
         assert!(!error.to_string().contains("synthetic-secret"));
     }
 }
+/// M005 T0: unknown credential fields are refused before any network I/O (unroutable target).
+#[test]
+fn ssh_requests_reject_unknown_credential_fields() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    let session = bootstrap(&main).payload.session_id;
+    for (auth, extra) in [
+        (false, "privateKey"),
+        (false, "path"),
+        (false, "forwardAgent"),
+        (true, "privateKey"),
+        (true, "path"),
+    ] {
+        let mut ssh = json!({"host":"bastion.internal","port":22,"username":"deploy","auth":{"method":"agent"}});
+        if auth {
+            ssh["auth"][extra] = json!("synthetic");
+        } else {
+            ssh[extra] = json!("synthetic");
+        }
+        let payload = json!({"sessionId":session,"engine":"mysql","host":"192.0.2.1","port":9,"username":"u","password":"","database":"d","rootCertificatePem":null,"ssh":ssh});
+        let started = std::time::Instant::now();
+        let error = invoke(
+            &main,
+            "connect_direct",
+            json!({"version":1,"requestId":"unknown","payload":payload}),
+            "tauri://localhost",
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "INVALID_REQUEST", "{extra}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+}

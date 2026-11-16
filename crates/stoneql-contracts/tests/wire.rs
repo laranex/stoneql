@@ -377,3 +377,30 @@ fn execution_replies_keep_outcomes_cancellation_and_exact_values_distinct() {
         "acknowledgement carries only the id; it can never set an outcome"
     );
 }
+/// M005 T0: credential material can only arrive in the declared fields; any other key is refused.
+#[test]
+fn ssh_requests_reject_unknown_credential_fields() {
+    let base = json!({"version":1,"requestId":"ssh_1","payload":{"sessionId":"s","engine":"mysql","host":"192.0.2.1","port":9,"username":"u","password":"","database":"d","rootCertificatePem":null,"ssh":{"host":"bastion.internal","port":22,"username":"deploy","auth":{"method":"agent"}}}});
+    assert!(decode_envelope::<DirectConnectionRequest>(&base.to_string()).is_ok());
+    for (path, field) in [
+        ("ssh", "privateKey"),
+        ("ssh", "path"),
+        ("ssh", "forwardAgent"),
+        ("auth", "privateKey"),
+        ("auth", "path"),
+    ] {
+        let mut request = base.clone();
+        let target = if path == "ssh" {
+            &mut request["payload"]["ssh"]
+        } else {
+            &mut request["payload"]["ssh"]["auth"]
+        };
+        target[field] = json!("synthetic");
+        let error = decode_envelope::<DirectConnectionRequest>(&request.to_string()).err();
+        assert_eq!(
+            error.map(|e| e.code),
+            Some(ErrorCode::InvalidRequest),
+            "{path}.{field}"
+        );
+    }
+}
