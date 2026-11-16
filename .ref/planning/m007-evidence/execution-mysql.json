@@ -1,0 +1,297 @@
+{
+  "backpressure": {
+    "pages": 17,
+    "parkedWhileUnread": true,
+    "rowsDelivered": 8397,
+    "truncated": true
+  },
+  "bulkCancel": [
+    {
+      "cancelToTerminalMs": 809.819167,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    },
+    {
+      "cancelToTerminalMs": 786.418875,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    },
+    {
+      "cancelToTerminalMs": 831.703667,
+      "cancellation": "confirmed",
+      "executedOnce": true,
+      "rowsAfterSettle": 0,
+      "serverCancelSent": true
+    }
+  ],
+  "busyNotQueued": true,
+  "cancel": {
+    "confirmed": 100,
+    "deadlinePath": "client deadline interrupt (confirmed)",
+    "graceMs": 1500,
+    "maxMs": 52.565625,
+    "p50Ms": 7.262709,
+    "p95Ms": 31.802083000000003,
+    "samples": 100,
+    "serverSignalsSent": 100
+  },
+  "commitRefused": {
+    "commitSent": true,
+    "note": "rowsObservedAfter is the observed data state; StoneQL does not claim it",
+    "outcome": "unknown",
+    "repeatEndSameOutcome": true,
+    "rollbackSent": false,
+    "rowsObservedAfter": 0,
+    "serverError": "ER 1290 (read_only)"
+  },
+  "connectionLossUnknown": true,
+  "constraintFailures": [
+    "unique",
+    "foreign_key"
+  ],
+  "ddlPartialOutcome": true,
+  "engine": "MySql",
+  "exactValues": true,
+  "faultCycles": {
+    "committed": 25,
+    "cycles": 100,
+    "dirtyConnectionsReused": 0,
+    "sessionStateLeaks": 0,
+    "writerSessionsAfter": 2,
+    "writerSessionsBefore": 2
+  },
+  "killFailure": {
+    "boundMs": 2500,
+    "cancelToTerminalMs": 1501.56275,
+    "cancellation": "requested",
+    "executions": 1,
+    "killedByObserver": true,
+    "outcome": "unknown",
+    "rowApplied": false,
+    "serverBackstop": null,
+    "serverCancelSent": false,
+    "statementStillRunningAfterAbandon": true
+  },
+  "leaseExpiry": {
+    "idleSeconds": 60,
+    "outcome": "rolled_back"
+  },
+  "lostEndReplies": {
+    "commit_drop_s2c": {
+      "commitSent": true,
+      "endMsMax": 10003.714833,
+      "endMsP50": 10003.6705,
+      "endStatementReachedServer": "3/3",
+      "n": 3,
+      "repeatEndSameOutcome": "3/3",
+      "rollbackSent": false,
+      "rowCommittedObserved": 3,
+      "unknown": "3/3"
+    },
+    "commit_sever": {
+      "commitSent": true,
+      "endMsMax": 0.389375,
+      "endMsP50": 0.14575,
+      "endStatementReachedServer": "0/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": false,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    },
+    "commit_sever_on_reply": {
+      "commitSent": true,
+      "endMsMax": 33.25975,
+      "endMsP50": 0.936041,
+      "endStatementReachedServer": "50/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": false,
+      "rowCommittedObserved": 50,
+      "unknown": "50/50"
+    },
+    "rollback_drop_s2c": {
+      "commitSent": false,
+      "endMsMax": 2004.0792079999999,
+      "endMsP50": 2003.764833,
+      "endStatementReachedServer": "3/3",
+      "n": 3,
+      "repeatEndSameOutcome": "3/3",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "3/3"
+    },
+    "rollback_sever": {
+      "commitSent": false,
+      "endMsMax": 0.215958,
+      "endMsP50": 0.130084,
+      "endStatementReachedServer": "0/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    },
+    "rollback_sever_on_reply": {
+      "commitSent": false,
+      "endMsMax": 5.481042,
+      "endMsP50": 0.888125,
+      "endStatementReachedServer": "50/50",
+      "n": 50,
+      "repeatEndSameOutcome": "50/50",
+      "rollbackSent": true,
+      "rowCommittedObserved": 0,
+      "unknown": "50/50"
+    }
+  },
+  "noResend": {
+    "lostReplyEndStatementsAtMostOnce": true,
+    "source": "mysql.general_log (Query/Execute; prepares excluded)",
+    "writeCancelExecutedOnce": "30/30"
+  },
+  "ownerIsolation": true,
+  "policyAndSessionState": {
+    "generalLogPositiveControl": true,
+    "refusedBeforeSend": {
+      "call_autocommit_off": {
+        "generalLogRows": 0,
+        "refused": "Call"
+      },
+      "call_autocommit_off_lease": {
+        "generalLogRows": 0,
+        "refused": "Call"
+      },
+      "call_start_transaction": {
+        "generalLogRows": 0,
+        "refused": "Call"
+      },
+      "call_start_transaction_lease": {
+        "generalLogRows": 0,
+        "refused": "Call"
+      },
+      "case_autocommit": {
+        "generalLogRows": 0,
+        "refused": "CompoundStatement"
+      },
+      "case_autocommit_lease": {
+        "generalLogRows": 0,
+        "refused": "CompoundStatement"
+      },
+      "case_commit": {
+        "generalLogRows": 0,
+        "refused": "CompoundStatement"
+      },
+      "case_commit_lease": {
+        "generalLogRows": 0,
+        "refused": "CompoundStatement"
+      },
+      "set_statement_commit": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      },
+      "set_statement_commit_lease": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      },
+      "set_statement_create_table": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      },
+      "set_statement_create_table_lease": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      },
+      "set_statement_prepare": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      },
+      "set_statement_prepare_lease": {
+        "generalLogRows": 0,
+        "refused": "SetStatement"
+      }
+    },
+    "sessionStateProbe": {
+      "autocommitSessionMatches": true,
+      "leaseEndedBehindStoneql": {
+        "afterCommitMismatch": true,
+        "openMatches": true
+      },
+      "procedureAutocommitOff": {
+        "insertReportedRows": 1,
+        "probeMismatch": true,
+        "rowsAfterClose": 0
+      },
+      "procedureStartTransaction": {
+        "insertReportedRows": 1,
+        "probeMismatch": true,
+        "rowsAfterClose": 0
+      }
+    }
+  },
+  "procedureResultSets": "refused (CALL)",
+  "rendererCrud": {
+    "affected": [
+      "1",
+      "1",
+      "0",
+      "1"
+    ],
+    "exactText": true,
+    "staleRowAffected": "0",
+    "statements": 4
+  },
+  "rendererCsvImport": {
+    "committedRows": 3,
+    "nullEmptyTextDistinct": true,
+    "rejectedBatchRolledBack": true
+  },
+  "transactions": [
+    "commit",
+    "rollback",
+    "rollback_only"
+  ],
+  "unknownOutcomeRetention": {
+    "acknowledgementChangesOutcome": false,
+    "churnMs": 2017.9904589999999,
+    "confirmedEndsChurned": 288,
+    "journalRestart": {
+      "factsUnchanged": true,
+      "lostCommitJournaled": true,
+      "modes": [
+        "700",
+        "600"
+      ],
+      "otherRestoredOutcomes": 0,
+      "restoredAfterDrop": true,
+      "restoredMarked": true,
+      "rowCommittedObserved": 1
+    },
+    "lostCommit": {
+      "commitSent": true,
+      "outcome": "unknown",
+      "rowCommittedObserved": 1
+    },
+    "oldestConfirmedEvicted": true,
+    "unknownListedAfterChurn": true,
+    "unknownQueryableAfterChurn": true
+  },
+  "writeCancel": {
+    "cancellation": "confirmed",
+    "connectionDiscarded": "30/30",
+    "executedOnce": "30/30",
+    "interruptDelivered": "30/30",
+    "maxMs": 13.107959000000001,
+    "n": 30,
+    "note": "rowUnchanged is the observed data state after the lock holder rolled back (statement never acquired the lock); not a claimed rollback",
+    "outcome": "unknown",
+    "p50Ms": 6.043833,
+    "p95Ms": 9.814375,
+    "rowUnchanged": "30/30",
+    "serverInterrupt": "KILL QUERY",
+    "sessionsBaseline": 2
+  }
+}
