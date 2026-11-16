@@ -349,7 +349,10 @@ export const useWorkspace = defineStore('workspace', () => {
     relations(database.value).find((t) => t.name === workspace.value.table),
   );
   const savedTheme = localStorage.getItem('stoneql-theme');
-  const theme = ref(savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : 'system');
+  // First launch is Light whatever the OS appearance; a saved choice (including System) is kept.
+  const theme = ref(
+    savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'system' ? savedTheme : 'light',
+  );
   const pageSize = computed({
     get: () => workspace.value.pageSize,
     set: (value: number) => {

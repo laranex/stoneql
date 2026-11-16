@@ -133,7 +133,7 @@ test('actual Structure Add/Change handlers render the new dialog and save VARCHA
   assert.ok(textContent(rows[4]!).includes('decimal(12,2)'));
   app.unmount();
 });
-test('first launch resolves OS theme, footer toggle persists manual preference, and Settings has no Appearance section', async () => {
+test('first launch is Light even with a dark OS, saved choices are kept, and Settings has no Appearance section', async () => {
   preferences.clear();
   classes.clear();
   osDark = true;
@@ -141,10 +141,15 @@ test('first launch resolves OS theme, footer toggle persists manual preference, 
     app = hostRenderer.createApp(App);
   app.use(createPinia());
   app.mount(root);
-  let toggle = findAll(root, (n) => n.props['aria-label'] === 'Switch to light theme')[0]!;
-  assert.ok(toggle);
-  assert.ok(classes.has('dark'));
+  assert.equal(classes.has('dark'), false, 'first launch is Light regardless of the OS appearance');
   assert.equal(preferences.has('stoneql-theme'), false);
+  let toggle = findAll(root, (n) => n.props['aria-label'] === 'Switch to dark theme')[0]!;
+  assert.ok(toggle);
+  toggle.props.onClick();
+  await nextTick();
+  assert.equal(preferences.get('stoneql-theme'), 'dark');
+  assert.ok(classes.has('dark'));
+  toggle = findAll(root, (n) => n.props['aria-label'] === 'Switch to light theme')[0]!;
   toggle.props.onClick();
   await nextTick();
   assert.equal(preferences.get('stoneql-theme'), 'light');
@@ -172,6 +177,21 @@ test('first launch resolves OS theme, footer toggle persists manual preference, 
   assert.equal(classes.has('dark'), false);
   assert.ok(findAll(nextRoot, (n) => n.props['aria-label'] === 'Switch to dark theme').length);
   reopened.unmount();
+});
+test('existing saved theme preferences survive the Light default (dark and system)', async () => {
+  for (const [saved, osIsDark, dark] of [['dark', false, true], ['system', true, true], ['system', false, false]] as const) {
+    preferences.clear();
+    classes.clear();
+    preferences.set('stoneql-theme', saved);
+    osDark = osIsDark;
+    const app = hostRenderer.createApp(App);
+    app.use(createPinia());
+    app.mount(hostNode('root'));
+    assert.equal(classes.has('dark'), dark, `${saved} with ${osIsDark ? 'dark' : 'light'} OS`);
+    assert.equal(preferences.get('stoneql-theme'), saved);
+    app.unmount();
+  }
+  osDark = false;
 });
 
 test('active Connection Manager creates, renames, moves and deletes groups while retaining connections and workspaces', async () => {

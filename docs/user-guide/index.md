@@ -26,6 +26,6 @@ Manage columns and indexes under Table → Structure. Database-level navigation 
 
 ## Preferences
 
-The footer toggles Light/Dark immediately. First launch follows the OS; a manual selection persists. Settings controls rows per page and keyboard shortcuts. Font sizes and compact layout stay consistent between themes.
+The footer toggles Light/Dark immediately. First launch uses Light whatever the OS appearance; a manual selection persists (earlier saved choices, including System, are kept). Settings controls rows per page and keyboard shortcuts. Font sizes and compact layout stay consistent between themes.
 
 [Connections](./connections.md), [SQL editor](./sql-editor.md), and [import/export](./import-export.md) describe the other workflows.
