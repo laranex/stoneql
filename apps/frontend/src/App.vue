@@ -95,7 +95,7 @@ const store = useWorkspace();
 const w = computed(() => store.workspace);
 const isLive = computed(() => store.connection?.mode==='live');
 const liveSession = computed(() => store.liveSessions[store.activeId]);
-/** MySQL/MariaDB live profiles list tables and browse pages through read-only SELECTs. */
+/** MySQL, MariaDB and PostgreSQL live profiles list tables and browse pages through read-only SELECTs. */
 const liveCatalog = computed(() => isLive.value && liveCatalogSupported(store.connection.engine));
 /** Read-write is chosen per connect and reported back by the native host. */
 const liveReadWrite = computed(() => isLive.value && liveSession.value?.status === 'connected' && liveSession.value.info?.access === 'read_write');
@@ -1340,7 +1340,7 @@ onBeforeUnmount(() => {
             <button
               class="icon-button"
               title="Refresh explorer"
-              @click="liveCatalog ? (liveSession?.status === 'connected' ? loadLiveCatalog() : notify('Connect this live profile to list its tables.', 'error')) : notify(isLive ? 'Live schema discovery is available for MySQL and MariaDB only; use SQL with known table names.' : 'Mock explorer refreshed from session metadata.')"
+              @click="liveCatalog ? (liveSession?.status === 'connected' ? loadLiveCatalog() : notify('Connect this live profile to list its tables.', 'error')) : notify(isLive ? 'Live schema discovery is available for MySQL, MariaDB and PostgreSQL; use SQL with known table names.' : 'Mock explorer refreshed from session metadata.')"
             >
               <RefreshCw :size="13" /></button
             ><button class="icon-button" title="Collapse sidebar" @click="sidebarHidden = true">
@@ -1406,7 +1406,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-if="!treeDatabases.length" class="tree-empty">No matching tables</div>
-          <p v-if="isLive && !liveCatalog" class="tree-empty">Schema discovery is available for MySQL and MariaDB only. Use SQL with known table names.</p>
+          <p v-if="isLive && !liveCatalog" class="tree-empty">Schema discovery is available for MySQL, MariaDB and PostgreSQL. Use SQL with known table names.</p>
           <p v-else-if="isLive && liveSession?.status !== 'connected'" class="tree-empty">Connect to list tables.</p>
           <p v-else-if="isLive && liveCatalogError[store.activeId]" class="tree-empty" role="alert">Tables could not be listed: {{ liveCatalogError[store.activeId] }}</p>
           <p v-else-if="isLive && w.liveCatalogTruncated" class="tree-empty">Only the first {{ w.databases[0]?.tables.length }} tables are listed (native result limit).</p>

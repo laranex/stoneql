@@ -405,6 +405,22 @@ mod tests {
         }
     }
     #[test]
+    fn accepts_the_renderer_postgresql_catalog_and_browse_statements() {
+        // Exact shapes from apps/frontend/src/services/liveSchema.ts (PostgreSQL).
+        for sql in [
+            r#"SELECT table_name AS name, table_type AS kind FROM information_schema.tables WHERE table_schema = current_schema ORDER BY table_name;"#,
+            r#"SELECT c.column_name AS name, c.data_type AS type, c.udt_name AS udt, c.character_maximum_length AS len, c.numeric_precision AS prec, c.numeric_scale AS scale, c.datetime_precision AS dprec, c.is_nullable AS nullable, c.column_default AS dflt, c.is_identity AS ident, (SELECT COUNT(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class r ON r.oid = i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid WHERE i.indisprimary AND n.nspname = c.table_schema AND r.relname = c.table_name AND a.attname = c.column_name AND CONCAT(' ', i.indkey, ' ') LIKE CONCAT('% ', a.attnum, ' %')) AS pk FROM information_schema.columns c WHERE c.table_schema = current_schema AND c.table_name = 'Mixed "Case" values' ORDER BY c.ordinal_position;"#,
+            r#"SELECT * FROM "Mixed ""Case"" values"
+WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("n")) LIKE '%5!_%' ESCAPE '!'
+ORDER BY "n" DESC NULLS LAST
+LIMIT 25 OFFSET 50;"#,
+            r#"SELECT COUNT(*) AS total FROM "Mixed ""Case"" values"
+WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("n")) LIKE '%5!_%' ESCAPE '!';"#,
+        ] {
+            assert!(validate_select(sql, Dialect::Postgres).is_ok(), "{sql}");
+        }
+    }
+    #[test]
     fn rejects_stacked_comments_locks_outfile_variables_and_unverified_functions() {
         for sql in [
             "SELECT 1; DELETE FROM users",

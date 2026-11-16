@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 // Simulated native bridge: a MySQL catalog with one table and one view, and a 40-row table whose
 // ids exceed JavaScript's safe integer range. Only read_only_query is ever used for browsing.
-for (const theme of ['light', 'dark'])
-  test(`${theme}: live MySQL catalog lists tables and browses server pages read-only`, async ({ page }) => {
-    await page.addInitScript((theme) => {
+for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreSQL', 'light']])
+  test(`${theme}: live ${engine} catalog lists tables and browses server pages read-only`, async ({ page }) => {
+    const postgres = engine === 'PostgreSQL';
+    await page.addInitScript(([theme, postgres]) => {
       localStorage.setItem('stoneql-theme', theme);
       const w = window as any;
       w.liveSql = [];
@@ -23,27 +24,30 @@ for (const theme of ['light', 'dark'])
         else if (command === 'read_only_query') {
           const sql: string = p.sql;
           w.liveSql.push(sql);
-          if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE'], ['active_accounts', 'VIEW']]);
+          if (/information_schema\.tables/i.test(sql)) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE'], ['active_accounts', 'VIEW']]);
+          else if (postgres && sql.includes('information_schema.columns')) payload = result(['name', 'type', 'udt', 'len', 'prec', 'scale', 'dprec', 'nullable', 'dflt', 'ident', 'pk'].map((n) => col(n)), [['id', 'bigint', 'int8', null, '64', '0', null, 'NO', null, 'YES', '1'], ['name', 'character varying', 'varchar', '40', null, null, null, 'YES', null, 'NO', '0']]);
           else if (sql.includes('information_schema.COLUMNS')) payload = result([col('name'), col('type'), col('nullable'), col('ckey'), col('dflt'), col('extra')], [['id', 'bigint(20) unsigned', 'NO', 'PRI', null, 'auto_increment'], ['name', 'varchar(40)', 'YES', '', null, '']]);
           else {
             const filter = /LIKE '%(.*?)%'/.exec(sql)?.[1];
             let matching = filter ? rows.filter((r) => (r[1] ?? '').includes(filter)) : rows;
-            if (/`id` DESC/.test(sql)) matching = [...matching].reverse();
+            if (/[`"]id[`"] DESC/.test(sql)) matching = [...matching].reverse();
             if (sql.startsWith('SELECT COUNT(*)') && filter === 'name 1') throw { code: 'DEADLINE_EXCEEDED' };
             if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [[String(matching.length)]]);
             else {
-              const [, offset, limit] = /LIMIT (\d+), (\d+);$/.exec(sql)!.map(Number);
+              const mysql = /LIMIT (\d+), (\d+);$/.exec(sql), pg = /LIMIT (\d+) OFFSET (\d+);$/.exec(sql);
+              const [offset, limit] = mysql ? [Number(mysql[1]), Number(mysql[2])] : [Number(pg![2]), Number(pg![1])];
               payload = result([col('id', 'BIGINT UNSIGNED'), col('name')], matching.slice(offset, offset + limit));
             }
           }
         } else throw { code: 'INVALID_REQUEST' };
         return { version: 1, requestId: request.requestId, payload };
       } } };
-    }, theme);
+    }, [theme, postgres] as const);
     await page.goto('/');
     await page.getByTitle('Manage connections', { exact: true }).click();
     await page.getByRole('button', { name: 'New connection', exact: true }).click();
     await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+    if (postgres) await page.getByLabel('Database engine', { exact: true }).selectOption('PostgreSQL');
     await page.getByPlaceholder('e.g. Local development').fill('Live catalog');
     await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
     await expect(page.locator('.footer-session')).toContainText('Live read-only · connected');
@@ -56,7 +60,7 @@ for (const theme of ['light', 'dark'])
     await expect(page.locator('.browse-content')).toContainText('(40 total · live, read-only)');
     await expect(page.locator('.browse-content .row-actions, .browse-content .check-cell')).toHaveCount(0);
     await expect(page.locator('.selection-toolbar')).toHaveCount(0);
-    await expect(page.locator('.sql-preview, .browse-content')).toContainText('ORDER BY `id` ASC\nLIMIT 0, 25;');
+    await expect(page.locator('.sql-preview, .browse-content')).toContainText(postgres ? 'ORDER BY "id" ASC\nLIMIT 25 OFFSET 0;' : 'ORDER BY `id` ASC\nLIMIT 0, 25;');
     await page.getByText('9007199254740993', { exact: true }).dblclick();
     await expect(page.locator('.cell-editor')).toHaveCount(0);
 
@@ -73,6 +77,6 @@ for (const theme of ['light', 'dark'])
 
     await page.getByRole('tab', { name: 'Structure', exact: true }).click();
     await expect(page.locator('.structure-grid tbody tr')).toHaveCount(2);
-    await expect(page.locator('.structure-grid')).toContainText('bigint(20) unsigned');
+    await expect(page.locator('.structure-grid')).toContainText(postgres ? 'character varying(40)' : 'bigint(20) unsigned');
     await expect(page.getByRole('button', { name: /Add column|Change|Drop/ })).toHaveCount(0);
   });

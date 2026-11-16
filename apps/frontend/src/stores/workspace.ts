@@ -243,7 +243,7 @@ export const useWorkspace = defineStore('workspace', () => {
   async function loadLiveTables(id:string) {
     const profile=connections.value.find(c=>c.id===id), ws=workspaces.value[id];
     if(!profile||!ws||!liveCatalogSupported(profile.engine))return false;
-    const result=await executeLive(id,liveTablesSql(profile.database));
+    const result=await executeLive(id,liveTablesSql(profile.engine,profile.database));
     const previous=new Map(ws.databases[0]?.tables.map(t=>[t.name,t])||[]);
     ws.databases=[{name:profile.database,tables:toLiveTables(result).map(t=>previous.get(t.name)?.kind===t.kind?{...t,columns:previous.get(t.name)!.columns}:t)}];
     ws.liveCatalogTruncated=!!result.truncated;
@@ -252,14 +252,14 @@ export const useWorkspace = defineStore('workspace', () => {
   async function loadLiveColumns(id:string,name:string) {
     const profile=connections.value.find(c=>c.id===id)!, table=workspaces.value[id]?.databases[0]?.tables.find(t=>t.name===name);
     if(!table)throw new Error(`Table ${name} is no longer in the loaded catalog. Refresh the explorer.`);
-    table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.database,name)),profile.engine);
+    table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.engine,profile.database,name)),profile.engine);
     if(!table.columns.length)throw new Error(`No columns are visible for ${name}; it may have been dropped or your account lacks privileges.`);
   }
   /** One server-side page plus the matching total; both are plain read-only SELECTs. */
   async function browseLive(id:string) {
     const ws=workspaces.value[id]!, table=ws.databases[0]?.tables.find(t=>t.name===ws.table);
     if(!table)throw new Error('Choose a table first.');
-    const plan=liveBrowseQuery({table:table.name,columns:table.columns,filter:ws.filter,sort:ws.sort,descending:ws.descending,offset:(ws.page-1)*ws.pageSize,limit:ws.pageSize});
+    const plan=liveBrowseQuery({engine:connections.value.find(c=>c.id===id)!.engine,table:table.name,columns:table.columns,filter:ws.filter,sort:ws.sort,descending:ws.descending,offset:(ws.page-1)*ws.pageSize,limit:ws.pageSize});
     const page=await executeLive(id,plan.sql);
     // The page is shown even when COUNT(*) fails (for example the native deadline on a large table).
     let total:number|null=null, totalError='';

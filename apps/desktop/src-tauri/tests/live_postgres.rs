@@ -383,6 +383,79 @@ fn postgres_commands_use_owned_tls_fixture() {
             {"kind":"null"}
         ])
     );
+    // M006: the renderer's PostgreSQL catalog and browse statements (liveSchema.ts) over verified
+    // TLS through the real handler, as the SELECT-only reader.
+    let text = |cell: &Value| -> String {
+        match cell["kind"].as_str().unwrap() {
+            "null" => String::new(),
+            "text" | "integer" => cell["text"].as_str().unwrap().to_owned(),
+            other => panic!("unexpected catalog cell {other}: {cell}"),
+        }
+    };
+    let tables = read(&first["handle"], r#"SELECT table_name AS name, table_type AS kind FROM information_schema.tables WHERE table_schema = current_schema ORDER BY table_name;"#).unwrap();
+    let listed: Vec<(String, String)> = tables["payload"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (text(&row[0]), text(&row[1])))
+        .collect();
+    assert!(
+        listed.contains(&("Mixed \"Case\" values".into(), "BASE TABLE".into())),
+        "{listed:?}"
+    );
+    assert!(
+        listed.contains(&("trust_view".into(), "VIEW".into())),
+        "{listed:?}"
+    );
+    let columns = read(&first["handle"], r#"SELECT c.column_name AS name, c.data_type AS type, c.udt_name AS udt, c.character_maximum_length AS len, c.numeric_precision AS prec, c.numeric_scale AS scale, c.datetime_precision AS dprec, c.is_nullable AS nullable, c.column_default AS dflt, c.is_identity AS ident, (SELECT COUNT(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class r ON r.oid = i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid WHERE i.indisprimary AND n.nspname = c.table_schema AND r.relname = c.table_name AND a.attname = c.column_name AND CONCAT(' ', i.indkey, ' ') LIKE CONCAT('% ', a.attnum, ' %')) AS pk FROM information_schema.columns c WHERE c.table_schema = current_schema AND c.table_name = 'Mixed "Case" values' ORDER BY c.ordinal_position;"#).unwrap();
+    let rows = columns["payload"]["rows"].as_array().unwrap();
+    let by_name = |name: &str| {
+        rows.iter()
+            .find(|row| text(&row[0]) == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    assert_eq!(
+        text(&by_name("id")[10]),
+        "1",
+        "primary key visible to the SELECT-only reader"
+    );
+    assert_eq!(text(&by_name("i8")[10]), "0");
+    assert_eq!(
+        (
+            text(&by_name("n")[1]),
+            text(&by_name("n")[4]),
+            text(&by_name("n")[5])
+        ),
+        ("numeric".into(), "38".into(), "4".into())
+    );
+    assert_eq!(
+        (text(&by_name("e")[1]), text(&by_name("e")[2])),
+        ("USER-DEFINED".into(), "fixture_mood".into())
+    );
+    assert_eq!(text(&by_name("d")[8]), "'fallback'::text");
+    assert_eq!(text(&by_name("Quoted \"Column\"")[0]), "Quoted \"Column\"");
+    let page = read(
+        &first["handle"],
+        r#"SELECT * FROM "Mixed ""Case"" values"
+WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("nn")) LIKE '%5!_%' ESCAPE '!'
+ORDER BY "nn" DESC NULLS LAST
+LIMIT 25 OFFSET 50;"#,
+    )
+    .unwrap();
+    assert!(page["payload"]["columns"].as_array().unwrap().len() >= 10);
+    let count = read(
+        &first["handle"],
+        r#"SELECT COUNT(*) AS total FROM "Mixed ""Case"" values"
+WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("nn")) LIKE '%5!_%' ESCAPE '!';"#,
+    )
+    .unwrap();
+    assert_eq!(count["payload"]["rows"][0][0]["kind"], "integer");
+    let all = read(
+        &first["handle"],
+        "SELECT * FROM \"Mixed \"\"Case\"\" values\"\nORDER BY \"id\" ASC\nLIMIT 25 OFFSET 0;",
+    )
+    .unwrap();
+    assert_eq!(all["payload"]["rows"].as_array().unwrap().len(), 2);
     let duplicates = read(&first["handle"], "SELECT 1 AS value, 2 AS value").unwrap();
     assert_eq!(duplicates["payload"]["columns"][1]["name"], "value");
     let many = read(&first["handle"], "SELECT a.n FROM big a CROSS JOIN big b").unwrap()["payload"]

@@ -7,14 +7,15 @@ const result = (labels: string[], rows: (string | null)[][]): SqlResult => {
   return { columns, columnLabels: Object.fromEntries(columns.map((c, i) => [c, labels[i]!])), rows: rows.map((r) => Object.fromEntries(columns.map((c, i) => [c, r[i]!]))) };
 };
 test('catalog SQL stays inside the native read-only subset and quotes names', () => {
-  for (const sql of [liveTablesSql("o'brien"), liveColumnsSql('shop', 'odd`name')]) {
+  for (const sql of [liveTablesSql('MySQL', "o'brien"), liveColumnsSql('MySQL', 'shop', 'odd`name')]) {
     assert.match(sql, /^SELECT /);
     assert.doesNotMatch(sql, /\\|DATABASE\(|CAST\(|;.+/);
   }
-  assert.ok(liveTablesSql("o'brien").includes("'o''brien'"));
-  assert.throws(() => liveTablesSql('a\\b'), /backslash/);
+  assert.ok(liveTablesSql('MySQL', "o'brien").includes("'o''brien'"));
+  assert.throws(() => liveTablesSql('MySQL', 'a\\b'), /backslash/);
   assert.equal(liveCatalogSupported('MySQL'), true);
-  assert.equal(liveCatalogSupported('PostgreSQL'), false);
+  assert.equal(liveCatalogSupported('PostgreSQL'), true);
+  assert.equal(liveCatalogSupported('SQLite'), false);
 });
 test('tables and columns keep the server spelling, keys, NULL and default distinctions', () => {
   assert.deepEqual(toLiveTables(result(['name', 'kind'], [['users', 'BASE TABLE'], ['v', 'VIEW']])).map((t) => [t.name, t.kind]), [['users', 'table'], ['v', 'view']]);
@@ -62,4 +63,34 @@ test('MySQL 8 binary-charset catalog cells decode as UTF-8 text (captured from M
   const tables = toLiveTables({ columns: [], rows: [], raw: { ...raw, columns: [{ name: 'name', databaseType: 'VARCHAR' }, { name: 'kind', databaseType: 'BINARY' }], rows: [[{ kind: 'text', text: 'v' }, { kind: 'binary', hex: '56494557' }]] } });
   assert.deepEqual(tables.map((t) => [t.name, t.kind]), [['v', 'view']]);
   assert.throws(() => catalogRows({ columns: [], rows: [], raw: { ...raw, columns: [{ name: 'x', databaseType: 'BLOB' }], rows: [[{ kind: 'binary', hex: 'ff' }]] } }), TypeError);
+});
+
+test('PostgreSQL catalog and browse SQL stay inside the read-only subset', () => {
+  const tables = liveTablesSql('PostgreSQL', 'ignored');
+  const columns = liveColumnsSql('PostgreSQL', 'ignored', "Mixed \"Case\" values");
+  for (const sql of [tables, columns]) {
+    assert.match(sql, /current_schema(?!\s*\()/, 'current_schema without parentheses');
+    assert.doesNotMatch(sql, /::|\bANY\s*\(|format_type|current_schema\s*\(/);
+  }
+  const plan = liveBrowseQuery({ engine: 'PostgreSQL', table: 'Mixed "Case" values', columns: [{ name: 'id', type: 'integer', nullable: false }, { name: 'n', type: 'numeric', nullable: true }], filter: '5_', sort: 'n', descending: true, offset: 50, limit: 25 });
+  assert.equal(plan.sql, `SELECT * FROM "Mixed ""Case"" values"\nWHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("n")) LIKE '%5!_%' ESCAPE '!'\nORDER BY "n" DESC NULLS LAST\nLIMIT 25 OFFSET 50;`);
+  assert.equal(plan.countSql, `SELECT COUNT(*) AS total FROM "Mixed ""Case"" values"\nWHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("n")) LIKE '%5!_%' ESCAPE '!';`);
+});
+test('PostgreSQL columns keep catalog spelling, keys, identity and expression defaults', () => {
+  const columns = toLiveColumns(result(['name', 'type', 'udt', 'len', 'prec', 'scale', 'dprec', 'nullable', 'dflt', 'ident', 'pk'], [
+    ['id', 'integer', 'int4', null, '32', '0', null, 'NO', "nextval('t_id_seq'::regclass)", 'NO', '1'],
+    ['name', 'character varying', 'varchar', '40', null, null, null, 'YES', null, 'NO', '0'],
+    ['amount', 'numeric', 'numeric', null, '38', '4', null, 'NO', "'0'::numeric", 'NO', '0'],
+    ['mood', 'USER-DEFINED', 'fixture_mood', null, null, null, null, 'YES', null, 'NO', '0'],
+    ['tags', 'ARRAY', '_text', null, null, null, null, 'YES', null, 'NO', '0'],
+    ['seq', 'bigint', 'int8', null, '64', '0', null, 'NO', null, 'YES', '0'],
+  ]), 'PostgreSQL');
+  assert.deepEqual(columns.map((c) => [c.name, c.type, c.primary, c.autoIncrement, c.defaultKind, c.default]), [
+    ['id', 'integer', true, true, 'custom', "nextval('t_id_seq'::regclass)"],
+    ['name', 'character varying(40)', false, false, 'null', undefined],
+    ['amount', 'numeric(38,4)', false, false, 'custom', "'0'::numeric"],
+    ['mood', 'fixture_mood', false, false, 'null', undefined],
+    ['tags', '_text', false, false, 'null', undefined],
+    ['seq', 'bigint', false, true, 'none', undefined],
+  ]);
 });
