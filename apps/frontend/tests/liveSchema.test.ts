@@ -111,3 +111,9 @@ test('indexes group per name in column order; PostgreSQL keeps the server defini
   const [hidden] = toLiveForeignKeys(result(['name', 'col', 'ref_table', 'ref_col', 'on_delete', 'on_update'], [['k', 'parent', 'p', 'id', null, null]]), 'MariaDB');
   assert.equal(hidden!.onDelete, RULE_NOT_VISIBLE);
 });
+test('schema statements are detected outside strings and comments', async () => {
+  const { ddlStatements } = await import('../src/services/liveSchema.ts');
+  assert.deepEqual(ddlStatements("create table t(id int); alter TABLE t add x int"), ['CREATE', 'ALTER']);
+  assert.deepEqual(ddlStatements("SELECT 'DROP TABLE x' AS a /* rename */ -- truncate\nFROM `create`"), []);
+  assert.deepEqual(ddlStatements('UPDATE t SET a = 1'), []);
+});

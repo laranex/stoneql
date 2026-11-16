@@ -252,3 +252,12 @@ export function toLiveForeignKeys(result: SqlResult, engine: Engine): LiveForeig
   }
   return [...keys.values()];
 }
+
+/**
+ * Schema-changing keywords in SQL text (strings and comments removed), used only to decide when
+ * the live catalog must be re-read. Not a security check: the server remains the authority.
+ */
+export function ddlStatements(sql: string): string[] {
+  const code = sql.replace(/'(?:[^'\\]|\\.|'')*'|"(?:[^"\\]|\\.)*"|`[^`]*`|--[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\//g, ' ');
+  return [...new Set((code.match(/\b(CREATE|ALTER|DROP|RENAME|TRUNCATE)\b/gi) || []).map((word) => word.toUpperCase()))];
+}

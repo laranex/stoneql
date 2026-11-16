@@ -10,6 +10,7 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
     const text = (value: string | null) => (value === null ? { kind: 'null' } : { kind: 'text', text: value });
     const result = (columns: any[], values: (string | null)[][]) => ({ index: 0, affectedRows: '0', truncated: false, columns, rows: values.map((r) => r.map(text)) });
     const rows = [['9007199254740993', 'Ada'], ['9007199254740994', null]];
+    const tables = [['accounts', 'BASE TABLE']];
     w.__TAURI__ = { core: { invoke: async (command: string, args: { message: string }) => {
       const request = JSON.parse(args.message), p = request.payload;
       let payload: any;
@@ -19,11 +20,11 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
       else if (command === 'connect_direct') payload = { handle: '00000000-0000-0000-0000-000000000009', engineVersion: 'MySQL fixture 8.4.6', database: p.database, expiresAfterSeconds: 3600, access: p.access ?? 'read_only' };
       else if (command === 'database_status') payload = { connected: true };
       else if (command === 'disconnect_database') payload = { connected: false };
-      else if (command === 'submit_job') { w.jobs.push(p.sql); payload = { jobId: `job_${w.jobs.length}`, statementCount: 1 }; }
+      else if (command === 'submit_job') { w.jobs.push(p.sql); if (/^CREATE TABLE audit_log/.test(p.sql)) tables.push(['audit_log', 'BASE TABLE']); payload = { jobId: `job_${w.jobs.length}`, statementCount: 1 }; }
       else if (command === 'fetch_job') payload = { jobId: p.jobId, state: 'finished', outcome: 'succeeded', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [{ index: 0, status: 'succeeded', inTransaction: false, affectedRows: w.affected, resultSets: 0, failure: null, resultsWithheld: false }], batch: null, lease: null, done: true };
       else if (command === 'read_only_query') {
         const sql: string = p.sql;
-        if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE']]);
+        if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], tables);
         else if (sql.includes('information_schema.COLUMNS')) payload = result(['name', 'type', 'nullable', 'ckey', 'dflt', 'extra'].map((n) => col(n)), [['id', 'bigint(20) unsigned', 'NO', 'PRI', null, 'auto_increment'], ['name', 'varchar(40)', 'YES', '', null, '']]);
         else if (sql.includes('STATISTICS') || sql.includes('KEY_COLUMN_USAGE')) payload = result([col('name')], []);
         else if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [[String(rows.length)]]);
@@ -77,4 +78,10 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await expect(page.getByText('1 row inserted.')).toBeVisible();
   expect((await jobs()).at(-1)).toBe('INSERT INTO `accounts` () VALUES ();');
   expect((await jobs()).length).toBe(5);
+
+  // Metadata invalidation: a schema statement run from the SQL tab re-reads the catalog.
+  await page.getByRole('tab', { name: 'SQL', exact: true }).click();
+  await page.locator('.cm-content').fill('CREATE TABLE audit_log (id INT PRIMARY KEY)');
+  await page.getByRole('button', { name: 'Run query', exact: true }).click();
+  await expect(page.locator('.table-tree button').filter({ hasText: /^audit_log/ })).toBeVisible();
 });

@@ -77,7 +77,7 @@ import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
-import { liveCatalogSupported } from './services/liveSchema';
+import { liveCatalogSupported, ddlStatements } from './services/liveSchema';
 import { liveEditBlocker, liveEditableColumn, liveUpdateSql, liveInsertSql, liveDeleteSql, liveMutationOutcome, type LiveValue } from './services/liveMutations';
 import { validateValue, choiceDefinition, hasColumnDefault } from './services/valueValidation';
 import { connectionColors, environments, environmentLabel } from './services/connectionPreferences';
@@ -321,6 +321,15 @@ watch(() => [store.activeId, liveCatalog.value, liveSession.value?.status, liveS
 }, { immediate: true });
 /** Live pages without a total (COUNT(*) failed) count what is known and allow one more page while pages are full. */
 const liveTotalKnown = computed(() => !isLive.value || liveBrowse.value.total !== null);
+/** Re-reads the live catalog and, if a table is still open, its columns and keys. */
+async function refreshLiveMetadata(profile: string) {
+  await loadLiveCatalog(profile);
+  const ws = store.workspaces[profile];
+  if (ws?.scope === 'table' && ws.table) {
+    try { await store.loadLiveColumns(profile, ws.table); } catch (error) { if (store.activeId === profile) notify((error as Error).message, 'error'); }
+    if (store.activeId === profile) void loadLiveBrowse();
+  }
+}
 const rowTotal = computed(() => !isLive.value ? filtered.value.length : liveBrowse.value.total ?? (w.value.page - 1) * store.pageSize + liveBrowse.value.rows.length);
 const pages = computed(() => liveTotalKnown.value ? Math.max(1, Math.ceil(rowTotal.value / store.pageSize)) : w.value.page + (liveBrowse.value.rows.length === store.pageSize ? 1 : 0));
 const browseNoticeVersion = ref(0);
@@ -585,13 +594,15 @@ const visibleTabs = computed(() => {
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
 });
+let tableChoice = 0;
 async function chooseTable(db: string, name: string) {
   if (await discard()) {
     if (isLive.value) {
-      const profile = store.activeId;
+      // Only the latest choice applies; a slower earlier column load cannot open its table.
+      const profile = store.activeId, ticket = ++tableChoice;
       try { await store.loadLiveColumns(profile, name); }
-      catch (error) { notify((error as Error).message, 'error'); return; }
-      if (store.activeId !== profile) return;
+      catch (error) { if (ticket === tableChoice) notify((error as Error).message, 'error'); return; }
+      if (store.activeId !== profile || ticket !== tableChoice) return;
     }
     store.selectTable(db, name);
     viewError.value='';
@@ -1046,6 +1057,9 @@ async function executeJob() {
     const notice = describeJob(job, job.statements.some((s) => s.inTransaction));
     q.error = notice.kind === 'success' ? '' : notice.text;
     ws.history.unshift({ sql: text, time: new Date().toLocaleTimeString(), status: job.outcome === 'succeeded' ? 'Success' : 'Error' });
+    // Metadata invalidation: schema statements that ran (even if a later one failed) make the
+    // loaded catalog stale; re-read it and the open table's columns.
+    if (ddlStatements(text).length && job.statements.some((s) => s.status !== 'not_run')) void refreshLiveMetadata(profileId);
   } catch (error) {
     q.error = (error as Error).message;
     ws.history.unshift({ sql: text, time: new Date().toLocaleTimeString(), status: 'Error' });
@@ -1068,6 +1082,7 @@ async function transaction(action: 'begin' | 'commit' | 'rollback') {
     if (action === 'begin') { await store.beginLiveTransaction(profileId); notify('Transaction started. Statements run in it until you commit or roll back.'); return; }
     if (action === 'commit' && !(await askConfirm({ title: 'Commit transaction?', acceptLabel: 'Commit', message: `Make this transaction's changes on “${store.connection.name}” permanent.` }))) return;
     const notice = describeTransactionEnd(await store.endLiveTransaction(profileId, action), action);
+    if (store.connection.mode === 'live') void refreshLiveMetadata(profileId);
     notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
   } catch (error) { notify((error as Error).message, 'error'); }
 }
