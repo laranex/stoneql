@@ -470,7 +470,7 @@ async function editCell(row: Row, column: string, event?: MouseEvent | KeyboardE
     placeCellEditor();
     document
       .getElementById('inline-cell-editor')
-      ?.querySelector<HTMLElement>('select:enabled,textarea:enabled,input:not([type=checkbox]):enabled')
+      ?.querySelector<HTMLElement>('.set-choices input:enabled,select:enabled,textarea:enabled,input:not([type=checkbox]):enabled')
       ?.focus();
   });
 }

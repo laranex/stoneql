@@ -24,29 +24,51 @@ const unknown = computed(() =>
       ? [props.modelValue]
       : [],
 );
-function change(event: Event) {
-  const select = event.target as HTMLSelectElement;
+/** SET members in schema order, then saved members the current schema no longer lists. */
+const members = computed(() => [...(definition.value?.values ?? []), ...unknown.value]);
+function choose(event: Event) {
+  emit('update:modelValue', (event.target as HTMLSelectElement).value);
+}
+/** Toggles one SET member; the value stays comma-separated in member order. */
+function toggle(member: string, checked: boolean) {
   emit(
     'update:modelValue',
-    definition.value?.kind === 'set'
-      ? Array.from(select.selectedOptions)
-          .map((o) => o.value)
-          .join(',')
-      : select.value,
+    members.value
+      .filter((value) => (value === member ? checked : selected.value.includes(value)))
+      .join(','),
   );
 }
 </script>
 <template>
+  <div
+    v-if="definition?.kind === 'set'"
+    class="set-choices"
+    role="group"
+    :aria-label="label"
+    :aria-invalid="invalid || undefined"
+    :aria-describedby="describedby"
+    :class="{ disabled }"
+  >
+    <label v-for="member in members" :key="member" class="compact-choice">
+      <input
+        type="checkbox"
+        :checked="selected.includes(member)"
+        :disabled="disabled"
+        @change="toggle(member, ($event.target as HTMLInputElement).checked)"
+      />
+      <span>{{ member === '' ? '(empty member)' : member }}</span>
+      <span v-if="unknown.includes(member)" class="muted">(not in current schema)</span>
+    </label>
+    <span v-if="!members.length" class="muted">No SET members in the schema</span>
+  </div>
   <select
-    :value="definition?.kind === 'set' ? selected : modelValue"
-    :multiple="definition?.kind === 'set'"
-    :size="definition?.kind === 'set' ? Math.max(2, Math.min(8, definition.values.length + unknown.length)) : undefined"
+    v-else
+    :value="modelValue"
     :aria-label="label"
     :disabled="disabled"
     :aria-invalid="invalid || undefined"
     :aria-describedby="describedby"
-    :class="{ 'set-select': definition?.kind === 'set' }"
-    @change="change"
+    @change="choose"
   >
     <option v-if="definition?.kind === 'enum' && !definition.values.includes('')" value="" disabled>
       Choose a value
