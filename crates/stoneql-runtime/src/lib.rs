@@ -6,6 +6,7 @@ mod read_only;
 mod script;
 mod sqlite;
 mod ssh;
+mod transfer;
 pub use execution::{
     Access, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, OutcomeId,
     TransactionEnd, mysql_state_matches, postgres_commit, postgres_state_matches,
@@ -28,6 +29,10 @@ use stoneql_core::Engine;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore, oneshot},
     time::Instant,
+};
+pub use transfer::{
+    ExportFormat, ExportProgress, ExportRequest, ExportSummary, SQL_BATCH_ROWS, TransferError,
+    quote_identifier, string_literal,
 };
 use uuid::Uuid;
 

@@ -1,0 +1,57 @@
+[
+ {
+  "value": "",
+  "mysql": "_utf8mb4 X''",
+  "postgresql": "E''"
+ },
+ {
+  "value": "plain",
+  "mysql": "_utf8mb4 X'706c61696e'",
+  "postgresql": "E'plain'"
+ },
+ {
+  "value": "O'Brien",
+  "mysql": "_utf8mb4 X'4f27427269656e'",
+  "postgresql": "E'O''Brien'"
+ },
+ {
+  "value": "back\\slash",
+  "mysql": "_utf8mb4 X'6261636b5c736c617368'",
+  "postgresql": "E'back\\\\slash'"
+ },
+ {
+  "value": "é ✓ 漢字 😀",
+  "mysql": "_utf8mb4 X'c3a920e29c9320e6bca2e5ad9720f09f9880'",
+  "postgresql": "E'é ✓ 漢字 😀'"
+ },
+ {
+  "value": "line\nbreak",
+  "mysql": "_utf8mb4 X'6c696e650a627265616b'",
+  "postgresql": "E'line\nbreak'"
+ },
+ {
+  "value": "tab\tchar",
+  "mysql": "_utf8mb4 X'7461620963686172'",
+  "postgresql": "E'tab\tchar'"
+ },
+ {
+  "value": "NULL",
+  "mysql": "_utf8mb4 X'4e554c4c'",
+  "postgresql": "E'NULL'"
+ },
+ {
+  "value": "18446744073709551615",
+  "mysql": "_utf8mb4 X'3138343436373434303733373039353531363135'",
+  "postgresql": "E'18446744073709551615'"
+ },
+ {
+  "value": "0000-00-00",
+  "mysql": "_utf8mb4 X'303030302d30302d3030'",
+  "postgresql": "E'0000-00-00'"
+ },
+ {
+  "value": "-0.0001",
+  "mysql": "_utf8mb4 X'2d302e30303031'",
+  "postgresql": "E'-0.0001'"
+ }
+]

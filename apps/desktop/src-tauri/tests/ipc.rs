@@ -546,7 +546,7 @@ fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
     let commands = registered_commands();
-    assert_eq!(commands.len(), 24, "{commands:?}");
+    assert_eq!(commands.len(), 28, "{commands:?}");
     for command in &commands {
         let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
         assert!(
@@ -955,4 +955,122 @@ fn host_key_trust_is_native_and_bound_to_scans() {
         call("ssh_host_key_status", json!({"host":"two words","port":22})).unwrap_err()["code"],
         "INVALID_REQUEST"
     );
+}
+
+/// Host-key and transfer commands refuse forged sessions with otherwise valid payloads.
+#[test]
+fn host_key_and_transfer_commands_refuse_forged_sessions() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    bootstrap(&main);
+    for (command, payload) in [
+        (
+            "ssh_host_key_status",
+            json!({"host":"bastion.internal","port":22}),
+        ),
+        (
+            "trust_ssh_host_key",
+            json!({"host":"bastion.internal","port":22,"fingerprint":"SHA256:x"}),
+        ),
+        (
+            "forget_ssh_host_key",
+            json!({"host":"bastion.internal","port":22}),
+        ),
+        (
+            "pick_export_file",
+            json!({"suggestedName":"t.sql","format":"sql"}),
+        ),
+        (
+            "start_export",
+            json!({"handle":"00000000-0000-4000-8000-000000000000","grant":"g","table":"t","format":"sql","structure":false,"data":true}),
+        ),
+        ("export_status", json!({"transferId":"t"})),
+        ("cancel_export", json!({"transferId":"t"})),
+    ] {
+        let mut payload = payload;
+        payload["sessionId"] = json!("forged_session");
+        let error = invoke(
+            &main,
+            command,
+            json!({"version":1,"requestId":"forged","payload":payload}),
+            "tauri://localhost",
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "FORBIDDEN", "{command}: {error}");
+    }
+}
+/// M007 d1: destination grants are native, one-shot and refuse symlinks, dot files and missing
+/// directories; an unknown or used grant starts nothing and creates no file.
+#[test]
+fn export_grants_are_native_one_shot_and_refuse_unsafe_destinations() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    let session = bootstrap(&main).payload.session_id;
+    let dir = std::env::temp_dir().join(format!("stoneql-export-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    std::fs::write(dir.join("target.txt"), "x").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(dir.join("target.txt"), dir.join("link.sql")).unwrap();
+    let authorize =
+        |path: std::path::PathBuf| stoneql_desktop::authorize_export_file(app.handle(), &path);
+    #[cfg(unix)]
+    assert!(
+        authorize(dir.join("link.sql")).is_err(),
+        "symlink destination"
+    );
+    assert!(authorize(dir.join(".hidden.sql")).is_err(), "dot file");
+    assert!(
+        authorize(dir.join("missing").join("x.sql")).is_err(),
+        "missing directory"
+    );
+    let grant = authorize(dir.join("out.sql")).unwrap();
+    assert_eq!(grant.file_name.as_deref(), Some("out.sql"));
+    let start = |grant: &str| {
+        invoke(
+            &main,
+            "start_export",
+            json!({"version":1,"requestId":"start","payload":{"sessionId":session,"handle":"00000000-0000-4000-8000-000000000000","grant":grant,"table":"t","format":"sql","structure":false,"data":true}}),
+            "tauri://localhost",
+        )
+    };
+    assert_eq!(start("unknown_grant").unwrap_err()["code"], "FORBIDDEN");
+    // A valid grant on an unknown handle: the export task fails; no destination or temp file.
+    let accepted = start(grant.grant.as_deref().unwrap()).unwrap();
+    let id = accepted["payload"]["transferId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut status = Value::Null;
+    for _ in 0..100 {
+        status = invoke(
+            &main,
+            "export_status",
+            json!({"version":1,"requestId":"s","payload":{"sessionId":session,"transferId":id}}),
+            "tauri://localhost",
+        )
+        .unwrap()["payload"]
+            .clone();
+        if status["state"] != "running" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(status["state"], "failed", "{status}");
+    assert_eq!(status["error"], "FORBIDDEN");
+    assert_eq!(
+        start(grant.grant.as_deref().unwrap()).unwrap_err()["code"],
+        "FORBIDDEN",
+        "one-shot"
+    );
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    assert!(
+        !names.iter().any(|n| n == "out.sql" || n.ends_with(".part")),
+        "{names:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -140,6 +140,8 @@ CREATE TABLE raw_large(payload LONGBLOB);
 INSERT INTO raw_large VALUES(REPEAT('x',3145728));
 CREATE TABLE raw_values(id INT PRIMARY KEY, s BIGINT, u BIGINT UNSIGNED, d DECIMAL(38,4), b VARBINARY(4), dt DATETIME(6), zd DATE, zt DATETIME, tm TIME(6), e ENUM('active','suspended'), txt VARCHAR(20), n VARCHAR(20));
 INSERT INTO raw_values VALUES (1,-9223372036854775808,18446744073709551615,123456789012345678901234567890.4500,0x00ff0180,'2024-02-29 12:34:56.123456','0000-00-00','0000-00-00 00:00:00','-26:03:04.123456','active','',NULL),(2,0,0,0,x'','2024-01-01','2024-01-01','2024-01-01','00:00:00','suspended','active',NULL);
+CREATE TABLE export_values(id BIGINT UNSIGNED PRIMARY KEY, t VARCHAR(64) NULL, d DECIMAL(38,4) NULL, dt DATETIME(6) NULL, zd DATE NULL, e ENUM('a','b c') NULL, s SET('x','y') NULL, j JSON NULL, f DOUBLE NULL) CHARACTER SET utf8mb4;
+INSERT INTO export_values VALUES (18446744073709551615, CONCAT('quote " comma , newline', CHAR(10), 'end'), 123456789012345678901234567890.4500, '2024-02-29 12:34:56.123456', '0000-00-00', 'b c', 'x,y', '{"a": [1, "é"]}', 0.1), (1, '', NULL, NULL, NULL, NULL, '', NULL, -0.0), (2, 'NULL', -0.0001, '1000-01-01 00:00:00', '2024-01-01', 'a', 'x', 'null', 1e300), (3, NULL, 0, '2024-01-01', '2024-01-01', 'a', NULL, '[]', NULL), (4, CONCAT('tab', CHAR(9), 'back', CHAR(92), 'slash é ✓ 😀'), 1, '2024-01-01', '2024-01-01', 'a', 'y', '"s"', -1.5);
 CREATE TABLE fk_child(id INT PRIMARY KEY, parent INT, KEY fk_parent_idx (parent), CONSTRAINT fk_child_parent FOREIGN KEY (parent) REFERENCES raw_values(id) ON DELETE CASCADE) ENGINE=InnoDB;
 CREATE TABLE trust_innodb(id INT PRIMARY KEY, touches INT NOT NULL) ENGINE=InnoDB;
 CREATE TABLE trust_myisam(id INT PRIMARY KEY, touches INT NOT NULL) ENGINE=MyISAM;
@@ -190,6 +192,9 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
       });
       Object.assign(env, { STONEQL_RELAY_PORT: String(ports.relayPort), STONEQL_RELAY_CONTROL: String(ports.controlPort) });
     }
+    // M007: the native test exports here; the files are restored below with the server's client.
+    const exports = join(temp, 'exports');
+    if (nativeEvaluation) { mkdirSync(exports); env.STONEQL_EXPORT_DIR = exports; }
     const binary = executionEvaluation ? 'target/debug/examples/execution' : resourceEvaluation ? 'target/debug/examples/resources' : nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
     const measured = resourceEvaluation ? spawnSync('/usr/bin/time',[process.platform==='darwin'?'-l':'-v',resolve(root,binary)],{cwd:root,env,encoding:'utf8',timeout:240000}) : null;
     if(measured && (measured.status!==0||measured.error))throw Error('Resource fixture execution failed; credentials and raw errors withheld');
@@ -197,6 +202,36 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     const report = JSON.parse(nativeEvaluation ? result.split('\n').find(line=>line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null' : result);
     if(!report)throw Error('Fixture report missing');
     if(measured){report.processMaxRssBytes=parseMaximumRss(measured.stderr,process.platform);report.machine={platform:process.platform,arch:arch(),osRelease:release(),cpu:cpus()[0]?.model,logicalCpus:cpus().length,totalMemoryBytes:totalmem()};}
+    if (nativeEvaluation) {
+      // Independent read-back (G6): load both exports with the server's own client into scratch
+      // databases and compare every column NULL-safely and byte-exactly with the source rows.
+      const client = engine === 'mysql' ? 'mysql' : 'mariadb', password = engine === 'mysql' ? 'MYSQL_ROOT_PASSWORD' : 'MARIADB_ROOT_PASSWORD';
+      const dir = engine === 'mysql' ? '/var/lib/mysql-files' : '/tmp';
+      // Exports are written 0600; the copies inside the disposable container are made readable
+      // for the server process (LOAD DATA reads the file server-side).
+      for (const name of ['export_values.sql', 'export_values.csv']) {
+        run('docker', [...args, 'cp', join(exports, name), `${engine}:${dir}/${name}`], env);
+        run('docker', [...args, 'exec', '-T', '-u', 'root', engine, 'chmod', '0644', `${dir}/${name}`], env);
+      }
+      const columns = ['t', 'd', 'dt', 'zd', 'e', 's', 'j', 'f'];
+      const same = (db) => `SELECT (SELECT COUNT(*) FROM ${db}.export_values), (SELECT COUNT(*) FROM stoneql_m001_fixture.export_values a JOIN ${db}.export_values b USING (id) WHERE ${columns.map((c) => `BINARY a.${c} <=> BINARY b.${c}`).join(' AND ')});`;
+      writeFileSync(join(temp, 'restore.sql'), [
+        "SET SESSION sql_mode = '';",
+        `CREATE DATABASE restore_sql; USE restore_sql; SOURCE ${dir}/export_values.sql;`,
+        'CREATE DATABASE restore_csv; CREATE TABLE restore_csv.export_values LIKE stoneql_m001_fixture.export_values;',
+        `LOAD DATA INFILE '${dir}/export_values.csv' INTO TABLE restore_csv.export_values CHARACTER SET utf8mb4 FIELDS TERMINATED BY ',' ENCLOSED BY '"' ESCAPED BY '' LINES TERMINATED BY '\\n' IGNORE 1 LINES;`,
+        same('restore_sql'),
+        same('restore_csv'),
+      ].join('\n') + '\n');
+      run('docker', [...args, 'cp', join(temp, 'restore.sql'), `${engine}:/tmp/restore.sql`], env);
+      const command = 'MYSQL_PWD="$' + password + '" exec ' + client + ' -uroot -N < /tmp/restore.sql';
+      const loaded = spawnSync('docker', [...args, 'exec', '-T', engine, 'sh', '-c', command], { env, encoding: 'utf8', timeout: 120_000 });
+      // Only the client's own ERROR lines are shown (SQL errors; never credentials).
+      if (loaded.status !== 0) throw Error(`${engine}: restore failed: ${loaded.stderr.split('\n').filter((line) => line.startsWith('ERROR')).join(' ')}`);
+      const restored = loaded.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/));
+      report.exportRestore = { sql: restored[0], csv: restored[1] };
+      if (JSON.stringify(restored) !== JSON.stringify([['5', '5'], ['5', '5']])) throw Error(`${engine}: exported files did not restore exactly: ${JSON.stringify(restored)}`);
+    }
     writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
     console.log(executionEvaluation ? `${engine}: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)` : resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
     if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation && !executionEvaluation) {

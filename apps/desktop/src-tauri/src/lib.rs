@@ -4,6 +4,7 @@ mod host_keys;
 mod secrets;
 mod sqlite_file;
 mod ssh_transport;
+mod transfer;
 use database::{connect_direct, database_status, disconnect_database, read_only_query};
 use execution::{
     acknowledge_outcome, begin_transaction, cancel_job, end_transaction, fetch_job,
@@ -34,6 +35,8 @@ use stoneql_contracts::v1::{
 use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+pub use transfer::authorize_export_file;
+use transfer::{cancel_export, export_status, pick_export_file, start_export};
 
 /// M006 gate for unrestricted read-write SQL (jobs and transactions). OFF until the critical
 /// execution safety tests pass and the user approves enabling it. While off, the host refuses
@@ -89,6 +92,8 @@ pub struct NativeSession {
     /// enrollment: at most 16, 5 minutes each, cleared on renderer reset and shutdown.
     pending_host_keys:
         Mutex<std::collections::HashMap<(String, u16), (stoneql_runtime::HostKey, Instant)>>,
+    /// M007 export grants and transfer records of the current renderer session.
+    transfers: transfer::Transfers,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
@@ -130,6 +135,7 @@ impl NativeSession {
             .lock()
             .expect("pending host keys lock")
             .clear();
+        self.transfers.reset();
         self.echoed.store(false, Ordering::SeqCst);
         self.close_pending.store(false, Ordering::SeqCst);
         self.close_prompted.store(false, Ordering::SeqCst);
@@ -176,6 +182,7 @@ impl NativeSession {
                 .map(std::sync::OnceLock::from)
                 .unwrap_or_default(),
             pending_host_keys: Mutex::new(std::collections::HashMap::new()),
+            transfers: transfer::Transfers::default(),
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
@@ -317,6 +324,7 @@ fn shutdown_and_exit<R: Runtime>(app: &tauri::AppHandle<R>) {
         .lock()
         .expect("pending host keys lock")
         .clear();
+    state.transfers.reset();
     let connections = state.connections.clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -527,6 +535,10 @@ pub fn app_builder_with<R: Runtime>(
             forget_ssh_host_key,
             store_secret,
             delete_secret,
+            pick_export_file,
+            start_export,
+            export_status,
+            cancel_export,
             submit_job,
             fetch_job,
             cancel_job,

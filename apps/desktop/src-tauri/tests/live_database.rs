@@ -206,7 +206,63 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     // MySQL shows the rule to the SELECT-only reader; MariaDB hides REFERENTIAL_CONSTRAINTS
     // (the LEFT JOIN keeps the key and the renderer says the rule is not visible).
     let rule = catalog_text(&key[4]);
-    assert!(rule == "CASCADE" || (engine == "mariadb" && rule.is_empty()), "{engine}: {rule}");
+    assert!(
+        rule == "CASCADE" || (engine == "mariadb" && rule.is_empty()),
+        "{engine}: {rule}"
+    );
+    // M007: streaming exports into native grants; the runner restores them independently.
+    let exports = std::path::PathBuf::from(std::env::var("STONEQL_EXPORT_DIR").unwrap());
+    let export = |table: &str, name: &str, format: &str, structure: bool| -> Value {
+        let grant = stoneql_desktop::authorize_export_file(app.handle(), &exports.join(name))
+            .unwrap()
+            .grant
+            .unwrap();
+        let accepted = invoke(
+            "start_export",
+            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"table":table,"format":format,"structure":structure,"data":true}),
+        )
+        .unwrap();
+        let id = accepted["payload"]["transferId"].clone();
+        for _ in 0..600 {
+            let status = invoke(
+                "export_status",
+                json!({"sessionId":session,"transferId":id}),
+            )
+            .unwrap()["payload"]
+                .clone();
+            if status["state"] != "running" {
+                return status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("export did not finish");
+    };
+    let sql = export("export_values", "export_values.sql", "sql", true);
+    assert_eq!(
+        (sql["state"].as_str(), sql["rows"].as_str()),
+        (Some("succeeded"), Some("5")),
+        "{sql}"
+    );
+    let csv = export("export_values", "export_values.csv", "csv", false);
+    assert_eq!(
+        (csv["state"].as_str(), csv["rows"].as_str()),
+        (Some("succeeded"), Some("5")),
+        "{csv}"
+    );
+    // Binary data has no exact CSV form: refused, naming the column, and nothing is left behind.
+    let binary = export("raw_values", "raw_values.csv", "csv", false);
+    assert_eq!(binary["state"], "failed", "{binary}");
+    assert_eq!(binary["error"], "UNSUPPORTED_CAPABILITY");
+    assert!(
+        binary["detail"].as_str().unwrap().contains("column b"),
+        "{binary}"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(&exports)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.starts_with("raw_values") || name.ends_with(".part"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
     let duplicates = read(
         &first["handle"],
         "SELECT s AS value,u AS value FROM raw_values ORDER BY id",

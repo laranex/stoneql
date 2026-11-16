@@ -76,7 +76,7 @@ pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
     })
     .into()
 }
-fn query_error(error: ReadError) -> ErrorDto {
+pub(crate) fn query_error(error: ReadError) -> ErrorDto {
     if let ReadError::Connection(error) = error {
         return lifecycle(error);
     }

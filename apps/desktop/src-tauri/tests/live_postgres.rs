@@ -482,6 +482,60 @@ WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("nn")) LIKE '%
             ("fk_child_pair".into(), "fk_parent".into(), "n".into())
         );
     }
+    // M007: streaming exports into native grants; the runner restores them with psql.
+    let exports = std::path::PathBuf::from(std::env::var("STONEQL_EXPORT_DIR").unwrap());
+    let export = |table: &str, name: &str, format: &str, structure: bool| -> Value {
+        let grant = stoneql_desktop::authorize_export_file(app.handle(), &exports.join(name))
+            .unwrap()
+            .grant
+            .unwrap();
+        let accepted = invoke(
+            "start_export",
+            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"table":table,"format":format,"structure":structure,"data":true}),
+        )
+        .unwrap();
+        let id = accepted["payload"]["transferId"].clone();
+        for _ in 0..600 {
+            let status = invoke(
+                "export_status",
+                json!({"sessionId":session,"transferId":id}),
+            )
+            .unwrap()["payload"]
+                .clone();
+            if status["state"] != "running" {
+                return status;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("export did not finish");
+    };
+    for (name, format) in [("export_values.sql", "sql"), ("export_values.csv", "csv")] {
+        let status = export("export_values", name, format, false);
+        assert_eq!(
+            (status["state"].as_str(), status["rows"].as_str()),
+            (Some("succeeded"), Some("5")),
+            "{status}"
+        );
+    }
+    // Explicit refusals, naming the reason; nothing is left behind.
+    let structure = export("export_values", "structure.sql", "sql", true);
+    assert_eq!(structure["error"], "UNSUPPORTED_CAPABILITY", "{structure}");
+    let binary = export("Mixed \"Case\" values", "mixed.csv", "csv", false);
+    assert!(
+        binary["detail"].as_str().unwrap().contains("column b"),
+        "{binary}"
+    );
+    let unknown = export("Mixed \"Case\" values", "mixed.sql", "sql", false);
+    assert!(
+        unknown["detail"].as_str().unwrap().contains("column ip"),
+        "{unknown}"
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(&exports)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.starts_with("export_values."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
     let duplicates = read(&first["handle"], "SELECT 1 AS value, 2 AS value").unwrap();
     assert_eq!(duplicates["payload"]["columns"][1]["name"], "value");
     let many = read(&first["handle"], "SELECT a.n FROM big a CROSS JOIN big b").unwrap()["payload"]

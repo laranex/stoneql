@@ -490,6 +490,74 @@ pub struct SshTrustedHostKey {
 pub struct SshHostKeyStatus {
     pub trusted: Option<SshTrustedHostKey>,
 }
+/// M007 transfer formats (alpha slice). GZIP, JSON and XLSX are not offered (D008 unapproved).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferFormatDto {
+    Csv,
+    Sql,
+}
+/// Asks the host to show its native save dialog. The renderer suggests a file name only; the
+/// chosen path never crosses IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFileRequest {
+    pub session_id: String,
+    pub suggested_name: String,
+    pub format: TransferFormatDto,
+}
+/// One-shot, session-scoped destination grant; `fileName` is display-only. `None` = cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportFileGrant {
+    pub grant: Option<String>,
+    pub file_name: Option<String>,
+}
+/// Streams one table of a live handle into a granted destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct StartExportRequest {
+    pub session_id: String,
+    pub handle: String,
+    pub grant: String,
+    pub table: String,
+    pub format: TransferFormatDto,
+    pub structure: bool,
+    pub data: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferAccepted {
+    pub transfer_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferRequest {
+    pub session_id: String,
+    pub transfer_id: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStateDto {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+/// Rows/bytes are decimal strings (no JS number precision limit). On success the destination
+/// holds the complete file; otherwise no file was created or replaced and the temporary file is
+/// removed. `detail` is StoneQL's own text (for example the column that cannot be exported).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferStatus {
+    pub transfer_id: String,
+    pub state: TransferStateDto,
+    pub rows: String,
+    pub bytes: String,
+    pub file_name: String,
+    pub error: Option<ErrorCodeDto>,
+    pub detail: Option<String>,
+}
 /// Asks the trusted host to show its native SSH private-key picker. Carries no path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -887,6 +955,14 @@ pub fn typescript() -> String {
         SshHostKeyTrustRequest::decl(&config),
         SshTrustedHostKey::decl(&config),
         SshHostKeyStatus::decl(&config),
+        TransferFormatDto::decl(&config),
+        ExportFileRequest::decl(&config),
+        ExportFileGrant::decl(&config),
+        StartExportRequest::decl(&config),
+        TransferAccepted::decl(&config),
+        TransferRequest::decl(&config),
+        TransferStateDto::decl(&config),
+        TransferStatus::decl(&config),
         SshKeyFileRequest::decl(&config),
         SshKeyFileGrant::decl(&config),
         CancelConnectRequest::decl(&config),

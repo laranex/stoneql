@@ -102,6 +102,8 @@ CREATE SEQUENCE trust_seq;
 CREATE VIEW trust_sequence_view AS SELECT nextval('trust_seq') AS value;
 CREATE VIEW trust_lock_view AS SELECT pg_try_advisory_lock(4242) AS acquired;
 CREATE VIEW slow_view AS SELECT (SELECT 1 FROM pg_sleep(10)) AS slept;
+CREATE TABLE export_values(id bigint PRIMARY KEY, t text, n numeric(38,4), nn numeric, ts timestamp(6), tz timestamptz, e fixture_mood, j jsonb, f double precision, flag boolean, u uuid);
+INSERT INTO export_values VALUES (9223372036854775807, 'quote " comma , newline' || chr(10) || 'end', 123456789012345678901234567890.4500, 'NaN', '2024-02-29 12:34:56.123456', '2024-02-29 12:34:56.123456+05:30', 'unknown label', '{"a":[1,"é"]}', 0.1, true, 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'), (1, '', NULL, NULL, 'infinity', '-infinity', NULL, NULL, '-0', false, NULL), (2, 'NULL', -0.0001, '1e-20', NULL, NULL, 'active', 'null', 'Infinity', NULL, NULL), (3, NULL, 0, 0, NULL, NULL, NULL, '[]', 'NaN', NULL, NULL), (4, 'tab' || chr(9) || 'back' || chr(92) || 'slash é ✓ 😀', 1, 1, NULL, NULL, NULL, '"s"', -1.5, NULL, NULL);
 CREATE TABLE fk_parent(a int, b int, PRIMARY KEY (a, b));
 CREATE TABLE fk_child(id int PRIMARY KEY, x int, y int, CONSTRAINT fk_child_pair FOREIGN KEY (x, y) REFERENCES fk_parent(a, b) ON DELETE SET NULL);
 CREATE UNIQUE INDEX fk_child_xy ON fk_child (x, y);
@@ -176,10 +178,34 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
     writeFileSync(join(output, 'resource-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
     console.log(`postgresql: resource and metadata profile passed (p95 ${(report.p95Us / 1000).toFixed(3)} ms, max RSS ${(report.processMaxRssBytes / 1048576).toFixed(3)} MiB)`);
   } else {
+    const exports = join(temp, 'exports');
+    mkdirSync(exports);
+    env.STONEQL_EXPORT_DIR = exports;
     const result = run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
     const report = JSON.parse(result.split('\n').find(line => line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null');
     if (!report) throw Error('Fixture report missing');
     report.image = image;
+    // Independent read-back (G6): psql loads both exports into scratch schemas; rows are compared
+    // with EXCEPT in both directions (NULL-safe, exact values).
+    for (const name of ['export_values.sql', 'export_values.csv']) run('docker', [...args, 'cp', join(exports, name), `postgresql:/tmp/${name}`], env);
+    const differ = (schema) => `SELECT (SELECT count(*) FROM ${schema}.export_values) || ' ' || (SELECT count(*) FROM ((SELECT * FROM public.export_values EXCEPT SELECT * FROM ${schema}.export_values) UNION ALL (SELECT * FROM ${schema}.export_values EXCEPT SELECT * FROM public.export_values)) d);`;
+    writeFileSync(join(temp, 'restore.sql'), [
+      'CREATE SCHEMA restore_sql; CREATE TABLE restore_sql.export_values (LIKE public.export_values);',
+      'SET search_path = restore_sql, public;',
+      '\\i /tmp/export_values.sql',
+      'RESET search_path;',
+      'CREATE SCHEMA restore_csv; CREATE TABLE restore_csv.export_values (LIKE public.export_values);',
+      "\\copy restore_csv.export_values FROM '/tmp/export_values.csv' WITH (FORMAT csv, HEADER true, NULL 'NULL')",
+      differ('restore_sql'),
+      differ('restore_csv'),
+    ].join('\n') + '\n');
+    run('docker', [...args, 'cp', join(temp, 'restore.sql'), 'postgresql:/tmp/restore.sql'], env);
+    const loaded = spawnSync('docker', [...args, 'exec', '-T', 'postgresql', 'psql', '-v', 'ON_ERROR_STOP=1', '-q', '-tA', '-U', 'stoneql_fixture', '-d', 'stoneql_m001_fixture', '-f', '/tmp/restore.sql'], { env, encoding: 'utf8', timeout: 120_000 });
+    // Only psql's own ERROR lines are shown (SQL errors; never credentials).
+    if (loaded.status !== 0) throw Error(`postgresql: restore failed: ${loaded.stderr.split('\n').filter((line) => line.includes('ERROR')).join(' ')}`);
+    const restored = loaded.stdout.trim().split('\n').filter((line) => /^\d+ \d+$/.test(line));
+    report.exportRestore = { sql: restored[0], csv: restored[1] };
+    if (JSON.stringify(restored) !== JSON.stringify(['5 0', '5 0'])) throw Error(`postgresql: exported files did not restore exactly: ${JSON.stringify(restored)}`);
     writeFileSync(join(output, 'native-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
     console.log(`postgresql: real database IPC checks passed (${report.lifecycleSamples} TLS lifecycle samples)`);
   }
