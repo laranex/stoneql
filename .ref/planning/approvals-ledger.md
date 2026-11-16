@@ -9,6 +9,7 @@ User decisions recorded in this run:
   code and regressions but receives no new work; its criteria are out of scope. Platform stays
   macOS only (D021). No OS change was stated.
 - 2026-11-16 — Constraints carried over: no keyboard/window focus use, minimal storage, short tests.
+- 2026-11-16 — A14 approved: bundle identifier `me.thixpin.stoneql`; use it for the A2 signed-build tests.
 - 2026-11-16 — A2 and A4 approved. The SQLite advisory must stay visible in the full audit and
   must not be added to an ignore list.
 - 2026-11-16 — A1 and A5 approved. Real windows, keyboard and window focus allowed for the GUI
@@ -29,7 +30,7 @@ User decisions recorded in this run:
 | A11 | M005 | Approve the alpha-fix mechanisms implemented as Proposed (m005-alpha-fix-plan open questions 1–6): native app-data host-key file (not Keychain); native confirmation dialog on trust; re-enrollment instead of import; fingerprint binding for `ssh_password` only (F-08 JSON scopes not adopted); 60 s native secret deadline / 75 s renderer wait with a saved reference; "Remove anyway" when credential deletion fails; trust shared per SSH endpoint; limits 512 hosts / 8 KiB key / 1 MiB file, 16 pending scans / 5 min | M005 F-01/F-02/F-04/F-10 sign-off (implementation and tests done) | Pending |
 | A12 | M005 | RSA policy (stay unsupported recommended / accept RUSTSEC-2023-0071 for client signing / aws-lc-rs) and keyboard-interactive policy (detect-and-refuse recommended / implement) | M005 G3 auth-method matrix | Pending |
 | A13 | M005 | Review/approve D005, D006 and D016–D020 (desktop secret provider, trust/agent policy, SSH transport decisions) | M005 sign-off | Pending |
-| A14 | M005/M009 | Settle the bundle identifier (`app.dbadmin.desktop` today, D021 open item): it fixes the Keychain service name and the host-key store directory; changing it later de-enrolls every host and orphans saved secrets | M005 alpha blocker note; M009 packaging | Pending |
+| A14 | M005/M009 | Settle the bundle identifier (`app.dbadmin.desktop` today, D021 open item): it fixes the Keychain service name and the host-key store directory; changing it later de-enrolls every host and orphans saved secrets | M005 alpha blocker note; M009 packaging | **Approved 2026-11-16** (user: "Change the macOS bundle identifier from `app.dbadmin.desktop` to `me.thixpin.stoneql`"). **Done 2026-11-16**: identifier, Keychain service and test prefix changed together; verified in the bundled `.app`; impact documented (see Results) |
 | A15 | M006/M007 | Enable unrestricted read-write SQL in builds (`READ_WRITE_SQL_ENABLED`), Direct first; SSH read-write separately | Live CRUD and SQL-tab writes in shipped builds; M007 SQL/CSV import (D022 dependency) | Pending |
 | A16 | M006 | Approve the remaining Proposed M006 decisions and values: D025-11, D025-12, D025-13 (durable journal), `ExecutionLimits` release values, alpha-plan Q1–Q9 | M006 G4/G5 sign-off | Pending |
 | A17 | M006 | Approve the live CRUD and metadata design implemented as Proposed: rows addressed by full primary key only (keyless tables read-only), `_utf8mb4 X'…'` / `E'…'` literals, binary columns read-only, 0 affected rows = conflict, one DELETE per selected row stopping at the first failure, catalog refresh on DDL keywords | M006 CRUD sign-off (implemented and fixture-verified) | Pending |
@@ -117,7 +118,7 @@ Ad-hoc run (2026-11-16, macOS 27 arm64):
 - `StoneQL.app` (22.49 MiB; binary sha256 prefix `33d5dad01d974871`, CDHash
   `eb83331865bf1cf7da8e8cd042c86e4d4aa6e77e`): `codesign --verify --deep --strict` valid and
   satisfies its designated requirement; `flags=0x10002(adhoc,runtime)`, `TeamIdentifier=not set`,
-  no entitlements; identifier `app.dbadmin.desktop`, version 0.1.0. `spctl --assess` → rejected
+  no entitlements; identifier `app.dbadmin.desktop` (before A14), version 0.1.0. `spctl --assess` → rejected
   (expected: no Developer ID). Notarization skipped by the bundler (no Apple credentials).
 - Bundled binary: 0 `sqlite3_` symbols, no SQLite library, no smoke probe.
 - Launch of the signed app: window after 1,383 ms, UI rendered in desktop-host mode (native bridge
@@ -128,4 +129,36 @@ Ad-hoc run (2026-11-16, macOS 27 arm64):
   prompts would not represent Developer ID behaviour; full native E2E (M002 G3) on the release
   `.app`; notarization and Gatekeeper acceptance. All need a Developer ID Application certificate
   (and notarization credentials) installed by the user, and should follow A14 (bundle identifier).
+
+### A14 — bundle identifier `me.thixpin.stoneql` (done 2026-11-16)
+
+- Changed together (D023 recommendation, no migration code): `tauri.conf.json` `identifier`;
+  Keychain service `DEFAULT_SERVICE` (desktop) and `CREDENTIAL_SERVICE` (frontend) →
+  `me.thixpin.stoneql.credentials`; SSH fixture per-run service prefix and its assertion →
+  `me.thixpin.stoneql.test-<random>`; the F-10 frontend test expectation; docs (branding,
+  deployment, roadmap, ssh-credentials, sql-execution, user guide), D020/D021/D023, M009 and the
+  rebranding record.
+- Verified in the bundled ad-hoc `.app` (`npm run desktop:bundle:adhoc`): `CFBundleIdentifier` and
+  the code-signature `Identifier` are `me.thixpin.stoneql`; `codesign --verify --deep --strict`
+  valid (`adhoc,runtime`); the binary contains `me.thixpin.stoneql.credentials` and no
+  `app.dbadmin.desktop` string. Launch: window after 1,630 ms, UI rendered in desktop-host mode,
+  close button → exit 0, no alerts. First launch created
+  `~/Library/{Application Support,WebKit,Caches}/me.thixpin.stoneql` (Application Support holds
+  `outcome-journal`; no host-key file until a host is trusted).
+- Tests: `npm test` 220 + 19; `desktop:test` 55; `rust:lint`, `rust:fmt`, `docs:build`;
+  `test:ssh` passed with the new Keychain prefix (MySQL 190, MariaDB 41, PostgreSQL 41 channels).
+- Impact on data from earlier builds (documented in `docs/development/branding.md`):
+  - Keychain: items under `app.dbadmin.desktop.credentials` are no longer read; connecting with a
+    profile that referenced one reports "The saved credential is unavailable or belongs to a
+    different target. Enter it again." Old items stay until deleted manually.
+  - SSH host trust: `…/app.dbadmin.desktop/ssh-host-keys.json` is not read, so every host is
+    de-enrolled and must be trusted again explicitly; nothing is trusted automatically.
+  - Unknown-outcome journal: records under `…/app.dbadmin.desktop/outcome-journal/` are not listed.
+  - Bundled-app WebView storage moves with the identifier (profiles/preferences start empty);
+    unbundled development runs key it by executable name and are unaffected.
+- This Mac: the old identifier's data (`Application Support/app.dbadmin.desktop/outcome-journal`,
+  `WebKit/` and `Caches/app.dbadmin.desktop`) was left untouched; no old Keychain items and no
+  host-key file existed. Manual reset commands are in the branding doc.
+- A2 signed-build checks now use the new identifier (ad-hoc interim above, rerun under
+  `me.thixpin.stoneql`); Developer ID signing remains blocked on a certificate.
 

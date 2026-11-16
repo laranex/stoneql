@@ -14,7 +14,7 @@ use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Runtime, State, WebviewWindow};
 
 /// Keychain service for production references. Tests pass their own per-run service.
-pub const DEFAULT_SERVICE: &str = "app.dbadmin.desktop.credentials";
+pub const DEFAULT_SERVICE: &str = "me.thixpin.stoneql.credentials";
 const MAX_SECRET_BYTES: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

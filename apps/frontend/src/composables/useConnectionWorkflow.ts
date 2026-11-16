@@ -32,7 +32,7 @@ export function reportLeaseEnd(end: TransactionEnd | null | undefined, notify: (
   notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
 }
 /** Keychain service holding saved references, named so a user can remove a stuck item by hand. */
-export const CREDENTIAL_SERVICE = 'app.dbadmin.desktop.credentials';
+export const CREDENTIAL_SERVICE = 'me.thixpin.stoneql.credentials';
 /** Deletes every reference; returns how many could not be removed (failures are never swallowed). */
 async function deleteReferences(references: string[]): Promise<number> {
   let failed = 0;

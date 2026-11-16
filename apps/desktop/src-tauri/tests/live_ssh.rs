@@ -31,7 +31,7 @@ fn ssh_commands_use_owned_fixture() {
     assert_eq!(var("STONEQL_SPIKE_FIXTURE_ID").len(), 36);
     let engine = var("STONEQL_SSH_ENGINE");
     let service = var("STONEQL_KEYCHAIN_SERVICE");
-    assert!(service.starts_with("app.dbadmin.desktop.test-"));
+    assert!(service.starts_with("me.thixpin.stoneql.test-"));
     let ssh_port: u16 = var("STONEQL_SSH_PORT").parse().unwrap();
     let rotated_port: u16 = var("STONEQL_SSH_ROTATED_PORT").parse().unwrap();
     let database_port: u16 = var("STONEQL_SSH_DB_PORT").parse().unwrap();

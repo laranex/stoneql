@@ -462,7 +462,7 @@ test('F-10: a failed credential deletion on removal keeps the profile and offers
   await remove();
   assert.equal(store.connections.some((c: any) => c.id === id), true, 'profile kept');
   assert.equal(lastConfirmation.acceptLabel, 'Remove anyway');
-  assert.match(lastConfirmation.message, /1 saved credential could not be removed from the Keychain \(service app\.dbadmin\.desktop\.credentials\)/);
+  assert.match(lastConfirmation.message, /1 saved credential could not be removed from the Keychain \(service me\.thixpin\.stoneql\.credentials\)/);
   await lastConfirmation.action();
   assert.equal(store.connections.some((c: any) => c.id === id), false);
   assert.equal(notices.at(-1), 'success:Connection removed.');
@@ -479,7 +479,7 @@ test('F-10: a save whose old credential cannot be deleted stands but warns with 
   await flow.saveConnection(false);
   assert.equal(flow.connectionError.value, '');
   assert.equal(store.connections.find((c: any) => c.id === id).passwordRef, undefined);
-  assert.ok(notices.includes('error:Saved, but 1 old credential could not be removed from the Keychain (service app.dbadmin.desktop.credentials).'), notices.join('\n'));
+  assert.ok(notices.includes('error:Saved, but 1 old credential could not be removed from the Keychain (service me.thixpin.stoneql.credentials).'), notices.join('\n'));
 });
 test('F-10: when saving fails, a rollback deletion failure is reported, not hidden', async () => {
   const native = failingDeletes(1, true);

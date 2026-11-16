@@ -13,7 +13,7 @@ User requested repository-wide rebranding to StoneQL / StoneAge SQL Admin / Old 
 | Tests, CI commands, fixture prefixes/database environment variables | Rename together | Preserve executable coverage and isolated resource ownership |
 | Local-storage preferences | Migrate validated allowlist, retain legacy originals | Preserve user choices without copying credentials or overwriting StoneQL settings |
 | Native event names | Rename sender/receiver and tests together | Internal session-only API |
-| Tauri reverse-DNS identifier | Preserve `app.dbadmin.desktop` | External/installed identity change not explicitly authorized |
+| Tauri reverse-DNS identifier | `me.thixpin.stoneql` (was `app.dbadmin.desktop`) | Changed 2026-11-16 on explicit user approval (A14) |
 | Git directory/remotes, external repository/domain configuration | Preserve | User explicitly excluded automatic repository/external identifier changes |
 | Evidence directories/JSON/checksums, original migration baseline and UX report path | Preserve | Immutable historical evidence, not current branding |
 | Vendor provenance, license/source bytes and evaluated patch | Preserve | Auditability and exact approved source; no vendor rebrand |

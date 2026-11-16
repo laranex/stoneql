@@ -228,7 +228,7 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
       STONEQL_SSH_KEY_PLAIN: join(client, 'plain'), STONEQL_SSH_KEY_LOCKED: join(client, 'locked'), STONEQL_SSH_KEY_PASSPHRASE: passphrase,
       STONEQL_SSH_KEY_OTHER: join(client, 'other'), STONEQL_SSH_KEY_ECDSA: join(client, 'ecdsa'), STONEQL_SSH_AGENT: agentSocket,
       STONEQL_LIFECYCLE_CA: join(tls, 'ca.pem'), STONEQL_LIFECYCLE_BAD_CA: join(tls, 'bad-ca.pem'),
-      STONEQL_KEYCHAIN_SERVICE: `app.dbadmin.desktop.test-${randomBytes(6).toString('hex')}`,
+      STONEQL_KEYCHAIN_SERVICE: `me.thixpin.stoneql.test-${randomBytes(6).toString('hex')}`,
     });
     for (const binary of binaries) {
       const result = spawnSync(binary.path, ['--ignored', '--exact', binary.test, '--nocapture', '--test-threads=1'], { cwd: root, env, encoding: 'utf8', timeout: 600_000 });
