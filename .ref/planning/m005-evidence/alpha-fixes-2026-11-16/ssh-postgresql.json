@@ -1,0 +1,86 @@
+{
+  "engine": "postgresql",
+  "image": "stoneql-ssh-fixture:m005",
+  "runtime": {
+    "engine": "postgresql",
+    "engineVersion": "PostgreSQL 17.6 (Debian 17.6-2.pgdg13+1)",
+    "parity": {
+      "changedHostKeyRefused": true,
+      "passwordTunnel": true,
+      "queriesThroughTunnel": 3,
+      "tlsHostnameMismatchRefused": true,
+      "unknownHostKeyRefused": true,
+      "untrustedCaRefused": true,
+      "wrongPasswordRefused": true
+    },
+    "scan": {
+      "algorithm": "ssh-ed25519",
+      "fingerprintPrefix": "SHA256:"
+    },
+    "scope": "parity",
+    "secretsInOutput": 0
+  },
+  "native": {
+    "engine": "postgresql",
+    "ipc": {
+      "agent": true,
+      "changedHostKey": "SSH_HOST_KEY_CHANGED",
+      "keyFileGrant": true,
+      "nativeEnrollment": true,
+      "reloadClosesTunnel": true,
+      "rotatedCommitRefused": "SSH_HOST_KEY_CHANGED",
+      "scan": true,
+      "secretsInReplies": 0,
+      "swappedKeySecret": "SECRET_UNAVAILABLE",
+      "tlsMismatch": "CONNECTION_UNAVAILABLE",
+      "unknownHostKey": "SSH_HOST_KEY_UNKNOWN",
+      "wrongPassword": "SSH_AUTHENTICATION_FAILED"
+    },
+    "keychainItemsDeleted": 3,
+    "secretReferences": true,
+    "secretsInOutput": 0
+  },
+  "cancellation": {
+    "engine": "postgresql",
+    "exhaustedCancelMs": {
+      "maxMs": 1501.992833,
+      "samples": [
+        1501.8521250000001,
+        1501.9417910000002,
+        1501.992833
+      ]
+    },
+    "freeForwardsBesidePool": 3,
+    "freeSlotCancelMs": {
+      "maxMs": 47.750041,
+      "samples": [
+        47.750041,
+        45.591167,
+        47.538583
+      ]
+    },
+    "heldStreamsUnderExhaustion": 2,
+    "recoveredCancelMs": 37.926375,
+    "windowMs": 2500,
+    "secretsInOutput": 0
+  },
+  "deadTunnel": {
+    "descriptorsAfter": 7,
+    "descriptorsBaseline": 7,
+    "engine": "postgresql",
+    "killedReleaseMs": 101,
+    "secretsInOutput": 0
+  },
+  "keychainItemsRemaining": 0,
+  "server": {
+    "establishedAfter": 0,
+    "directTcpipChannels": 41,
+    "sessionChannels": 0,
+    "agentForwardingRequests": 0,
+    "acceptedPassword": 7,
+    "acceptedPublickey": 3,
+    "failedPassword": 2,
+    "secretsInLogs": 0
+  },
+  "reportSecrets": 0
+}
