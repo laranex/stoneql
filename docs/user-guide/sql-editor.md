@@ -18,7 +18,7 @@ Browse-style result grids support selection, resizing and horizontal scrolling. 
 
 ## Native read-only results
 
-Explicit desktop Live profiles opened read-only (the default) execute a restricted single SELECT through verified TLS. No mock fallback occurs on native failure. Supported syntax is deliberately narrower than the database grammar; CALL, scripts, mutations, transaction commands and unsupported forms are refused. Schema discovery and live autocomplete metadata are not implemented.
+Explicit desktop Live profiles opened read-only (the default) execute a restricted single SELECT through verified TLS. No mock fallback occurs on native failure. Supported syntax is deliberately narrower than the database grammar; CALL, scripts, mutations, transaction commands and unsupported forms are refused. Live autocomplete metadata is not implemented. MySQL/MariaDB live profiles list tables and browse them read-only (see [Connections](./connections.md)); the editor does not yet use that catalog.
 
 Results retain ordered columns, including duplicate labels, exact integer/decimal strings, raw temporal text, NULL and hexadecimal binary/unknown values. Limits are 1,000 rows, 1 MiB serialized result and 2 MiB per incoming protocol packet; truncation is labelled, while an oversized individual value fails rather than being silently shortened. A three-second native deadline is not confirmation of server cancellation. Errors use safe fixed messages and do not expose raw driver diagnostics. There is no automatic SQL retry.
 

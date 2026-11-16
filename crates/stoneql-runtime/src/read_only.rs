@@ -392,6 +392,18 @@ mod tests {
         }
     }
     #[test]
+    fn accepts_the_renderer_live_catalog_and_browse_statements() {
+        // Exact shapes from apps/frontend/src/services/liveSchema.ts (tests/liveSchema.test.ts).
+        for sql in [
+            "SELECT TABLE_NAME AS name, TABLE_TYPE AS kind FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'o''brien' ORDER BY TABLE_NAME;",
+            "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_KEY AS ckey, COLUMN_DEFAULT AS dflt, EXTRA AS extra FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'shop' AND TABLE_NAME = 'odd`name' ORDER BY ORDINAL_POSITION;",
+            "SELECT * FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!'\nORDER BY `id` IS NULL ASC, `id` DESC\nLIMIT 30, 15;",
+            "SELECT COUNT(*) AS total FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!';",
+        ] {
+            assert!(validate_select(sql, Dialect::MySql).is_ok(), "{sql}");
+        }
+    }
+    #[test]
     fn rejects_stacked_comments_locks_outfile_variables_and_unverified_functions() {
         for sql in [
             "SELECT 1; DELETE FROM users",

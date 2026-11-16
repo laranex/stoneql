@@ -17,6 +17,7 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
    else if(command==='read_only_query'){
     if(!handles.has(p.handle))throw{code:'FORBIDDEN'};
     if(p.sql.includes('UPDATE'))throw{code:'UNSUPPORTED_SQL'};
+    if(p.sql.includes('information_schema'))payload={index:0,affectedRows:'0',truncated:false,columns:[{name:'name',databaseType:'VARCHAR'},{name:'kind',databaseType:'VARCHAR'}],rows:[]};else
     payload={index:0,affectedRows:'0',truncated:p.sql.includes('bounded'),columns:[{name:'value',databaseType:'BIGINT UNSIGNED'},{name:'value',databaseType:'DECIMAL'},{name:'n',databaseType:'VARCHAR'}],rows:[[{kind:'integer',text:p.handle.endsWith('000000000002')?'18446744073709551615':'9223372036854775807'},{kind:'decimal',text:'12345678901234567890.4500'},{kind:'null'}]]};
    }else if(command==='database_status')payload={connected:handles.has(p.handle)};
    else throw{code:'INVALID_REQUEST'};

@@ -2,6 +2,7 @@ import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransa
 import {NativeOperationError, hostState} from '../services/nativeHost';
 import type {AccessModeDto, JournalProblemDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
+import { liveCatalogSupported, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery } from '../services/liveSchema';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
 import type { TableIndex, Routine, Trigger, ScheduledEvent } from '../types/objects';
@@ -238,6 +239,32 @@ export const useWorkspace = defineStore('workspace', () => {
     }
     return result;
   }
+  /** Read-only catalog of the profile's database. Returns false when the engine has no live catalog yet. */
+  async function loadLiveTables(id:string) {
+    const profile=connections.value.find(c=>c.id===id), ws=workspaces.value[id];
+    if(!profile||!ws||!liveCatalogSupported(profile.engine))return false;
+    const result=await executeLive(id,liveTablesSql(profile.database));
+    const previous=new Map(ws.databases[0]?.tables.map(t=>[t.name,t])||[]);
+    ws.databases=[{name:profile.database,tables:toLiveTables(result).map(t=>previous.get(t.name)?.kind===t.kind?{...t,columns:previous.get(t.name)!.columns}:t)}];
+    ws.liveCatalogTruncated=!!result.truncated;
+    return true;
+  }
+  async function loadLiveColumns(id:string,name:string) {
+    const profile=connections.value.find(c=>c.id===id)!, table=workspaces.value[id]?.databases[0]?.tables.find(t=>t.name===name);
+    if(!table)throw new Error(`Table ${name} is no longer in the loaded catalog. Refresh the explorer.`);
+    table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.database,name)),profile.engine);
+    if(!table.columns.length)throw new Error(`No columns are visible for ${name}; it may have been dropped or your account lacks privileges.`);
+  }
+  /** One server-side page plus the matching total; both are plain read-only SELECTs. */
+  async function browseLive(id:string) {
+    const ws=workspaces.value[id]!, table=ws.databases[0]?.tables.find(t=>t.name===ws.table);
+    if(!table)throw new Error('Choose a table first.');
+    const plan=liveBrowseQuery({table:table.name,columns:table.columns,filter:ws.filter,sort:ws.sort,descending:ws.descending,offset:(ws.page-1)*ws.pageSize,limit:ws.pageSize});
+    const count=await executeLive(id,plan.countSql);
+    const page=await executeLive(id,plan.sql);
+    const total=labelledRows(count)[0]?.total;
+    return {sql:plan.sql,rows:labelledRows(page),total:total===null||total===undefined?0:Number(total)};
+  }
   async function beginLiveTransaction_(id:string) {
     const current=liveSessions.value[id];
     if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile first.');
@@ -424,7 +451,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function saveEvent(draft:ScheduledEvent,original='') {objectActions.saveEvent(objectDatabase(),JSON.parse(JSON.stringify(draft)),connection.value.engine,original);}
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
-    liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus,
+    liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus, loadLiveTables, loadLiveColumns, browseLive,
     unresolvedOutcomes, unresolvedError, journalProblem, outcomeProfiles, refreshUnresolvedOutcomes, acknowledgeUnresolvedOutcome,
     runLiveJob: runLiveJobFor, beginLiveTransaction: beginLiveTransaction_, endLiveTransaction: endLiveTransaction_,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,

@@ -77,6 +77,7 @@ import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
+import { liveCatalogSupported } from './services/liveSchema';
 import { validateValue, choiceDefinition, hasColumnDefault } from './services/valueValidation';
 import { connectionColors, environments, environmentLabel } from './services/connectionPreferences';
 import type { Connection, Row, View, Column } from './types';
@@ -94,6 +95,8 @@ const store = useWorkspace();
 const w = computed(() => store.workspace);
 const isLive = computed(() => store.connection?.mode==='live');
 const liveSession = computed(() => store.liveSessions[store.activeId]);
+/** MySQL/MariaDB live profiles list tables and browse pages through read-only SELECTs. */
+const liveCatalog = computed(() => isLive.value && liveCatalogSupported(store.connection.engine));
 /** Read-write is chosen per connect and reported back by the native host. */
 const liveReadWrite = computed(() => isLive.value && liveSession.value?.status === 'connected' && liveSession.value.info?.access === 'read_write');
 const liveLease = computed(() => liveSession.value?.lease);
@@ -102,7 +105,7 @@ const readWriteAvailable = nativeHostState.kind === 'desktop' && nativeHostState
 const jobSucceeded = computed(() => query.value.job?.outcome === 'succeeded');
 const table = computed(() => store.table);
 const tableMetadata = computed(() => {
-  if (!table.value || (table.value.kind && table.value.kind!=='table')) return [];
+  if (!table.value || isLive.value || (table.value.kind && table.value.kind!=='table')) return [];
   const entries = [{ label: 'Rows', value: table.value.rows.length.toLocaleString() }];
   // These are the known mock storage settings for application tables only.
   if (
@@ -116,14 +119,18 @@ const tableMetadata = computed(() => {
   }
   return entries;
 });
-const isReadOnly = computed(() => !!table.value?.kind && table.value.kind !== 'table');
+/** A mock view or materialized view snapshot. */
+const isMockView = computed(() => !isLive.value && !!table.value?.kind && table.value.kind !== 'table');
+/** No row actions: mock views and every live table (live browse is read-only). */
+const isReadOnly = computed(() => isMockView.value || (isLive.value && !!table.value));
 const objectManager = ref<InstanceType<typeof DatabaseObjects>>();
 const objectSection = computed(() => w.value.scope === 'database' && objectSections(store.connection.engine).includes(w.value.view as ObjectSection) ? w.value.view as ObjectSection : undefined);
 const viewError = ref('');
 function requestObjectConfirmation(request:{title:string;message:string;acceptLabel:string;action:()=>void}) { confirmation.value={...request,productionName:store.connection.environment==='Production'?store.connection.name:undefined}; }
 function refreshBrowse() {
   viewError.value='';
-  if(isReadOnly.value) { try{store.previewView(w.value.table);}catch(error){viewError.value=(error as Error).message;} }
+  if(isMockView.value) { try{store.previewView(w.value.table);}catch(error){viewError.value=(error as Error).message;} }
+  if(isLive.value) void loadLiveBrowse();
   browseNoticeVersion.value++;
 }
 const browseGridOptions = computed(() => ({
@@ -247,13 +254,61 @@ const filtered = computed(() =>
     table.value?.columns.find((c) => c.name === w.value.sort)?.type,
   ),
 );
-const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / store.pageSize)));
+const liveBrowse = ref<{ key: string; sql: string; rows: Row[]; total: number; loading: boolean }>({ key: '', sql: '', rows: [], total: 0, loading: false });
+let liveBrowseGeneration = 0, liveFilterTimer: ReturnType<typeof setTimeout> | undefined;
+const liveBrowseKey = computed(() => liveCatalog.value && w.value.scope === 'table' && w.value.view === 'Browse' && table.value?.columns.length && liveSession.value?.status === 'connected'
+  ? JSON.stringify([store.activeId, w.value.table, w.value.filter, w.value.sort, w.value.descending, w.value.page, store.pageSize]) : '');
+/** Fetches the current page; a newer request or a connection change discards older replies. */
+async function loadLiveBrowse() {
+  const key = liveBrowseKey.value, generation = ++liveBrowseGeneration, profile = store.activeId;
+  if (!key) return;
+  viewError.value = '';
+  const sameTable = !!liveBrowse.value.key && JSON.stringify(JSON.parse(liveBrowse.value.key).slice(0, 2)) === JSON.stringify(JSON.parse(key).slice(0, 2));
+  liveBrowse.value = sameTable ? { ...liveBrowse.value, loading: true } : { key, sql: '', rows: [], total: 0, loading: true };
+  try {
+    const page = await store.browseLive(profile);
+    if (generation === liveBrowseGeneration) liveBrowse.value = { key, ...page, loading: false };
+  } catch (error) {
+    if (generation !== liveBrowseGeneration) return;
+    liveBrowse.value = { key, sql: '', rows: [], total: 0, loading: false };
+    viewError.value = (error as Error).message;
+  }
+}
+watch(liveBrowseKey, (key, previous) => {
+  clearTimeout(liveFilterTimer);
+  if (!key) return;
+  // Typing in the filter waits for a pause; paging, sorting and table changes load at once.
+  const without = (value: string) => { const parts = JSON.parse(value); parts.splice(2, 1); return JSON.stringify(parts); };
+  const filterOnly = !!previous && without(previous) === without(key);
+  if (filterOnly) liveFilterTimer = setTimeout(loadLiveBrowse, 300);
+  else void loadLiveBrowse();
+});
+const liveCatalogError = ref<Record<string, string>>({});
+const liveCatalogHandles = new Map<string, string>();
+/** Lists the database's tables; returns to the database scope when the open table disappeared. */
+async function loadLiveCatalog(profile = store.activeId) {
+  const ws = store.workspaces[profile];
+  liveCatalogError.value[profile] = '';
+  try {
+    await store.loadLiveTables(profile);
+    if (ws && ws.scope === 'table' && !ws.databases[0]?.tables.some((t) => t.name === ws.table)) Object.assign(ws, { scope: 'database', table: '', view: 'SQL' });
+  } catch (error) {
+    liveCatalogError.value[profile] = (error as Error).message;
+  }
+}
+watch(() => [store.activeId, liveCatalog.value, liveSession.value?.status, liveSession.value?.info?.handle] as const, ([profile, catalog, status, handle]) => {
+  if (!catalog || status !== 'connected' || !handle || liveCatalogHandles.get(profile) === handle) return;
+  liveCatalogHandles.set(profile, handle);
+  void loadLiveCatalog(profile);
+}, { immediate: true });
+const rowTotal = computed(() => (isLive.value ? liveBrowse.value.total : filtered.value.length));
+const pages = computed(() => Math.max(1, Math.ceil(rowTotal.value / store.pageSize)));
 const browseNoticeVersion = ref(0);
 watch([filtered, () => w.value.page, () => store.pageSize], () => {
   browseNoticeVersion.value++;
 });
 const rows = computed(() =>
-  filtered.value.slice((w.value.page - 1) * store.pageSize, w.value.page * store.pageSize),
+  isLive.value ? liveBrowse.value.rows : filtered.value.slice((w.value.page - 1) * store.pageSize, w.value.page * store.pageSize),
 );
 const selected = ref<Row[]>([]);
 watch(
@@ -468,7 +523,7 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
-  if(isLive.value && view!=='SQL') return;
+  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && ['Browse','Structure'].includes(view)))) return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -493,13 +548,19 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL');
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && ['Browse','Structure'].includes(tab.name)));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
 });
 async function chooseTable(db: string, name: string) {
   if (await discard()) {
+    if (isLive.value) {
+      const profile = store.activeId;
+      try { await store.loadLiveColumns(profile, name); }
+      catch (error) { notify((error as Error).message, 'error'); return; }
+      if (store.activeId !== profile) return;
+    }
     store.selectTable(db, name);
     viewError.value='';
     searchResults.value = null;
@@ -1277,7 +1338,7 @@ onBeforeUnmount(() => {
             <button
               class="icon-button"
               title="Refresh explorer"
-              @click="notify(isLive ? 'Live schema discovery is not available yet; use SQL with known table names.' : 'Mock explorer refreshed from session metadata.')"
+              @click="liveCatalog ? (liveSession?.status === 'connected' ? loadLiveCatalog() : notify('Connect this live profile to list its tables.', 'error')) : notify(isLive ? 'Live schema discovery is available for MySQL and MariaDB only; use SQL with known table names.' : 'Mock explorer refreshed from session metadata.')"
             >
               <RefreshCw :size="13" /></button
             ><button class="icon-button" title="Collapse sidebar" @click="sidebarHidden = true">
@@ -1328,7 +1389,7 @@ onBeforeUnmount(() => {
           <div v-for="db in treeDatabases" :key="db.name" class="database-group">
             <div class="database-row">
               <button class="icon-button" :aria-label="`${expanded.includes(db.name) ? 'Collapse' : 'Expand'} ${db.name}`" :aria-expanded="expanded.includes(db.name)" @click="expanded.includes(db.name) ? expanded = expanded.filter(n => n !== db.name) : expanded.push(db.name)"><ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" /><ChevronRight v-else :size="12" /></button>
-              <button class="database-context-link" @click="openDatabaseContext(db.name)"><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" /><strong>{{ db.name }}</strong><span :title="isLive ? 'Schema discovery is not available yet' : ''">{{ isLive ? '—' : db.tables.length }}</span></button>
+              <button class="database-context-link" @click="openDatabaseContext(db.name)"><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" /><strong>{{ db.name }}</strong><span :title="isLive && !liveCatalog ? 'Schema discovery is not available for this engine yet' : ''">{{ isLive && !liveCatalog ? '—' : db.tables.length }}</span></button>
             </div>
             <div v-if="expanded.includes(db.name) || treeSearch" class="table-tree">
               <button
@@ -1338,12 +1399,15 @@ onBeforeUnmount(() => {
                 @click="chooseTable(db.name, t.name)"
               >
                 <Table2 :size="13" /><span>{{ t.name }}</span
-                ><small>{{ t.rows.length.toLocaleString() }}</small>
+                ><small v-if="!isLive">{{ t.rows.length.toLocaleString() }}</small><small v-else-if="t.kind === 'view'">view</small>
               </button>
             </div>
           </div>
           <div v-if="!treeDatabases.length" class="tree-empty">No matching tables</div>
-          <p v-if="isLive" class="tree-empty">Schema discovery is not available yet. Use SQL with known table names.</p>
+          <p v-if="isLive && !liveCatalog" class="tree-empty">Schema discovery is available for MySQL and MariaDB only. Use SQL with known table names.</p>
+          <p v-else-if="isLive && liveSession?.status !== 'connected'" class="tree-empty">Connect to list tables.</p>
+          <p v-else-if="isLive && liveCatalogError[store.activeId]" class="tree-empty" role="alert">Tables could not be listed: {{ liveCatalogError[store.activeId] }}</p>
+          <p v-else-if="isLive && w.liveCatalogTruncated" class="tree-empty">Only the first {{ w.databases[0]?.tables.length }} tables are listed (native result limit).</p>
         </nav>
         <div class="sidebar-bottom">
           <div class="connection-status">
@@ -1425,25 +1489,25 @@ onBeforeUnmount(() => {
         >
           <DatabaseOverview v-if="w.scope === 'server' || (w.scope === 'database' && w.view === 'Structure')" :databases="w.databases" :database="store.database" :server="w.scope === 'server'" @database="openDatabaseContext" @table="openOverviewTable" @create-table="objectManager?.openTable()" @create-view="objectManager?.openView()" @definition="objectManager?.openView($event)" @drop-view="objectManager?.dropView($event)" />
           <template v-else-if="table && w.view === 'Browse'">
-            <div v-if="isReadOnly" class="notice info">Read-only {{table.kind === 'materialized-view' ? 'materialized view' : 'view'}} · mock snapshot. Refresh evaluates only the supported SELECT subset; no server query is run.</div>
+            <div v-if="isMockView" class="notice info">Read-only {{table.kind === 'materialized-view' ? 'materialized view' : 'view'}} · mock snapshot. Refresh evaluates only the supported SELECT subset; no server query is run.</div>
             <ResultNotice v-if="viewError" kind="error" :notification-key="browseNoticeVersion">{{viewError}}</ResultNotice>
             <ResultNotice :notification-key="browseNoticeVersion">
               Showing rows
               <strong
-                >{{ filtered.length ? (w.page - 1) * store.pageSize + 1 : 0 }} –
-                {{ Math.min(w.page * store.pageSize, filtered.length) }}</strong
+                >{{ rowTotal ? (w.page - 1) * store.pageSize + 1 : 0 }} –
+                {{ Math.min(w.page * store.pageSize, rowTotal) }}</strong
               >
-              ({{ filtered.length }} total · mock results)
+              ({{ rowTotal }} total · {{ isLive ? 'live, read-only' : 'mock results' }})
               <template #end
                 ><span class="notice-end">{{
-                  w.filter ? 'Filtered results (mock)' : 'SELECT (mock)'
+                  isLive ? (liveBrowse.loading ? 'Loading…' : w.filter ? 'Filtered results' : 'SELECT') : w.filter ? 'Filtered results (mock)' : 'SELECT (mock)'
                 }}</span></template
               >
             </ResultNotice>
             <SqlQueryPreview
               v-model:expanded="store.sqlPreviewExpanded"
-              @edit="openSqlText(browsePlan.sql)"
-              ><SqlText :text="browsePlan.sql" :engine="store.connection.engine"
+              @edit="openSqlText(isLive ? liveBrowse.sql : browsePlan.sql)"
+              ><SqlText :text="isLive ? liveBrowse.sql : browsePlan.sql" :engine="store.connection.engine"
             /></SqlQueryPreview>
             <div class="grid-toolbar">
               <div class="toolbar-left">
@@ -1684,9 +1748,10 @@ onBeforeUnmount(() => {
                       ><span>{{
                         w.filter
                           ? 'Try a different filter or clear your search.'
-                          : 'Insert a record to get started.'
+                          : isLive ? 'This table has no rows.' : 'Insert a record to get started.'
                       }}</span
                       ><button
+                        v-if="w.filter || !isLive"
                         class="button"
                         @click="w.filter ? (w.filter = '') : navigate('Insert')"
                       >
@@ -1722,11 +1787,11 @@ onBeforeUnmount(() => {
               <span class="muted"
                 >Showing
                 <strong
-                  >{{ filtered.length ? (w.page - 1) * store.pageSize + 1 : 0 }}–{{
-                    Math.min(w.page * store.pageSize, filtered.length)
+                  >{{ rowTotal ? (w.page - 1) * store.pageSize + 1 : 0 }}–{{
+                    Math.min(w.page * store.pageSize, rowTotal)
                   }}</strong
                 >
-                of <strong>{{ filtered.length }}</strong> rows</span
+                of <strong>{{ rowTotal }}</strong> rows</span
               >
               <div>
                 <button
@@ -1771,7 +1836,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else-if="table && w.view === 'Structure'"
-            ><div v-if="isReadOnly" class="panel"><div class="workspace-toolbar"><span>{{table.kind==='materialized-view'?'Materialized view':'View'}} · read-only mock snapshot</span><div class="row-actions"><button @click="objectManager?.openView(table)">Definition / Edit</button><button @click="refreshBrowse">{{table.kind==='materialized-view'?'Refresh materialized view (mock)':'Refresh snapshot (mock)'}}</button><button class="danger-text" @click="objectManager?.dropView(table)">Drop view</button></div></div><pre class="object-definition"><SqlText :text="table.definition || ''" :engine="store.connection.engine" /></pre><div v-if="viewError" class="notice error" role="alert">{{viewError}}</div></div><div class="workspace-toolbar">
+            ><div v-if="isMockView" class="panel"><div class="workspace-toolbar"><span>{{table.kind==='materialized-view'?'Materialized view':'View'}} · read-only mock snapshot</span><div class="row-actions"><button @click="objectManager?.openView(table)">Definition / Edit</button><button @click="refreshBrowse">{{table.kind==='materialized-view'?'Refresh materialized view (mock)':'Refresh snapshot (mock)'}}</button><button class="danger-text" @click="objectManager?.dropView(table)">Drop view</button></div></div><pre class="object-definition"><SqlText :text="table.definition || ''" :engine="store.connection.engine" /></pre><div v-if="viewError" class="notice error" role="alert">{{viewError}}</div></div><div class="workspace-toolbar">
               <span class="muted">{{ table.columns.length }} columns</span
               ><button v-if="!isReadOnly" class="button" @click="editColumn()"><Plus :size="13" /> Add column</button>
             </div>
@@ -1822,8 +1887,9 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
-            <IndexManager v-if="!isReadOnly || table.kind === 'materialized-view'" :confirm-discard="askDiscard" @confirm="requestObjectConfirmation" />
-            <div class="panel">
+            <IndexManager v-if="!isLive && (!isReadOnly || table.kind === 'materialized-view')" :confirm-discard="askDiscard" @confirm="requestObjectConfirmation" />
+            <p v-if="isLive" class="muted">Live catalog · columns as reported by information_schema. Indexes and foreign keys are not listed yet; use SQL to inspect them.</p>
+            <div v-else class="panel">
               <h3>
                 <SchemaIcon kind="foreign" detail="Relationships" /> Foreign key relationships
               </h3>

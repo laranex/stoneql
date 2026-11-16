@@ -135,6 +135,8 @@ export interface Workspace {
   pageSize: number;
   treeFilter: string;
   expandedDatabases: string[];
+  /** Live catalog hit the native row bound; the explorer lists only the first tables. */
+  liveCatalogTruncated?: boolean;
   showHistory: boolean;
   filter: string;
   sort: string;
