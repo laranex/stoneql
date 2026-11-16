@@ -42,6 +42,11 @@ pub(crate) fn options(
         .database(&config.database)
         .ssl_mode(PgSslMode::VerifyFull)
         .statement_cache_capacity(0)
+        // A8 (approved 2026-11-16): backend messages are refused above 2 MiB from their header,
+        // before the vendored driver buffers the payload.
+        .max_receive_message_size(
+            std::num::NonZeroUsize::new(2 * 1024 * 1024).expect("nonzero message limit"),
+        )
         .application_name("StoneQL")
         .disable_statement_logging();
     if let Some(pem) = &config.root_certificate_pem {

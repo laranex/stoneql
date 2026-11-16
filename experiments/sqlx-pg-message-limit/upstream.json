@@ -1,0 +1,9 @@
+{
+  "crate": "sqlx-postgres",
+  "version": "0.9.0",
+  "registryPackageSha256": "87a2bdd6e83f6b3ea525ca9fee568030508b58355a43d0b2c1674d5f79dcd65e",
+  "license": "MIT OR Apache-2.0",
+  "patchSha256": "918d9ca0c6e316d0c85241461c4796738e684f93bb1220d72f190b35750157f1",
+  "mitLicenseSha256": "5abbdd842310c8f1650fcde3a5a51a3e09412b9e5a6eea87519e0db9e32b339d",
+  "selectedLicense": "MIT"
+}

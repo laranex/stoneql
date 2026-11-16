@@ -3,7 +3,7 @@ use std::future::Future;
 
 pub(crate) use sqlx_core::connection::*;
 use sqlx_core::sql_str::SqlSafeStr;
-pub(crate) use stream::{MySqlStream, Waiting};
+pub(crate) use stream::{MySqlStream, ResultMetadataLimit, Waiting};
 
 use crate::collation::Collation;
 use crate::common::StatementCache;

@@ -313,6 +313,21 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         "PACKET_TOO_LARGE"
     );
     assert!(read(&first["handle"], "SELECT id FROM raw_values").is_ok());
+    // A6 result-metadata limit (vendored driver): 4,096 columns pass; 4,097 are refused by the
+    // driver before it reserves descriptor storage (short names keep the runtime's 1 MiB JSON
+    // check far away), and the next query on a fresh connection works.
+    let columns = |count: usize| {
+        let list: Vec<String> = (1..=count).map(|n| format!("{n} AS c{n}")).collect();
+        format!("SELECT {}", list.join(","))
+    };
+    let widest = read(&first["handle"], &columns(4096)).unwrap();
+    assert_eq!(widest["payload"]["columns"].as_array().unwrap().len(), 4096);
+    assert_eq!(widest["payload"]["rows"][0][4095]["text"], "4096");
+    assert_eq!(
+        read(&first["handle"], &columns(4097)).unwrap_err()["code"],
+        "PACKET_TOO_LARGE"
+    );
+    assert!(read(&first["handle"], "SELECT id FROM raw_values").is_ok());
     for sql in TRUST_VIEW_QUERIES {
         let error = read(&first["handle"], sql).unwrap_err();
         assert_eq!(error["code"], "QUERY_REJECTED");

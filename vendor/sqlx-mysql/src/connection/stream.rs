@@ -20,6 +20,13 @@ pub struct MySqlStream<S = Box<dyn Socket>> {
     pub(crate) waiting: VecDeque<Waiting>,
     pub(crate) is_tls: bool,
     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
+    pub(crate) max_result_metadata: Option<super::ResultMetadataLimit>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResultMetadataLimit {
+    pub(crate) columns: std::num::NonZeroUsize,
+    pub(crate) bytes: std::num::NonZeroUsize,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -58,6 +65,7 @@ impl<S: Socket> MySqlStream<S> {
             socket: BufferedSocket::new(socket),
             is_tls: false,
             max_receive_packet_size: options.max_receive_packet_size,
+            max_result_metadata: options.max_result_metadata,
         }
     }
 
@@ -217,6 +225,7 @@ impl<S: Socket> MySqlStream<S> {
             waiting: self.waiting,
             is_tls: self.is_tls,
             max_receive_packet_size: self.max_receive_packet_size,
+            max_result_metadata: self.max_result_metadata,
         }
     }
 }

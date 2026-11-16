@@ -1,7 +1,7 @@
 # M003 — MySQL/MariaDB lifecycle and read-only SQL
 
 ## Status
-**Blocked — all unblocked work done (2026-11-16).** Remaining criteria need user decisions A1, A3, A6, A7 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+**Blocked — all unblocked work done (2026-11-16).** Remaining criteria need user decisions A3, A7 (A1 run, A6 adopted 2026-11-16) in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
 
 Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native Direct MySQL/MariaDB SQL binding is implemented; complete native GUI/OS, memory and trust acceptance gates remain pending.
 
@@ -104,7 +104,7 @@ Safe executed report: `.ref/planning/m003-resource-profile/` (2026-10-26). Both 
 | G1 TLS/target rejection, DML/DDL/CALL/stacked refusal, engine read-only enforcement | Earlier fixtures and `read_only.rs` tests; `npm run test:native-database` 2026-11-16 on commit `2cf6676`: both engines pass (UPDATE → UNSUPPORTED_SQL, 1792 trust checks). Residual limits documented in `docs/development/read-only-safety.md` (hostile UDF/external effects not certified). | Verified; residual risk needs acceptance (A7) |
 | G2 exact values, explicit truncation | Same run: BIGINT UNSIGNED max, DECIMAL(38,4), zero date, NULL, duplicate labels, 1000-row and 1 MiB truncation exact. New: live catalog/browse/count statements decode over verified TLS on both engines (MySQL 8 binary-charset catalog cells handled in the renderer, `a187ead`). | Verified |
 | G3 separate MySQL/MariaDB capability evidence; contract/UI compatibility | Both engines separately in the fixture run; browser suite 52/52; contracts unchanged. Version matrix itself (8.4.6 / 11.4.8, macOS arm64) is Proposed. | Verified; matrix approval A3 |
-| G4/G5 lifecycle/basic-SQL budgets; fail closed; no retry | Characterization only (resource profile 2026-10-26). Budgets Proposed. Aggregate metadata allocation bound: prototype complete (`m003-metadata-limit/findings.md`, patch re-applied cleanly to current vendor 2026-11-16); adoption pending. | Blocked (A3, A6) |
+| G4/G5 lifecycle/basic-SQL budgets; fail closed; no retry | Characterization only (resource profile 2026-10-26). Budgets Proposed. Aggregate metadata allocation bound: prototype complete (`m003-metadata-limit/findings.md`, patch re-applied cleanly to current vendor 2026-11-16). **A6 adopted 2026-11-16** (4,096 columns, 4 MiB): second delta in `vendor/sqlx-mysql`, provenance regenerated and checked by `rust:vendor`; driver library suite 35/35; `test:native-database` on MySQL 8.4.6 and MariaDB 11.4.8: 4,096 columns returned, 4,097 refused (`PACKET_TOO_LARGE`, driver), next query works. Budgets still Proposed. | Metadata bound verified; budgets Blocked (A3) |
 | Native SQL UI workflow on supported runner | Simulated bridge + MockRuntime with real SQLx only; real-window GUI not run. | Blocked (A1) |
 
 - Finding 2026-11-16 (open, M003 G2): the vendored driver names a column's type from its BINARY flag, which servers also set for `_bin` collations (MariaDB `JSON` = `LONGTEXT … utf8mb4_bin`), so such text columns are delivered as binary cells and the SQL tab shows them as hex. Export corrects this from the catalog's `CHARACTER_SET_NAME`; a general fix needs either catalog lookup for arbitrary query columns or a driver change (vendor patch → approval).

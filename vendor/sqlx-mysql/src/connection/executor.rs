@@ -435,13 +435,19 @@ async fn recv_result_metadata(
     // the result-set metadata is primarily a listing of each output
     // column in the result-set
 
+    let limit = stream.max_result_metadata;
+    check_result_columns(num_columns, limit)?;
+
     let mut column_names = HashMap::with_capacity(num_columns);
 
     columns.clear();
     columns.reserve(num_columns);
 
+    let mut received = 0usize;
     for ordinal in 0..num_columns {
-        let def: ColumnDefinition = stream.recv().await?;
+        let packet = stream.recv_packet().await?;
+        received = check_result_metadata_bytes(received, packet.len(), limit)?;
+        let def: ColumnDefinition = packet.decode_with(stream.capabilities)?;
 
         let column = recv_next_result_column(&def, ordinal)?;
 
@@ -452,4 +458,82 @@ async fn recv_result_metadata(
     stream.maybe_recv_eof().await?;
 
     Ok(column_names)
+}
+
+const RESULT_METADATA_LIMIT: &str = "result metadata exceeds configured limit";
+
+// Runs before any descriptor storage is reserved from the server-supplied count.
+fn check_result_columns(
+    num_columns: usize,
+    limit: Option<super::ResultMetadataLimit>,
+) -> Result<(), Error> {
+    if limit.is_some_and(|limit| num_columns > limit.columns.get()) {
+        return Err(Error::Protocol(RESULT_METADATA_LIMIT.into()));
+    }
+    Ok(())
+}
+
+// Runs after a bounded packet is received but before it is decoded or retained.
+fn check_result_metadata_bytes(
+    received: usize,
+    next: usize,
+    limit: Option<super::ResultMetadataLimit>,
+) -> Result<usize, Error> {
+    let total = received.saturating_add(next);
+    if limit.is_some_and(|limit| total > limit.bytes.get()) {
+        return Err(Error::Protocol(RESULT_METADATA_LIMIT.into()));
+    }
+    Ok(total)
+}
+
+#[cfg(test)]
+mod result_metadata_limit_tests {
+    use super::*;
+    use std::num::NonZeroUsize;
+
+    fn limit(columns: usize, bytes: usize) -> Option<super::super::ResultMetadataLimit> {
+        Some(super::super::ResultMetadataLimit {
+            columns: NonZeroUsize::new(columns).unwrap(),
+            bytes: NonZeroUsize::new(bytes).unwrap(),
+        })
+    }
+
+    fn is_limit_error(result: Result<impl std::fmt::Debug, Error>) -> bool {
+        matches!(result, Err(Error::Protocol(message)) if message == RESULT_METADATA_LIMIT)
+    }
+
+    #[test]
+    fn column_count_is_checked_at_exact_boundary_and_for_untrusted_wide_counts() {
+        assert!(check_result_columns(4096, limit(4096, 1)).is_ok());
+        assert!(is_limit_error(check_result_columns(4097, limit(4096, 1))));
+        // A length-encoded count can be as large as u64; it must fail without reservation.
+        assert!(is_limit_error(check_result_columns(usize::MAX, limit(4096, 1))));
+    }
+
+    #[test]
+    fn cumulative_descriptor_bytes_are_checked_before_decode() {
+        let limit = limit(4096, 100);
+        assert_eq!(check_result_metadata_bytes(0, 60, limit).unwrap(), 60);
+        assert_eq!(check_result_metadata_bytes(60, 40, limit).unwrap(), 100);
+        assert!(is_limit_error(check_result_metadata_bytes(100, 1, limit)));
+        assert!(is_limit_error(check_result_metadata_bytes(0, 101, limit)));
+        assert!(is_limit_error(check_result_metadata_bytes(usize::MAX, 1, limit)));
+    }
+
+    #[test]
+    fn unset_limit_keeps_upstream_behavior() {
+        assert!(check_result_columns(usize::MAX, None).is_ok());
+        assert_eq!(check_result_metadata_bytes(10, 20, None).unwrap(), 30);
+    }
+
+    #[test]
+    fn options_default_to_unset_and_propagate_configured_limit() {
+        use crate::MySqlConnectOptions;
+        assert!(MySqlConnectOptions::new().max_result_metadata.is_none());
+        let configured = MySqlConnectOptions::new()
+            .max_result_metadata(NonZeroUsize::new(7).unwrap(), NonZeroUsize::new(9).unwrap())
+            .max_result_metadata
+            .unwrap();
+        assert_eq!((configured.columns.get(), configured.bytes.get()), (7, 9));
+    }
 }

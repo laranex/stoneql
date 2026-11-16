@@ -301,6 +301,17 @@ fn postgres_commands_use_owned_tls_fixture() {
             json!({"sessionId":session,"handle":handle,"sql":sql}),
         )
     };
+    // A8 backend-message limit (vendored driver): a 3 MiB DataRow is refused from its header
+    // (2 MiB limit) and the next query on a fresh connection works.
+    assert_eq!(
+        read(&first["handle"], "SELECT payload FROM raw_large").unwrap_err()["code"],
+        "PACKET_TOO_LARGE"
+    );
+    assert_eq!(
+        read(&first["handle"], "SELECT id FROM raw_large").unwrap()["payload"]["rows"][0][0]["text"],
+        "1"
+    );
+    report.insert("messageLimitRefused".into(), json!(true));
     let values = read(
         &first["handle"],
         r#"SELECT i8, n, nn, f8, b, t, d, e, ts, tz, dt, tm, ttz, j, u, ip, flag, "Quoted ""Column""" FROM "Mixed ""Case"" values" ORDER BY id"#,

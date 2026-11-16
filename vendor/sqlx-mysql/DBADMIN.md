@@ -2,7 +2,7 @@
 
 User-approved on 2026-10-25 after isolated evaluation. SQLx 0.9.0 source, selected under its MIT license; upstream authors/copyright remain intact. Full license: LICENSE-MIT.
 
-Only three Rust files differ from the registry archive: receive-limit options, stream length checking and TLS limit propagation. The reviewed patch and package/patch checksums live in experiments/sqlx-receive-limit/. Packaging selects MIT in Cargo.toml; no upstream attribution is removed. This is source, not generated build output.
+Two reviewed deltas are applied to the registry archive. (1) Receive limit (2026-10-25): receive-limit options, stream length checking and TLS limit propagation. (2) Result-metadata limit (user-approved 2026-11-16, A6; `experiments/sqlx-metadata-limit/metadata-limit.patch`): `max_result_metadata(columns, bytes)` checks the column count before reserving descriptor storage and the summed descriptor bytes before decoding each one, failing with `Protocol("result metadata exceeds configured limit")`; the runtime sets 4,096 columns and 4 MiB. The reviewed patches and checksums live in experiments/sqlx-receive-limit/ and experiments/sqlx-metadata-limit/ (hash recorded in dbadmin-provenance.json). Packaging selects MIT in Cargo.toml; no upstream attribution is removed. This is source, not generated build output.
 
 The runtime explicitly enables a 2 MiB logical receive-packet limit. Oversize invalidates the physical connection; callers must discard it. The option defaults to upstream behavior for other consumers. A packet bound is not an RSS limit, result limit or SQL sandbox. Existing OS/security/type/release gates remain open.
 

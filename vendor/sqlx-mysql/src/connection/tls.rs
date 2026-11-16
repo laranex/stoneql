@@ -13,6 +13,7 @@ struct MapStream {
     sequence_id: u8,
     waiting: VecDeque<Waiting>,
     max_receive_packet_size: Option<std::num::NonZeroUsize>,
+    max_result_metadata: Option<super::ResultMetadataLimit>,
 }
 
 pub(super) async fn maybe_upgrade<S: Socket>(
@@ -83,6 +84,7 @@ pub(super) async fn maybe_upgrade<S: Socket>(
             sequence_id: stream.sequence_id,
             waiting: stream.waiting,
             max_receive_packet_size: stream.max_receive_packet_size,
+            max_result_metadata: stream.max_result_metadata,
         },
     )
     .await
@@ -100,6 +102,7 @@ impl WithSocket for MapStream {
             waiting: self.waiting,
             is_tls: true,
             max_receive_packet_size: self.max_receive_packet_size,
+            max_result_metadata: self.max_result_metadata,
         }
     }
 }

@@ -81,6 +81,7 @@ pub struct MySqlConnectOptions {
     pub(crate) timezone: Option<String>,
     pub(crate) set_names: bool,
     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
+    pub(crate) max_result_metadata: Option<crate::connection::ResultMetadataLimit>,
 }
 
 impl Default for MySqlConnectOptions {
@@ -95,6 +96,19 @@ impl MySqlConnectOptions {
     /// None (the upstream default) retains the original behavior.
     pub fn max_receive_packet_size(mut self, bytes: std::num::NonZeroUsize) -> Self {
         self.max_receive_packet_size = Some(bytes);
+        self
+    }
+
+    /// Maximum column descriptors and their summed payload bytes per result-metadata block,
+    /// checked before reserving descriptor storage and before decoding each descriptor.
+    /// An exceeded limit invalidates the connection; callers must discard it.
+    /// None (the upstream default) retains the original behavior.
+    pub fn max_result_metadata(
+        mut self,
+        columns: std::num::NonZeroUsize,
+        bytes: std::num::NonZeroUsize,
+    ) -> Self {
+        self.max_result_metadata = Some(crate::connection::ResultMetadataLimit { columns, bytes });
         self
     }
 
@@ -121,6 +135,7 @@ impl MySqlConnectOptions {
             timezone: Some(String::from("+00:00")),
             set_names: true,
             max_receive_packet_size: None,
+            max_result_metadata: None,
         }
     }
 

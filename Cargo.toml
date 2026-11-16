@@ -30,3 +30,4 @@ all = "warn"
 
 [patch.crates-io]
 sqlx-mysql = { path = "vendor/sqlx-mysql" }
+sqlx-postgres = { path = "vendor/sqlx-postgres" }

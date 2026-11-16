@@ -107,6 +107,7 @@ INSERT INTO export_values VALUES (9223372036854775807, 'quote " comma , newline'
 CREATE TABLE fk_parent(a int, b int, PRIMARY KEY (a, b));
 CREATE TABLE fk_child(id int PRIMARY KEY, x int, y int, CONSTRAINT fk_child_pair FOREIGN KEY (x, y) REFERENCES fk_parent(a, b) ON DELETE SET NULL);
 CREATE UNIQUE INDEX fk_child_xy ON fk_child (x, y);
+CREATE TABLE raw_large(id int PRIMARY KEY, payload text NOT NULL); INSERT INTO raw_large VALUES (1, repeat('x', 3 * 1024 * 1024));
 CREATE ROLE stoneql_reader LOGIN PASSWORD '${password}';
 GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_reader;
 GRANT USAGE ON SCHEMA public TO stoneql_reader;

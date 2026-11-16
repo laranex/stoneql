@@ -49,10 +49,16 @@ impl std::fmt::Display for ReadError {
 impl std::error::Error for ReadError {}
 pub(crate) fn driver_error(error: sqlx::Error) -> ReadError {
     match error {
+        // MySQL/MariaDB (packet) and PostgreSQL (backend message) receive limits. The PostgreSQL
+        // driver's `err_protocol!` appends its source location, so that message is a prefix.
         sqlx::Error::Protocol(message)
-            if message == "receive packet exceeds configured byte limit" =>
+            if message == "receive packet exceeds configured byte limit"
+                || message.starts_with("receive message exceeds configured byte limit (") =>
         {
             ReadError::PacketTooLarge
+        }
+        sqlx::Error::Protocol(message) if message == "result metadata exceeds configured limit" => {
+            ReadError::ResultTooWide
         }
         _ => ReadError::Database,
     }
@@ -372,6 +378,19 @@ mod tests {
                 "receive packet exceeds configured byte limit".into()
             )),
             ReadError::PacketTooLarge
+        );
+        assert_eq!(
+            driver_error(sqlx::Error::Protocol(
+                "receive message exceeds configured byte limit (sqlx_postgres::connection::stream:103)"
+                    .into()
+            )),
+            ReadError::PacketTooLarge
+        );
+        assert_eq!(
+            driver_error(sqlx::Error::Protocol(
+                "result metadata exceeds configured limit".into()
+            )),
+            ReadError::ResultTooWide
         );
         let error = driver_error(sqlx::Error::Protocol(
             "synthetic private SQL or connection details".into(),

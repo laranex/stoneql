@@ -30,6 +30,12 @@ pub(crate) fn options(
         .max_receive_packet_size(
             std::num::NonZeroUsize::new(2 * 1024 * 1024).expect("nonzero packet limit"),
         )
+        // A6 (approved 2026-11-16): column descriptors per result and their summed bytes,
+        // checked by the vendored driver before it reserves or decodes them.
+        .max_result_metadata(
+            std::num::NonZeroUsize::new(4096).expect("nonzero column limit"),
+            std::num::NonZeroUsize::new(4 * 1024 * 1024).expect("nonzero metadata limit"),
+        )
         .timezone(None)
         .pipes_as_concat(false)
         .no_engine_substitution(false)
