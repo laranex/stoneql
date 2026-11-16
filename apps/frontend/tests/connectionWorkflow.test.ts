@@ -145,6 +145,20 @@ test('live connection failures surface a fixed message and leave the dialog open
   assert.equal(store.liveSessions[id].status, 'error');
   assert.ok(!flow.connectionError.value.includes('synthetic-password'));
 });
+test('a failed test followed by a failed save shows the error once, not in both notices', async () => {
+  const native = nativeFixture(true);
+  const { flow } = await setup(native.global);
+  liveDraft(flow);
+  await flow.testConnection();
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+  await flow.saveConnection();
+  assert.equal(flow.connectionError.value, 'Connection failed. Check authentication, TLS and availability.');
+  assert.equal(flow.testMessage.value, '');
+  // Testing again replaces the save error instead of adding a second notice.
+  await flow.testConnection();
+  assert.equal(flow.connectionError.value, '');
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+});
 test('cancelling a live draft clears the password and CA from memory', async () => {
   const native = nativeFixture();
   const { flow, asked } = await setup(native.global);

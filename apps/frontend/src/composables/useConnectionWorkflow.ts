@@ -291,6 +291,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   async function testConnection() {
     if (!connectionDraft.value) return;
+    // One notice per attempt: a new test replaces an earlier save error (and vice versa).
+    connectionError.value = '';
     const ssh = liveSsh();
     if (ssh && !hostKeyTrust.value) {
       await fetchHostKey();
@@ -347,6 +349,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const draft = connectionDraft.value;
     if (!draft) return;
     connectionError.value = '';
+    testMessage.value = '';
     if (!draft.name.trim() || (draft.engine !== 'SQLite' && (!draft.host.trim() || !draft.user.trim()))) { connectionError.value = 'Name, host, and username are required.'; return; }
     if (draft.environment === 'Custom' && !draft.customEnvironment?.trim()) { connectionError.value = 'Enter a custom environment label.'; return; }
     if (draft.transport.type === 'ssh' && (!draft.transport.host.trim() || !draft.transport.user.trim())) { connectionError.value = 'SSH host and username are required.'; return; }
