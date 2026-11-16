@@ -148,6 +148,43 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         json!({"kind":"temporal","databaseType":"DATE","text":"0000-00-00"})
     );
     assert_eq!(result["payload"]["rows"][0][3], json!({"kind":"null"}));
+    // M003/M006: the renderer's live catalog and browse statements (apps/frontend/src/services/
+    // liveSchema.ts) over verified TLS through the real handler. MySQL 8 returns some catalog
+    // columns as binary cells; the renderer decodes those as UTF-8, mirrored here.
+    let catalog_text = |cell: &Value| -> String {
+        match cell["kind"].as_str().unwrap() {
+            "text" => cell["text"].as_str().unwrap().to_owned(),
+            "binary" => {
+                let hex = cell["hex"].as_str().unwrap();
+                let bytes: Vec<u8> = (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                    .collect();
+                String::from_utf8(bytes).unwrap()
+            }
+            "null" => String::new(),
+            other => panic!("unexpected catalog cell {other}"),
+        }
+    };
+    let tables = read(&first["handle"], "SELECT TABLE_NAME AS name, TABLE_TYPE AS kind FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'stoneql_m001_fixture' ORDER BY TABLE_NAME;").unwrap();
+    let listed: Vec<(String, String)> = tables["payload"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (catalog_text(&row[0]), catalog_text(&row[1])))
+        .collect();
+    assert!(
+        listed.contains(&("raw_values".into(), "BASE TABLE".into())),
+        "{listed:?}"
+    );
+    let columns = read(&first["handle"], "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_KEY AS ckey, COLUMN_DEFAULT AS dflt, EXTRA AS extra FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'stoneql_m001_fixture' AND TABLE_NAME = 'raw_values' ORDER BY ORDINAL_POSITION;").unwrap();
+    let id = &columns["payload"]["rows"][0];
+    assert_eq!(catalog_text(&id[0]), "id");
+    assert_eq!(catalog_text(&id[3]), "PRI");
+    let page = read(&first["handle"], "SELECT * FROM `raw_values`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%1%' ESCAPE '!'\nORDER BY `id` DESC\nLIMIT 0, 25;").unwrap();
+    assert!(!page["payload"]["rows"].as_array().unwrap().is_empty());
+    let count = read(&first["handle"], "SELECT COUNT(*) AS total FROM `raw_values`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%1%' ESCAPE '!';").unwrap();
+    assert_eq!(count["payload"]["rows"][0][0]["kind"], "integer");
     let duplicates = read(
         &first["handle"],
         "SELECT s AS value,u AS value FROM raw_values ORDER BY id",
