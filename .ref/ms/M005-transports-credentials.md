@@ -90,10 +90,10 @@ Alpha fix plan tasks (`.ref/planning/m005-alpha-fix-plan.md`) — all executed:
 
 | Criterion | Status |
 |---|---|
-| G1 host keys, certificates, no secrets in profile/logs, no agent forwarding | Verified (fixture + IPC); native dialog, Keychain prompts and picker need A1/A2 |
+| G1 host keys, certificates, no secrets in profile/logs, no agent forwarding | Verified (fixture + IPC). Native SSH key-file picker verified in a real window 2026-11-16 (A1, `journal_window picker`: cancel → no grant, chosen file → opaque grant). Native trust dialog and Keychain prompts need the signed build (A2) |
 | G2 identity, credential isolation, interrupted setup leaves no handle | Verified (T1/T2/T4 tests, fixture) |
 | G3 approved OS/auth-method matrix | Blocked (A3, A12): MySQL/MariaDB/PostgreSQL over agent/password/key file executed on macOS arm64 only |
 | G4/G5 100 cycles, 0 orphans, transport budget | 100 mixed cycles 0 orphans (MySQL full matrix, re-run 2026-11-16); dead-tunnel release bounded; budget approval A3 |
-| Dependency audit 0 vulnerabilities (plan T7) | Blocked (A4 russh, A5 libsqlite3-sys) |
+| Dependency audit 0 vulnerabilities (plan T7) | Blocked (A4 russh). A5 done 2026-11-16: libsqlite3-sys is no longer in the release graph; `cargo audit` still reads it from the dev/test lockfile |
 
 - 2026-11-16 re-run: `npm run test:ssh` passed on `ecb28b5` (includes `b0e5786` F-4/session-end changes): MySQL full matrix 190 forwarded channels, MariaDB/PostgreSQL parity 41 each, dead-tunnel cases passed again.

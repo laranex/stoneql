@@ -4,27 +4,31 @@
 //! connect options (and SSH endpoint). These connections never enter a pool: they are closed
 //! when the job or lease ends, so session state (variables, `USE`, temporary tables, locks,
 //! open transactions) cannot reach another job or the read-only path. Nothing here retries SQL.
+#[cfg(feature = "sqlite")]
+use super::sqlite;
 use super::{
     ConnectionId, Connections, EnginePool, Inner, LifecycleError, OwnerId, ReadError,
     connect_error, mysql, postgres,
     script::{self, ScriptError, Statement},
-    sqlite,
 };
 use futures_util::{StreamExt, stream::BoxStream};
 use journal::{Entry, Journal};
 use sqlx::{
     Connection, Database, Either, Executor, MySql, MySqlConnection, PgConnection, Postgres, Row,
-    SqlSafeStr, Sqlite, SqliteConnection, Statement as _, TypeInfo,
+    SqlSafeStr, Statement as _, TypeInfo,
     mysql::{MySqlConnectOptions, MySqlDatabaseError},
     postgres::PgConnectOptions,
 };
+#[cfg(feature = "sqlite")]
+use sqlx::{Sqlite, SqliteConnection};
+#[cfg(feature = "sqlite")]
+use std::path::PathBuf;
+#[cfg(feature = "sqlite")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, Weak,
-        atomic::{AtomicBool, Ordering},
-    },
+    path::Path,
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 use stoneql_contracts::v1::{
@@ -336,6 +340,7 @@ impl From<String> for Origin {
 enum Target {
     MySql(MySqlConnectOptions),
     Postgres(PgConnectOptions),
+    #[cfg(feature = "sqlite")]
     Sqlite(PathBuf),
 }
 impl Target {
@@ -345,6 +350,7 @@ impl Target {
         let name = match self {
             Self::MySql(options) => options.get_database().unwrap_or_default().to_owned(),
             Self::Postgres(options) => options.get_database().unwrap_or_default().to_owned(),
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(path) => path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -356,6 +362,7 @@ impl Target {
         match pool {
             EnginePool::MySql(pool) => Self::MySql((*pool.connect_options()).clone()),
             EnginePool::Postgres(pool) => Self::Postgres((*pool.connect_options()).clone()),
+            #[cfg(feature = "sqlite")]
             EnginePool::Sqlite(pool) => {
                 Self::Sqlite(pool.connect_options().get_filename().to_path_buf())
             }
@@ -389,9 +396,10 @@ impl Target {
                     interrupt: Interrupt::Postgres(options.clone(), pid),
                 }
             }
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(path) => {
                 // Re-verify the granted canonical file at every open (D014).
-                sqlite::verify(path)?;
+                super::files::verify(path)?;
                 let mut connection = SqliteConnection::connect_with(&sqlite::write_options(path))
                     .await
                     .map_err(connect_error)?;
@@ -414,6 +422,7 @@ impl Target {
 enum Session {
     MySql(MySqlConnection),
     Postgres(PgConnection),
+    #[cfg(feature = "sqlite")]
     Sqlite(SqliteConnection),
 }
 /// Best-effort server cancellation for one physical session. MySQL/MariaDB send `KILL QUERY`
@@ -423,10 +432,11 @@ enum Session {
 enum Interrupt {
     MySql(MySqlConnectOptions, u64),
     Postgres(PgConnectOptions, i32),
+    #[cfg(feature = "sqlite")]
     Sqlite(Arc<AtomicBool>),
     /// Test-only: interrupts the SQLite worker like `Sqlite`, then never completes, modelling a
     /// KILL/cancel that was written but whose reply never arrived (L-8).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     Stalled(Arc<AtomicBool>),
 }
 impl Interrupt {
@@ -464,11 +474,12 @@ impl Interrupt {
                 let _ = connection.close().await;
                 sent
             }
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(flag) => {
                 flag.store(true, Ordering::SeqCst);
                 true
             }
-            #[cfg(test)]
+            #[cfg(all(test, feature = "sqlite"))]
             Self::Stalled(flag) => {
                 flag.store(true, Ordering::SeqCst);
                 std::future::pending().await
@@ -477,8 +488,9 @@ impl Interrupt {
     }
     fn rearm(&self) {
         match self {
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(flag) => flag.store(false, Ordering::SeqCst),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "sqlite"))]
             Self::Stalled(flag) => flag.store(false, Ordering::SeqCst),
             _ => {}
         }
@@ -496,6 +508,7 @@ impl Physical {
         match &mut self.session {
             Session::MySql(connection) => statement.execute(connection).await.map(drop),
             Session::Postgres(connection) => statement.execute(connection).await.map(drop),
+            #[cfg(feature = "sqlite")]
             Session::Sqlite(connection) => statement.execute(connection).await.map(drop),
         }
     }
@@ -519,6 +532,7 @@ impl Physical {
         let probe = async {
             match &mut self.session {
                 Session::MySql(connection) => mysql_state_matches(connection, lease).await,
+                #[cfg(feature = "sqlite")]
                 Session::Sqlite(connection) => {
                     let begin = sqlx::raw_sql(sqlx::AssertSqlSafe("BEGIN").into_sql_str())
                         .execute(&mut *connection)
@@ -553,6 +567,7 @@ impl Physical {
             let _ = match self.session {
                 Session::MySql(connection) => connection.close().await,
                 Session::Postgres(connection) => connection.close().await,
+                #[cfg(feature = "sqlite")]
                 Session::Sqlite(connection) => connection.close().await,
             };
         };
@@ -1083,6 +1098,7 @@ async fn statement(
             )
             .await
         }
+        #[cfg(feature = "sqlite")]
         Session::Sqlite(connection) => {
             let prepared = (&mut *connection).prepare(text()).await?;
             let declared = columns(prepared.columns());
@@ -1109,6 +1125,7 @@ async fn statement(
 /// cannot end the statement there when it runs. A prefix that prepares (a real statement end,
 /// or a `;` in a comment) or fails for any other reason (a missing table) refuses it. NUL bytes
 /// end SQLite's input early and are refused too.
+#[cfg(feature = "sqlite")]
 async fn sqlite_single_statement(connection: &mut SqliteConnection, sql: &str) -> bool {
     if sql.contains('\0') {
         return false;
@@ -1130,6 +1147,7 @@ async fn sqlite_single_statement(connection: &mut SqliteConnection, sql: &str) -
     }
     true
 }
+#[cfg(feature = "sqlite")]
 fn sqlite_parse_error(message: &str) -> bool {
     message == "incomplete input"
         || message.starts_with("unrecognized token:")
@@ -2406,6 +2424,7 @@ async fn run(mut plan: Plan) {
         let postgres = matches!(connection.session, Session::Postgres(_));
         let Physical { session, interrupt } = &mut connection;
         // R-1: nothing is sent unless SQLite parses the text as exactly one statement.
+        #[cfg(feature = "sqlite")]
         if let Session::Sqlite(sqlite) = session
             && !sqlite_single_statement(sqlite, &text.sql).await
         {
@@ -2606,7 +2625,8 @@ fn finish(
 }
 
 mod journal;
-#[cfg(test)]
+// The execution suite runs against SQLite fixture files (A5: `sqlite` is a default feature).
+#[cfg(all(test, feature = "sqlite"))]
 mod ssh_fixture;
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests;

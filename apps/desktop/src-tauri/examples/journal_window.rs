@@ -11,6 +11,12 @@
 //! - `reload <root>`: with an open transaction and a running job, tries Cmd+R, the context-menu
 //!   Reload and the Web Inspector reload through System Events, records whether each reloaded,
 //!   then confirms the in-app dialog and checks the unknown outcomes after the reload.
+//! - `fallback <root>`: freezes the renderer, clicks the window's close button, and expects the
+//!   native "not responding" dialog: Cancel keeps the app running; a second close and
+//!   "Close StoneQL" must exit with status 0. Writes `<root>/fallback.json` before the final click.
+//! - `picker <root>`: opens the native SSH key-file picker through `pick_ssh_key_file`, cancels it
+//!   (Escape → no grant), then chooses `<root>/id_picker_test` with Go to Folder (Cmd+Shift+G)
+//!   and expects an opaque grant naming only that file. Writes `<root>/picker.json`.
 use serde_json::{Value, json};
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
 use std::{
@@ -237,13 +243,31 @@ fn reload(app: tauri::AppHandle<Wry>, root: PathBuf, file: PathBuf) {
             front(pid)
         ),
     );
-    let context = attempt(
-        "context menu Reload",
-        format!(
-            "{}\ndelay 0.5\ntell application \"System Events\"\n set p to first process whose unix id is {pid}\n set wa to missing value\n repeat with e in (entire contents of window 1 of p)\n  try\n   if role of e is \"AXWebArea\" then\n    set wa to e\n    exit repeat\n   end if\n  end try\n end repeat\n perform action \"AXShowMenu\" of wa\n delay 0.8\n set names to {{}}\n try\n  set names to name of every menu item of menu 1 of wa\n end try\n set picked to false\n try\n  click (first menu item of menu 1 of wa whose name is \"Reload\")\n  set picked to true\n end try\n if not picked then key code 53\n return {{picked, names}}\nend tell",
+    // WKWebView's web area is not reachable through System Events, so a real right-click is
+    // posted with CoreGraphics on the status bar (JXA; the grid has its own app menu), then the menu item is chosen.
+    let context = attempt("context menu Reload", {
+        let bounds = osascript(&format!(
+            "{}\ndelay 0.5\ntell application \"System Events\"\n set w to window 1 of (first process whose unix id is {pid})\n set {{x, y}} to position of w\n set {{wd, ht}} to size of w\n return (((x + wd / 2) as integer) as text) & \",\" & (((y + ht - 10) as integer) as text)\nend tell",
             front(pid)
-        ),
-    );
+        ));
+        let point = bounds.1.replace(' ', "");
+        let click = std::process::Command::new("/usr/bin/osascript")
+            .args([
+                "-l",
+                "JavaScript",
+                "-e",
+                &format!(
+                    "ObjC.import('CoreGraphics'); var p = $.CGPointMake({point}); [3, 4].forEach(function (t) {{ $.CGEventPost($.kCGHIDEventTap, $.CGEventCreateMouseEvent(null, t, p, $.kCGMouseButtonRight)); delay(0.1); }}); 'clicked'"
+                ),
+            ])
+            .output()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        format!(
+            "-- right-click at {point}: {}\ntell application \"System Events\"\n set p to first process whose unix id is {pid}\n set picked to false\n set names to {{}}\n try\n  set names to name of every menu item of menu 1 of p\n end try\n try\n  click (first menu item of menu 1 of p whose name is \"Reload\")\n  set picked to true\n end try\n -- WKWebView's native menu is not exposed to System Events: Down selects its first item (Reload).\n if not picked then\n  key code 125\n  delay 0.2\n  key code 36\n  set picked to \"keyboard\"\n end if\n return {{picked, names}}\nend tell",
+            click.status.success()
+        )
+    });
     let inspector = {
         window.open_devtools();
         std::thread::sleep(Duration::from_millis(2000));
@@ -283,7 +307,7 @@ fn reload(app: tauri::AppHandle<Wry>, root: PathBuf, file: PathBuf) {
     let ui = wait_until("unknown outcomes shown after reload", || {
         eval(
             &window,
-            "document.querySelector('[aria-label=\"Unknown outcomes\"]')?.querySelectorAll('li').length ?? 0",
+            "[...(document.querySelector('[aria-label=\"Unknown outcomes\"]')?.querySelectorAll('button') ?? [])].filter(b => b.textContent.trim() === 'Acknowledge').length",
         )
         .as_u64()
             >= Some(2)
@@ -306,6 +330,101 @@ fn reload(app: tauri::AppHandle<Wry>, root: PathBuf, file: PathBuf) {
     report["uiText"] = ui_text;
     report["after"] = listed;
     write(&root, "reload", &report);
+    println!("DONE");
+    std::process::exit(0);
+}
+
+fn fallback(app: tauri::AppHandle<Wry>, root: PathBuf) {
+    let window = app.get_webview_window("main").unwrap();
+    let pid = std::process::id();
+    // Fixed test script: a busy loop leaves the web content process unable to answer the
+    // close request, which is exactly the case the native fallback exists for.
+    window
+        .eval("setTimeout(() => { for (;;) {} }, 50)")
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+    let close = || {
+        osascript(&format!(
+            "{}\ndelay 0.5\ntell application \"System Events\"\n set w to first window of (first process whose unix id is {pid}) whose name is \"StoneQL\"\n click (first button of w whose subrole is \"AXCloseButton\")\nend tell",
+            front(pid)
+        ))
+    };
+    // Without a parent window the dialog plugin shows a CFUserNotification, which macOS renders
+    // in the UserNotificationCenter process (not this one). Its buttons need AXPress.
+    const FIND: &str = "tell application \"System Events\"\n set found to {}\n repeat with w in (windows of process \"UserNotificationCenter\")\n  if exists (button \"Close StoneQL\" of w) then set end of found to w\n end repeat";
+    let alerts = || {
+        osascript(&format!("{FIND}\n return count of found\nend tell"))
+            .1
+            .parse::<u32>()
+            .unwrap_or(0)
+    };
+    let press = |button: &str| {
+        osascript(&format!(
+            "{FIND}\n perform action \"AXPress\" of button \"{button}\" of (item 1 of found)\nend tell"
+        ))
+        .0
+    };
+    let first_close = close();
+    std::thread::sleep(Duration::from_millis(3500));
+    let first_dialog = alerts();
+    let cancel = press("Cancel");
+    std::thread::sleep(Duration::from_millis(1500));
+    let after_cancel = alerts();
+    let second_close = close();
+    std::thread::sleep(Duration::from_millis(3500));
+    let second_dialog = alerts();
+    let report = json!({
+        "firstClose": first_close, "alertsAfterClose": first_dialog,
+        "cancelPressed": cancel, "alertsAfterCancel": after_cancel,
+        "stillRunningAfterCancel": true,
+        "secondClose": second_close, "alertsAfterSecondClose": second_dialog,
+    });
+    println!("{report}");
+    write(&root, "fallback", &report);
+    println!("CLOSING");
+    let confirm = press("Close StoneQL");
+    println!("{}", json!({"closeStoneQlPressed": confirm}));
+    // The app must exit on its own (status 0) via shutdown; this deadline is a failure.
+    std::thread::sleep(Duration::from_secs(10));
+    eprintln!("fallback: app did not exit after Close StoneQL");
+    press("Cancel");
+    std::process::exit(3);
+}
+
+fn picker(app: tauri::AppHandle<Wry>, root: PathBuf) {
+    let window = app.get_webview_window("main").unwrap();
+    let pid = std::process::id();
+    let key = root.join("id_picker_test");
+    // Placeholder bytes only: the picker grant checks the file, not its contents.
+    std::fs::write(&key, "not a key\n").unwrap();
+    let s = session(&window, "jw_picker");
+    let pick = |driver: String| -> Value {
+        let shot = root.join("picker-open.png");
+        let script = format!(
+            "{}\ndelay 2\ndo shell script \"/usr/sbin/screencapture -x {}\"\n{driver}",
+            front(pid),
+            shot.display()
+        );
+        let drive = std::thread::spawn(move || osascript(&script));
+        let result = run(
+            &window,
+            &format!("window.__rt = await inv('pick_ssh_key_file', {{sessionId: {s}}});"),
+        );
+        json!({"result": result, "driver": drive.join().unwrap()})
+    };
+    let cancelled = pick("tell application \"System Events\" to key code 53".into());
+    let chosen = pick(format!(
+        "tell application \"System Events\"\n keystroke \"g\" using {{command down, shift down}}\n delay 1\n keystroke \"{}\"\n delay 1\n key code 36\n delay 1\n key code 36\nend tell",
+        key.display()
+    ));
+    let report = json!({
+        "cancelled": cancelled, "chosen": chosen,
+        "cancelGivesNoGrant": cancelled["result"].is_object() && cancelled["result"]["grant"].is_null() && cancelled["result"]["error"].is_null(),
+        "chosenGrantOpaque": chosen["result"]["grant"].as_str().is_some_and(|g| !g.contains('/')),
+        "chosenFileName": chosen["result"]["fileName"],
+    });
+    println!("{report}");
+    write(&root, "picker", &report);
     println!("DONE");
     std::process::exit(0);
 }
@@ -352,6 +471,8 @@ fn main() {
                 list(handle, root, file, args[2].clone(), ack)
             }
             "reload" => reload(handle, root, file),
+            "fallback" => fallback(handle, root),
+            "picker" => picker(handle, root),
             _ => std::process::exit(64),
         }
     });

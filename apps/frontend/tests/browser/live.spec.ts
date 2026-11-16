@@ -7,7 +7,7 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
    const request=JSON.parse(args.message);const p=request.payload;(window as any).liveCommands.push(command);
    let payload:any;
-   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true};
+   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true,sqlite:true};
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
    else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='connect_direct'){
@@ -96,7 +96,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SQLite opens a natively
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
    const request=JSON.parse(args.message);const p=request.payload;(window as any).liveCalls.push({command,payload:p});
    let payload:any;
-   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true};
+   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true,sqlite:true};
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
    else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='pick_sqlite_file')payload={grant:'opaque_fixture_grant',fileName:'inventory.sqlite'};
@@ -147,7 +147,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
   (window as any).__TAURI__={core:{invoke:async(command:string,args:{message:string})=>{
    const request=JSON.parse(args.message);const p=request.payload;(window as any).liveCalls.push({command,payload:p});
    let payload:any;
-   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true};
+   if(command==='host_info')payload={runtime:'desktop',appVersion:'0.1.0',sessionId:'fixture_session',nonce:p.nonce,simulated:true,sqlite:true};
    else if(command==='contract_probe')payload={values:p.values,simulated:true};
    else if(command==='list_unresolved_outcomes')payload={outcomes:[],limit:16};
    else if(command==='ssh_host_key')payload={algorithm:'ssh-ed25519',publicKey:'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl',fingerprint:'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M'};

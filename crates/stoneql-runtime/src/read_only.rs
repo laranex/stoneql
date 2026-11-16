@@ -1,8 +1,6 @@
 //! Intentionally restricted SELECT subset shared by every engine. Engine read-only transactions and database
 //! privileges remain authoritative; this conservative lexer is an additional refusal policy.
-use super::{
-    ConnectionId, Connections, EnginePool, LifecycleError, OwnerId, mysql, postgres, sqlite,
-};
+use super::{ConnectionId, Connections, EnginePool, LifecycleError, OwnerId, mysql, postgres};
 use futures_util::TryStreamExt;
 use sqlx::{
     Column as _, Database, Executor, IntoArguments, Row, SqlSafeStr, Statement, TypeInfo,
@@ -97,7 +95,8 @@ impl Connections {
                     .await
                 }
                 EnginePool::Postgres(pool) => postgres::read(&pool, sql, limits).await,
-                EnginePool::Sqlite(pool) => sqlite::read(&pool, sql, limits).await,
+                #[cfg(feature = "sqlite")]
+                EnginePool::Sqlite(pool) => super::sqlite::read(&pool, sql, limits).await,
             }
         })
         .await

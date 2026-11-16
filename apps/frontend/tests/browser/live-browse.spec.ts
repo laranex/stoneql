@@ -50,6 +50,13 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
     await page.getByTitle('Manage connections', { exact: true }).click();
     await page.getByRole('button', { name: 'New connection', exact: true }).click();
     await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+    if (theme === 'light' && !postgres) {
+      // A5: this host reports no SQLite (release build): the option is explained and disabled.
+      await page.getByLabel('Database engine', { exact: true }).selectOption('SQLite');
+      await expect(page.getByTestId('sqlite-unavailable')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Choose file…' })).toBeDisabled();
+      await page.getByLabel('Database engine', { exact: true }).selectOption('MySQL');
+    }
     if (postgres) await page.getByLabel('Database engine', { exact: true }).selectOption('PostgreSQL');
     await page.getByPlaceholder('e.g. Local development').fill('Live catalog');
     await page.getByRole('button', { name: 'Save & connect', exact: true }).click();

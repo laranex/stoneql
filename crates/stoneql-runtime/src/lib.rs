@@ -1,9 +1,11 @@
 //! Host-independent connection lifecycle. No renderer/HTTP access or credential persistence.
 mod execution;
+mod files;
 mod mysql;
 mod postgres;
 mod read_only;
 mod script;
+#[cfg(feature = "sqlite")]
 mod sqlite;
 mod ssh;
 mod transfer;
@@ -13,7 +15,9 @@ pub use execution::{
 };
 pub use read_only::{QueryLimits, ReadError};
 pub use script::ScriptError;
-use sqlx::{MySqlPool, PgPool, SqlitePool};
+#[cfg(feature = "sqlite")]
+use sqlx::SqlitePool;
+use sqlx::{MySqlPool, PgPool};
 pub use ssh::{ENDPOINT_PREFIX, HostKey, SshAuth, SshConfig, describe_host_key, endpoint_root};
 use std::{
     collections::HashMap,
@@ -153,6 +157,7 @@ fn connect_error(error: sqlx::Error) -> LifecycleError {
 enum EnginePool {
     MySql(MySqlPool),
     Postgres(PgPool),
+    #[cfg(feature = "sqlite")]
     Sqlite(SqlitePool),
 }
 impl EnginePool {
@@ -160,6 +165,7 @@ impl EnginePool {
         match self {
             Self::MySql(pool) => pool.close().await,
             Self::Postgres(pool) => pool.close().await,
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(pool) => pool.close().await,
         }
     }
@@ -167,6 +173,7 @@ impl EnginePool {
         match self {
             Self::MySql(pool) => pool.is_closed(),
             Self::Postgres(pool) => pool.is_closed(),
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(pool) => pool.is_closed(),
         }
     }
@@ -174,6 +181,7 @@ impl EnginePool {
         match self {
             Self::MySql(_) => read_only::Dialect::MySql,
             Self::Postgres(_) => read_only::Dialect::Postgres,
+            #[cfg(feature = "sqlite")]
             Self::Sqlite(_) => read_only::Dialect::Sqlite,
         }
     }
@@ -220,6 +228,7 @@ impl Entry {
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GrantKind {
+    #[cfg(feature = "sqlite")]
     Sqlite,
     SshKey,
 }
@@ -472,7 +481,7 @@ impl Connections {
         owner: OwnerId,
         path: &Path,
     ) -> Result<String, LifecycleError> {
-        let canonical = sqlite::authorize(path)?;
+        let canonical = files::authorize(path)?;
         self.grant(owner, GrantKind::SshKey, canonical)
     }
     pub fn ssh_key_file_name(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
@@ -480,7 +489,7 @@ impl Connections {
     }
     fn read_key_file(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
         let path = self.granted_path(owner, grant, GrantKind::SshKey)?;
-        let canonical = sqlite::authorize(&path).map_err(|_| LifecycleError::Forbidden)?;
+        let canonical = files::authorize(&path).map_err(|_| LifecycleError::Forbidden)?;
         let metadata = std::fs::metadata(&canonical).map_err(|_| LifecycleError::Forbidden)?;
         if metadata.len() > ssh::MAX_KEY_FILE_BYTES {
             return Err(LifecycleError::InvalidConfiguration);
@@ -488,10 +497,11 @@ impl Connections {
         let bytes = std::fs::read(&canonical).map_err(|_| LifecycleError::Forbidden)?;
         String::from_utf8(bytes).map_err(|_| LifecycleError::InvalidConfiguration)
     }
+    #[cfg(feature = "sqlite")]
     /// Trusted host file-picker result → owner-scoped opaque grant. The renderer never supplies
     /// a path; it can only name a grant previously issued to its own session.
     pub fn grant_sqlite_file(&self, owner: OwnerId, path: &Path) -> Result<String, LifecycleError> {
-        let canonical = sqlite::authorize(path)?;
+        let canonical = files::authorize(path)?;
         self.grant(owner, GrantKind::Sqlite, canonical)
     }
     /// Grants are typed: a SQLite grant never authorizes reading a file as an SSH key.
@@ -517,6 +527,7 @@ impl Connections {
         grants.insert(id, (owner, kind, canonical));
         Ok(id.to_string())
     }
+    #[cfg(feature = "sqlite")]
     /// File name of an owned grant, for display only.
     pub fn sqlite_file_name(&self, owner: OwnerId, grant: &str) -> Result<String, LifecycleError> {
         file_name(&self.granted_path(owner, grant, GrantKind::Sqlite)?)
@@ -537,6 +548,7 @@ impl Connections {
             .map(|(_, _, path)| path.clone())
             .ok_or(LifecycleError::Forbidden)
     }
+    #[cfg(feature = "sqlite")]
     /// Opens an owned SQLite grant read-only on SQLx's dedicated worker thread.
     pub async fn connect_sqlite(
         &self,
@@ -546,6 +558,7 @@ impl Connections {
         self.connect_sqlite_with_access(owner, grant, Access::ReadOnly)
             .await
     }
+    #[cfg(feature = "sqlite")]
     /// Read-write SQLite handles keep the read-only pool for `read_only`; jobs and leases open
     /// separate read-write connections to the same re-verified canonical file.
     pub async fn connect_sqlite_with_access(
@@ -1041,6 +1054,7 @@ mod tests {
         assert!(connections.0.entries.lock().unwrap().is_empty());
         server.abort();
     }
+    #[cfg(feature = "sqlite")]
     #[test]
     fn file_grants_are_typed_and_owner_scoped() {
         let path = std::env::temp_dir().join(format!("stoneql-grant-{}", Uuid::new_v4()));

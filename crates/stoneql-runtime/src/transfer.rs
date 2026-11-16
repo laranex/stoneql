@@ -343,6 +343,7 @@ impl Connections {
                 let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
                 columns
             }
+            #[cfg(feature = "sqlite")]
             EnginePool::Sqlite(_) => {
                 return Err(TransferError::Unsupported(
                     "SQLite export is not part of the supported scope".into(),

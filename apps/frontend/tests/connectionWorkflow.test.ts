@@ -36,7 +36,7 @@ function nativeFixture(failConnect: boolean | string = false, pickerCancelled = 
     }
     if (command === 'forget_ssh_host_key') { enrolled = false; return { version: 1, requestId: request.requestId, payload: trusted() }; }
     if (command === 'pick_ssh_key_file') return { version: 1, requestId: request.requestId, payload: { grant: 'opaque_key_grant', fileName: 'id_ed25519' } };
-    const payload = command === 'host_info' ? { runtime: 'desktop', appVersion: '0.1.0', sessionId: 'test_session', nonce: request.payload.nonce, simulated: true }
+    const payload = command === 'host_info' ? { runtime: 'desktop', appVersion: '0.1.0', sessionId: 'test_session', nonce: request.payload.nonce, simulated: true, sqlite: true }
       : command === 'contract_probe' ? { values: request.payload.values, simulated: true }
       : command === 'connect_direct' ? { handle: 'owned_handle', engineVersion: 'fixture-version', database: request.payload.database, expiresAfterSeconds: 3600 }
       : command === 'pick_sqlite_file' ? (pickerCancelled ? { grant: null, fileName: null } : { grant: 'opaque_grant', fileName: 'chosen.sqlite' })

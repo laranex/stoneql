@@ -9,14 +9,16 @@ User decisions recorded in this run:
   code and regressions but receives no new work; its criteria are out of scope. Platform stays
   macOS only (D021). No OS change was stated.
 - 2026-11-16 — Constraints carried over: no keyboard/window focus use, minimal storage, short tests.
+- 2026-11-16 — A1 and A5 approved. Real windows, keyboard and window focus allowed for the GUI
+  tests only; the other constraints stay.
 
 | # | Milestone | Decision or sign-off needed | Unblocks | Status |
 |---|---|---|---|---|
-| A1 | M002–M006 | Permission to open real StoneQL windows (takes focus) | M002 G3 native E2E, OS fallback close dialog, 30-launch startup profile; M006 physical Cmd+R/context-menu/inspector reload; M005 Keychain prompts and native key-file picker | Pending |
+| A1 | M002–M006 | Permission to open real StoneQL windows (takes focus) | M002 G3 native E2E, OS fallback close dialog, 30-launch startup profile; M006 physical Cmd+R/context-menu/inspector reload; M005 Keychain prompts and native key-file picker | **Approved 2026-11-16** (user: "You may open real app windows and use keyboard and window focus as needed for those tests"). **Run 2026-11-16**: smoke, 30-launch profile, fallback dialog, reload paths and key picker passed; Keychain prompts and signed-app E2E still need A2 (see Results) |
 | A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | Pending |
 | A3 | M002–M005 | Approve the Proposed numerical budgets and version matrix: M002 startup/IPC, M003 lifecycle/basic-SQL (MySQL 8.4.6, MariaDB 11.4.8 on macOS arm64), M004 PostgreSQL 17.6 lifecycle/query, M005 SSH transport budget and auth-method matrix | G4/G5 and G3 sign-off for M002–M005 | Pending |
 | A4 | M002/M005 | russh RUSTSEC-2026-0495 (agent *server* flaw; StoneQL uses only the agent client, not reachable): approve upgrade `=0.64.1` → 0.65.x (breaking 0.x bump, "russh upgrade policy" from M005 review) or record risk acceptance | Clean macOS dependency audit (M002 alpha blocker) | Pending |
-| A5 | M002/M004 | libsqlite3-sys 0.37 RUSTSEC-2026-0459 (bundled SQLite < 3.54, local crafted DB+WAL pair leaks stale memory). sqlx 0.9.0 (latest) requires `=0.37`; no upgrade path. Decide: risk acceptance while SQLite is out of scope, or remove/feature-gate SQLite from the desktop build (conflicts with D022 "keep SQLite regressions") | Clean macOS dependency audit (M002 alpha blocker) | Pending |
+| A5 | M002/M004 | libsqlite3-sys 0.37 RUSTSEC-2026-0459 (bundled SQLite < 3.54, local crafted DB+WAL pair leaks stale memory). sqlx 0.9.0 (latest) requires `=0.37`; no upgrade path. Decide: risk acceptance while SQLite is out of scope, or remove/feature-gate SQLite from the desktop build (conflicts with D022 "keep SQLite regressions") | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Exclude SQLite from the release build and verify it is no longer bundled"). **Done 2026-11-16**: not in the release graph or binary; `cargo audit` still reports it from the dev/test lockfile (see Results) |
 | A6 | M003/M006/M007 | Adopt the metadata-limit vendor patch (D002 extension, alpha plan e1): 4,096 columns / 4 MiB descriptor budget per result, `experiments/sqlx-metadata-limit/metadata-limit.patch` (re-verified to apply 2026-11-16). Note: the hostile huge-column-count abort was reasoned, not executed. | M003 G4/G5 aggregate memory bound; same driver path for M006 browse/CRUD and M007 export | Pending |
 | A7 | M003 | Accept residual read-only trust limits (hostile UDF/plugin/external effects not certifiable; advisory locks possible via definitions) as documented in `docs/development/read-only-safety.md` | M003 G1 sign-off | Pending |
 | A8 | M004/M006/M007 | Adopt the sqlx-postgres message-limit patch as `vendor/sqlx-postgres` (D002-class extension) with a 2 MiB runtime limit mapped to `PacketTooLarge`: fixes a hostile-server panic (length < 4) and unbounded per-message buffering. `.ref/planning/m004-pg-message-limit/findings.md` | M004 G1/G4 message bound; same driver path for PostgreSQL browse (M006) and transfers (M007) | Pending |
@@ -32,3 +34,43 @@ User decisions recorded in this run:
 | A18 | M007 | Approve transfer quotas implemented as Proposed defaults: CSV import file ≤ 64 MiB (renderer-held), INSERT batches < 60 KiB, export SQL batches of 500 rows, 8 outstanding export grants / 16 transfer records per session; and the alpha-plan quotas still unimplemented (1 GiB import, free-space floor, +256 MiB RSS for 1M rows) | M007 G4/G5 sign-off | Pending |
 | A19 | M007 | Approve the CSV convention (every value quoted, NULL = unquoted `NULL`; binary columns refused in CSV) and PostgreSQL data-only SQL export (structure would need pg_dump) | M007 G2/G3 format sign-off | Pending |
 | A20 | M007 | D008 transfer library/format decisions: GZIP export (Proposed keep), ZIP, JSON/XLSX export, GZIP import (all Deferred/not offered); and whether live SQL import (d5) is built natively before the alpha | Remaining M007 formats and d5 | Pending |
+
+## Results
+
+### A5 — SQLite excluded from the release build (done 2026-11-16)
+
+- Runtime `sqlite` feature (default, used by the runtime's own tests) and desktop `sqlite` feature
+  (off by default). `npm run desktop:release` builds without it; SQLite file grants and connections
+  are compiled out; the SQLite IPC commands stay registered and refuse with `UNSUPPORTED_CAPABILITY`
+  before any dialog; `HostInfo.sqlite=false` disables **Choose file…** with a notice.
+- Not bundled: `cargo tree --locked -p stoneql-desktop --features custom-protocol -e normal,build
+  -i libsqlite3-sys` (and `-i sqlx-sqlite`) is empty for `aarch64-apple-darwin` and
+  `x86_64-apple-darwin`; the positive control with `,sqlite` shows `libsqlite3-sys v0.37.0`.
+- Release binary `target/release/stoneql-desktop` (23,369,712 bytes, sha256 prefix
+  `8e8fe60b703cc993`): 0 `sqlite3_` symbols, 0 `SQLite format 3` strings, no SQLite library in
+  `otool -L`, 0 smoke-probe strings. Control (debug build with `sqlite`): 300 `sqlite3_` symbols.
+- Regressions kept: `npm run desktop:test` runs the SQLite suites with the feature (55 passed) and
+  the IPC suite without it (`sqlite_capability_matches_the_build`); runtime without SQLite 63
+  passed; `rust:test` 158 passed; Clippy `-D warnings` clean for the workspace and for
+  runtime ±sqlite, desktop +sqlite and desktop +smoke.
+- Remaining: `cargo audit` still lists RUSTSEC-2026-0459 because it reads the whole lockfile
+  (development/test graph). The M002 "clean macOS dependency audit" therefore needs either an
+  audit scoped to the release graph or an ignore entry, which is a new decision (not taken).
+
+### A1 — real-window GUI tests on macOS arm64 (run 2026-11-16, unsigned builds)
+
+| Check | Command | Result |
+|---|---|---|
+| Native smoke (debug) | `npm run desktop:smoke` | Passed, 2,783 ms |
+| 30-launch release startup profile | `npm run desktop:profile` (optimized build + non-shipped `smoke` feature) | 30/30 passed; host start → renderer ready min 562 / median 607 / p95 701 / max 715 ms; spawn → exit median 624 ms, max 1,152 ms (first launch). Sequential, no cache purge. Budgets still Proposed (A3) |
+| OS fallback close dialog, unresponsive renderer | `journal_window fallback` | Passed: renderer frozen, window close → native "not responding" alert (rendered by macOS UserNotificationCenter); Cancel → app keeps running, alert gone; second close → alert again; Close StoneQL → exit status 0 |
+| Physical reload paths while work is active | `journal_window reload`; `real_window_reload` test | Passed: Cmd+R (no reload), WebView context-menu Reload (real right-click, menu item chosen; refused, in-app dialog requested), Web Inspector Cmd+R (refused); after confirming, reloaded, lease rolled back, 2 unknown outcomes listed natively and in the UI |
+| Native SSH key-file picker | `journal_window picker` (twice) | Passed: Escape → no grant; file chosen via Go to Folder → opaque grant, display name only |
+| Keychain prompts | — | Not run: a meaningful prompt check needs the signed app (A2) |
+| Native E2E on the signed `.app` (M002 G3) | — | Not run: needs A2 (signed artifact) |
+
+Harness notes: the context menu needs a right-click outside the data grid (the grid has its own
+menu); System Events cannot see the WKWebView menu or the CFUserNotification alert buttons, so the
+harness uses the keyboard for the menu and AXPress in UserNotificationCenter for the alert. Early
+harness runs left three orphaned alerts on screen; they were dismissed and the harness now answers
+its alert on failure.

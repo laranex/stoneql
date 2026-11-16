@@ -275,6 +275,7 @@ async fn host_info<R: Runtime>(
             nonce: request.payload.nonce,
             simulated: true,
             read_write_sql: session.read_write_sql,
+            sqlite: sqlite_file::SQLITE_SUPPORTED,
         },
     })
 }
@@ -295,7 +296,7 @@ fn contract_probe<R: Runtime>(
             if !session.echoed.load(Ordering::SeqCst) || !request.payload.values.is_empty() {
                 return Err(invalid());
             }
-            if session.smoke && cfg!(debug_assertions) {
+            if session.smoke && cfg!(any(debug_assertions, feature = "smoke")) {
                 println!(
                     "{{\"nativeSmokePassed\":true,\"startupMs\":{}}}",
                     session.started.elapsed().as_millis()
@@ -549,7 +550,8 @@ pub fn app_builder_with<R: Runtime>(
         ])
 }
 pub fn run() {
-    let smoke = cfg!(debug_assertions) && std::env::args().any(|arg| arg == "--smoke-test");
+    let smoke = cfg!(any(debug_assertions, feature = "smoke"))
+        && std::env::args().any(|arg| arg == "--smoke-test");
     app_builder(tauri::Builder::default(), smoke)
         .build(tauri::generate_context!())
         .expect("build StoneQL desktop host")

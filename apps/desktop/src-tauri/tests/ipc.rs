@@ -492,38 +492,42 @@ fn read_write_is_refused_natively_while_the_gate_is_off() {
         );
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
     }
-    let root = std::env::temp_dir().join(format!("stoneql-gate-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&root).unwrap();
-    let file = std::fs::canonicalize(&root).unwrap().join("gate.sqlite");
-    std::fs::write(&file, b"").unwrap();
-    let grant = stoneql_desktop::authorize_sqlite_file(app.handle(), &file)
-        .unwrap()
-        .grant
-        .unwrap();
-    assert_eq!(
-        call(
-            "connect_sqlite",
-            json!({"grant":grant,"access":"read_write"})
-        )
-        .unwrap_err()["code"],
-        "UNSUPPORTED_CAPABILITY"
-    );
-    // Read-only (omitted or explicit) still connects.
-    for extra in [json!({}), json!({"access":"read_only"})] {
-        let mut payload = json!({"grant":grant});
-        payload
-            .as_object_mut()
+    // SQLite part only in builds that include it (excluded from release builds, A5).
+    #[cfg(feature = "sqlite")]
+    {
+        let root = std::env::temp_dir().join(format!("stoneql-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let file = std::fs::canonicalize(&root).unwrap().join("gate.sqlite");
+        std::fs::write(&file, b"").unwrap();
+        let grant = stoneql_desktop::authorize_sqlite_file(app.handle(), &file)
             .unwrap()
-            .extend(extra.as_object().unwrap().clone());
-        let connection = call("connect_sqlite", payload).unwrap()["payload"].clone();
-        assert_eq!(connection["access"], "read_only");
-        call(
-            "disconnect_database",
-            json!({"handle":connection["handle"]}),
-        )
-        .unwrap();
+            .grant
+            .unwrap();
+        assert_eq!(
+            call(
+                "connect_sqlite",
+                json!({"grant":grant,"access":"read_write"})
+            )
+            .unwrap_err()["code"],
+            "UNSUPPORTED_CAPABILITY"
+        );
+        // Read-only (omitted or explicit) still connects.
+        for extra in [json!({}), json!({"access":"read_only"})] {
+            let mut payload = json!({"grant":grant});
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let connection = call("connect_sqlite", payload).unwrap()["payload"].clone();
+            assert_eq!(connection["access"], "read_only");
+            call(
+                "disconnect_database",
+                json!({"handle":connection["handle"]}),
+            )
+            .unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Every registered command, parsed from the handler list so a new command cannot skip this test.
@@ -1073,4 +1077,39 @@ fn export_grants_are_native_one_shot_and_refuse_unsafe_destinations() {
         "{names:?}"
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+/// A5: the host reports whether this build includes SQLite; without it, the SQLite commands
+/// refuse with UNSUPPORTED_CAPABILITY before any dialog or file access.
+#[test]
+fn sqlite_capability_matches_the_build() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    let info = bootstrap(&main).payload;
+    assert_eq!(info.sqlite, cfg!(feature = "sqlite"));
+    if !cfg!(feature = "sqlite") {
+        let session = info.session_id;
+        for (command, payload) in [
+            ("pick_sqlite_file", json!({})),
+            (
+                "connect_sqlite",
+                json!({"grant":"00000000-0000-4000-8000-000000000000"}),
+            ),
+        ] {
+            let mut payload = payload;
+            payload["sessionId"] = json!(session);
+            let error = invoke(
+                &main,
+                command,
+                json!({"version":1,"requestId":"sqlite","payload":payload}),
+                "tauri://localhost",
+            )
+            .unwrap_err();
+            assert_eq!(error["code"], "UNSUPPORTED_CAPABILITY", "{command}");
+        }
+        let file =
+            std::env::temp_dir().join(format!("stoneql-no-sqlite-{}.db", uuid::Uuid::new_v4()));
+        std::fs::write(&file, b"").unwrap();
+        assert!(stoneql_desktop::authorize_sqlite_file(app.handle(), &file).is_err());
+        std::fs::remove_file(&file).unwrap();
+    }
 }

@@ -1,10 +1,11 @@
 import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, TransferAccepted, TransferStatus, TransferFormatDto, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
-import { nativeDatabase, NativeOperationError } from './nativeHost.ts';
+import { hostState, nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
 /** SQLite opens a natively granted file; network engines use Direct or an SSH tunnel. */
 export function liveSupported(connection: Connection): boolean {
-  if (connection.engine === 'SQLite') return connection.transport.type === 'direct';
+  // SQLite is excluded from release builds (A5); the host reports whether this build has it.
+  if (connection.engine === 'SQLite') { const host = hostState(); return connection.transport.type === 'direct' && host.kind === 'desktop' && host.info.sqlite === true; }
   return ['direct', 'ssh'].includes(connection.transport.type) && !!networkEngines[connection.engine];
 }
 /** Opens the native file picker. The renderer receives an opaque grant, never a filesystem path. */

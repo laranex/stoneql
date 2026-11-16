@@ -10,7 +10,7 @@ function fixture(fail=false){
  return {calls,global:{__TAURI__:{core:{async invoke(command:string,args:{message:string}){
   const request=JSON.parse(args.message);calls.push({command,payload:request.payload});
   if(command==='read_only_query'&&fail)throw{code:'QUERY_REJECTED',message:'synthetic-password must not be displayed'};
-  const payload=command==='host_info'?{runtime:'desktop',appVersion:'0.1.0',sessionId:'test_session',nonce:request.payload.nonce,simulated:true}
+  const payload=command==='host_info'?{runtime:'desktop',appVersion:'0.1.0',sessionId:'test_session',nonce:request.payload.nonce,simulated:true,sqlite:true}
    :command==='contract_probe'?{values:request.payload.values,simulated:true}
    :command==='connect_direct'?{handle:'owned_handle',engineVersion:'fixture-version',database:profile.database,expiresAfterSeconds:3600}
    :command==='disconnect_database'?{connected:false}

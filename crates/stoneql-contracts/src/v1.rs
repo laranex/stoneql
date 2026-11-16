@@ -291,6 +291,8 @@ pub struct HostInfo {
     // Whether this host accepts `access: read_write` connections. A native build-time gate
     // (off until the M006 safety tests pass and the user approves); the renderer only mirrors it.
     pub read_write_sql: bool,
+    // Whether this build can open SQLite files (excluded from release builds, A5).
+    pub sqlite: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

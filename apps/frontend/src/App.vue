@@ -105,6 +105,8 @@ const liveReadWrite = computed(() => isLive.value && liveSession.value?.status =
 const liveLease = computed(() => liveSession.value?.lease);
 /** Mirrors the native host's read-write gate; the renderer can never enable it itself. */
 const readWriteAvailable = nativeHostState.kind === 'desktop' && nativeHostState.info.readWriteSql === true;
+/** SQLite files are excluded from release builds (A5); mirrors the host's build capability. */
+const sqliteAvailable = nativeHostState.kind === 'desktop' && nativeHostState.info.sqlite === true;
 const jobSucceeded = computed(() => query.value.job?.outcome === 'succeeded');
 const table = computed(() => store.table);
 const tableMetadata = computed(() => {
@@ -2896,7 +2898,7 @@ onBeforeUnmount(() => {
                   connectionDraft.engine === 'SQLite' ? '/path/to/database.sqlite' : 'acme_store'
                 "
             /></label>
-            <div v-if="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite'" class="form-label">SQLite file (opened read-only)<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSqliteFile">Choose file…</button><span :class="{ muted: !connectionDraft.sqliteGrant }">{{ connectionDraft.sqliteGrant ? connectionDraft.database : 'No file chosen for this app session' }}</span></div><span class="muted">The native picker grants this file only. Access is not saved; choose it again after restarting.</span></div>
+            <div v-if="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite'" class="form-label">SQLite file (opened read-only)<p v-if="!sqliteAvailable" class="notice info" data-testid="sqlite-unavailable">This build does not include SQLite (excluded from release builds). Use a mock profile or a development build.</p><div class="sqlite-file"><button type="button" class="button" :disabled="testing || !sqliteAvailable" @click="chooseSqliteFile">Choose file…</button><span :class="{ muted: !connectionDraft.sqliteGrant }">{{ connectionDraft.sqliteGrant ? connectionDraft.database : 'No file chosen for this app session' }}</span></div><span class="muted">The native picker grants this file only. Access is not saved; choose it again after restarting.</span></div>
             <div v-if="connectionDraft.transport.type === 'ssh'" class="ssh-fields">
               <h3>SSH tunnel configuration</h3>
               <div class="host-port">
