@@ -90,7 +90,7 @@ Alpha fix plan tasks (`.ref/planning/m005-alpha-fix-plan.md`) — all executed:
 
 | Criterion | Status |
 |---|---|
-| G1 host keys, certificates, no secrets in profile/logs, no agent forwarding | Verified (fixture + IPC). Native SSH key-file picker verified in a real window 2026-11-16 (A1, `journal_window picker`: cancel → no grant, chosen file → opaque grant). Native trust dialog and Keychain prompts need the signed build (A2) |
+| G1 host keys, certificates, no secrets in profile/logs, no agent forwarding | Verified (fixture + IPC). Native SSH key-file picker verified in a real window 2026-11-16 (A1, `journal_window picker`: cancel → no grant, chosen file → opaque grant). Native trust dialog and Keychain prompts need a Developer ID-signed build: the ad-hoc build of 2026-11-16 binds Keychain access to its CDHash, so its prompts would not represent release behaviour (not run) |
 | G2 identity, credential isolation, interrupted setup leaves no handle | Verified (T1/T2/T4 tests, fixture) |
 | G3 approved OS/auth-method matrix | Blocked (A3, A12): MySQL/MariaDB/PostgreSQL over agent/password/key file executed on macOS arm64 only |
 | G4/G5 100 cycles, 0 orphans, transport budget | 100 mixed cycles 0 orphans (MySQL full matrix, re-run 2026-11-16); dead-tunnel release bounded; budget approval A3 |

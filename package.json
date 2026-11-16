@@ -32,6 +32,7 @@
     "desktop:release": "npm run build && cargo build --release --locked -p stoneql-desktop --features custom-protocol",
     "desktop:run": "npm run desktop:build && cargo run --locked -p stoneql-desktop --features custom-protocol",
     "desktop:test": "cargo test --locked -p stoneql-desktop --features custom-protocol,sqlite && cargo test --locked -p stoneql-desktop --features custom-protocol --test ipc",
+    "desktop:bundle:adhoc": "npm run build && cd apps/desktop/src-tauri && tauri build --bundles app --features custom-protocol --config tauri.macos-adhoc.conf.json -- --locked",
     "desktop:profile": "npm run build && node tools/profile-startup.mjs",
     "desktop:smoke": "npm run desktop:build && cargo run --locked -p stoneql-desktop --features custom-protocol -- --smoke-test",
     "test:lifecycle": "node tools/test-connection-lifecycle.mjs",
@@ -45,5 +46,8 @@
     "test:ssh": "node tools/test-ssh-fixture.mjs",
     "test:journal-crash": "node tools/test-journal-crash.mjs 40",
     "test:execution": "node tools/test-connection-lifecycle.mjs --execution && node tools/test-postgres-fixture.mjs --execution"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.4"
   }
 }

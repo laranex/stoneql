@@ -17,7 +17,7 @@ User decisions recorded in this run:
 | # | Milestone | Decision or sign-off needed | Unblocks | Status |
 |---|---|---|---|---|
 | A1 | M002–M006 | Permission to open real StoneQL windows (takes focus) | M002 G3 native E2E, OS fallback close dialog, 30-launch startup profile; M006 physical Cmd+R/context-menu/inspector reload; M005 Keychain prompts and native key-file picker | **Approved 2026-11-16** (user: "You may open real app windows and use keyboard and window focus as needed for those tests"). **Run 2026-11-16**: smoke, 30-launch profile, fallback dialog, reload paths and key picker passed; Keychain prompts and signed-app E2E still need A2 (see Results) |
-| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | **Approved 2026-11-16** (user: "Sign the macOS app and run the signed-build checks"). **Blocked**: no code-signing identity on this Mac, no `.app` bundling step yet, bundle identifier open (A14) — see Results |
+| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | **Approved 2026-11-16** (user: "Sign the macOS app and run the signed-build checks"). **Partly run** (user chose ad-hoc signing for now): ad-hoc signed `.app` built, verified, launched and closed; Developer ID signing, notarization, Keychain prompts and full E2E still blocked on a signing certificate — see Results |
 | A3 | M002–M005 | Approve the Proposed numerical budgets and version matrix: M002 startup/IPC, M003 lifecycle/basic-SQL (MySQL 8.4.6, MariaDB 11.4.8 on macOS arm64), M004 PostgreSQL 17.6 lifecycle/query, M005 SSH transport budget and auth-method matrix | G4/G5 and G3 sign-off for M002–M005 | Pending |
 | A4 | M002/M005 | russh RUSTSEC-2026-0495 (agent *server* flaw; StoneQL uses only the agent client, not reachable): approve upgrade `=0.64.1` → 0.65.x (breaking 0.x bump, "russh upgrade policy" from M005 review) or record risk acceptance | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Upgrade `russh`, rerun the SSH tests, and audit the release dependency graph separately"). **Done 2026-11-16**: russh 0.65.1; release-graph audit clean (see Results) |
 | A5 | M002/M004 | libsqlite3-sys 0.37 RUSTSEC-2026-0459 (bundled SQLite < 3.54, local crafted DB+WAL pair leaks stale memory). sqlx 0.9.0 (latest) requires `=0.37`; no upgrade path. Decide: risk acceptance while SQLite is out of scope, or remove/feature-gate SQLite from the desktop build (conflicts with D022 "keep SQLite regressions") | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Exclude SQLite from the release build and verify it is no longer bundled"). **Done 2026-11-16**: not in the release graph or binary; `cargo audit` still reports it from the dev/test lockfile (see Results) |
@@ -94,9 +94,9 @@ its alert on failure.
   test-only graph)** — left visible; no `audit.toml`/ignore list exists. RUSTSEC-2026-0495 (russh)
   no longer reported. Linux-only warnings RUSTSEC-2024-0370 and RUSTSEC-2024-0429 still listed.
 
-### A2 — signed macOS app (approved 2026-11-16; blocked)
+### A2 — signed macOS app (approved 2026-11-16; ad-hoc interim run, Developer ID blocked)
 
-Not run. Blockers found:
+Blockers found first:
 1. `security find-identity -v -p codesigning` → 0 valid identities: no Developer ID Application
    certificate (or any signing certificate) is installed on this Mac. Installing one needs the
    user's Apple Developer account; notarization also needs the user's credentials.
@@ -104,4 +104,28 @@ Not run. Blockers found:
    executable.
 3. The bundle identifier (A14, `app.dbadmin.desktop` today) fixes the Keychain service and the
    signing identity's app ID, so Keychain ACL results recorded before A14 would need repeating.
+
+User decision 2026-11-16: "Ad-hoc sign for now" (A2 stays open).
+
+Ad-hoc run (2026-11-16, macOS 27 arm64):
+- Bundling added: root dev dependency `@tauri-apps/cli` `2.12.4` (exact; 2.12.5 was published the
+  same day and skipped), `apps/desktop/src-tauri/tauri.macos-adhoc.conf.json` (bundle `app`,
+  `signingIdentity: "-"`, `hardenedRuntime: true`, icon from `icons/icon.png`), script
+  `npm run desktop:bundle:adhoc`. The npm install re-hoisted `package-lock.json`; the resolved
+  package set is unchanged except the CLI packages and one unreferenced, pruned
+  `@codemirror/theme-one-dark` entry.
+- `StoneQL.app` (22.49 MiB; binary sha256 prefix `33d5dad01d974871`, CDHash
+  `eb83331865bf1cf7da8e8cd042c86e4d4aa6e77e`): `codesign --verify --deep --strict` valid and
+  satisfies its designated requirement; `flags=0x10002(adhoc,runtime)`, `TeamIdentifier=not set`,
+  no entitlements; identifier `app.dbadmin.desktop`, version 0.1.0. `spctl --assess` → rejected
+  (expected: no Developer ID). Notarization skipped by the bundler (no Apple credentials).
+- Bundled binary: 0 `sqlite3_` symbols, no SQLite library, no smoke probe.
+- Launch of the signed app: window after 1,383 ms, UI rendered in desktop-host mode (native bridge
+  bootstrapped under hardened runtime, screenshot checked), three WebKit service processes;
+  window close button → process exited with status 0; no alerts left.
+- Not run, with reason: Keychain prompts (first save, first use, after upgrade) — an ad-hoc
+  designated requirement is the CDHash, so every rebuild is a new identity to the Keychain and the
+  prompts would not represent Developer ID behaviour; full native E2E (M002 G3) on the release
+  `.app`; notarization and Gatekeeper acceptance. All need a Developer ID Application certificate
+  (and notarization credentials) installed by the user, and should follow A14 (bundle identifier).
 
