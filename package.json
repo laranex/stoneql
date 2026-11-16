@@ -45,6 +45,7 @@
     "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile && node tools/test-postgres-fixture.mjs --resource-profile",
     "test:ssh": "node tools/test-ssh-fixture.mjs",
     "test:journal-crash": "node tools/test-journal-crash.mjs 40",
+    "bench:sql-import": "node tools/test-connection-lifecycle.mjs --import-bench",
     "test:execution": "node tools/test-connection-lifecycle.mjs --execution && node tools/test-postgres-fixture.mjs --execution"
   },
   "devDependencies": {

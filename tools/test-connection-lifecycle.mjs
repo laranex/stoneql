@@ -14,9 +14,12 @@ if(resourceEvaluation && !['darwin','linux'].includes(process.platform))throw Er
 const nativeEvaluation = process.argv.slice(2).includes('--native-ipc');
 // M006 read-write execution harness (examples/execution.rs): jobs, cancellation, leases, faults.
 const executionEvaluation = process.argv.slice(2).includes('--execution');
-if([packetEvaluation,nativeEvaluation,resourceEvaluation,executionEvaluation].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
+// M007 SQL import benchmark (examples/import_bench.rs, release build): one case per process
+// under /usr/bin/time for peak RSS; results feed the A20 limit sign-off.
+const importBench = process.argv.slice(2).includes('--import-bench');
+if([packetEvaluation,nativeEvaluation,resourceEvaluation,executionEvaluation,importBench].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
 let nativeBinary;
-if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile','--execution'].includes(argument))) throw Error('Unknown fixture option');
+if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile','--execution','--import-bench'].includes(argument))) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
   // The execution harness waits for a real lease idle expiry and 100 cancel/fault cycles.
   const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: executionEvaluation ? 1_800_000 : 240_000 });
@@ -30,7 +33,9 @@ function run(command, args, env = base) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
-if(resourceEvaluation){
+if(importBench){
+  run('cargo',['build','--release','--locked','-p','stoneql-runtime','--example','import_bench']);
+} else if(resourceEvaluation){
   run('cargo',['build','--locked','-p','stoneql-runtime','--example','resources']);
 } else if(executionEvaluation){
   run('cargo',['build','--locked','-p','stoneql-runtime','--example','execution']);
@@ -43,9 +48,9 @@ if(resourceEvaluation){
 } else {
   run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', 'lifecycle']);
 }
-const output = resolve(root, executionEvaluation ? 'artifacts/m006' : 'artifacts/m003');
+const output = resolve(root, executionEvaluation ? 'artifacts/m006' : importBench ? 'artifacts/m007' : 'artifacts/m003');
 mkdirSync(output, { recursive: true });
-for (const engine of ['mysql', 'mariadb']) {
+for (const engine of (importBench && process.env.STONEQL_BENCH_ENGINES?.split(',')) || ['mysql', 'mariadb']) {
   const temp = mkdtempSync(join(tmpdir(), 'stoneql-lifecycle-'));
   const tls = join(temp, 'tls');
   const init = join(temp, 'init');
@@ -159,7 +164,7 @@ CREATE SQL SECURITY INVOKER VIEW trust_safe_view AS SELECT id,txt FROM raw_value
 CREATE SQL SECURITY DEFINER VIEW trust_lock_view AS SELECT GET_LOCK('stoneql_${marker}',0) AS acquired;
 CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
-    if(executionEvaluation){
+    if(executionEvaluation||importBench){
       writeFileSync(join(init,'003-execution.sql'),`GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, EXECUTE, CREATE ROUTINE, ALTER ROUTINE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE TABLE exec_parent(id INT PRIMARY KEY) ENGINE=InnoDB; INSERT INTO exec_parent VALUES (1);
 CREATE TABLE exec_item(id INT PRIMARY KEY, parent INT, FOREIGN KEY (parent) REFERENCES exec_parent(id)) ENGINE=InnoDB;
@@ -192,6 +197,30 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
       });
       Object.assign(env, { STONEQL_RELAY_PORT: String(ports.relayPort), STONEQL_RELAY_CONTROL: String(ports.controlPort) });
     }
+    if (importBench) {
+      const cases = process.env.STONEQL_BENCH_CASES?.split(',') ?? ['exec-1k-4m', 'exec-1k-4m-nojournal', 'exec-64k-64m', 'exec-1m-256m', 'stmt-4m', 'stmt-8m', 'stmt-15m', 'stmt-16m', 'validate-1k-1g', 'exec-4m-1g'];
+      const bench = { engine, machine: { platform: process.platform, arch: arch(), osRelease: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem() }, cases: [] };
+      for (const name of cases) {
+        const measured = spawnSync('/usr/bin/time', [process.platform === 'darwin' ? '-l' : '-v', resolve(root, 'target/release/examples/import_bench'), name], { cwd: root, env: { ...env, STONEQL_BENCH_DIR: temp }, encoding: 'utf8', timeout: 3_600_000 });
+        // The benchmark prints only static errors and synthetic values; the password is redacted.
+        // A failing case is recorded and the matrix continues; the run fails at the end.
+        if (measured.status !== 0 || measured.error) {
+          // Server-side evidence for the failure: container state (OOM kill, exit, restarts) and its last log lines.
+          const id = run('docker', [...args, 'ps', '-aq', engine], env);
+          const state = id ? run('docker', ['inspect', '--format', 'oomKilled={{.State.OOMKilled}} running={{.State.Running}} exitCode={{.State.ExitCode}} restarts={{.RestartCount}}', id], env) : 'container missing';
+          const logs = id ? spawnSync('docker', ['logs', '--tail', '15', id], { encoding: 'utf8' }) : null;
+          bench.cases.push({ case: name, error: (measured.stderr || '').replaceAll(password, '[redacted]').split('\n').filter((line) => line && !/^\s*\d+\s+[a-z]/.test(line)).slice(-4).join(' '), serverState: state, serverLog: `${logs?.stdout ?? ''}${logs?.stderr ?? ''}`.replaceAll(password, '[redacted]').split('\n').filter(Boolean).slice(-15) });
+          console.log(`${engine} ${name}: FAILED ${bench.cases.at(-1).error} :: ${state}`);
+          continue;
+        }
+        const result = JSON.parse(measured.stdout.trim().split('\n').at(-1));
+        result.processMaxRssBytes = parseMaximumRss(measured.stderr, process.platform);
+        bench.cases.push(result);
+        console.log(`${engine} ${name}: ${JSON.stringify({ outcome: result.outcome, refused: result.refused, fileMiB: +(result.fileBytes / 1048576).toFixed(1), statements: result.validatedStatements, readMs: Math.round(result.readMs), validateMs: Math.round(result.validateMs), executeMs: result.executeMs && Math.round(result.executeMs), mibPerSecond: result.mibPerSecond && +result.mibPerSecond.toFixed(1), peakRssMiB: Math.round(result.processMaxRssBytes / 1048576), failedSqlState: result.failedSqlState, unknownStatement: result.unknownStatement })}`);
+      }
+      writeFileSync(join(output, `import-bench-${engine}.json`), JSON.stringify(bench, null, 2) + '\n');
+      if (bench.cases.some((result) => result.error)) throw Error(`${engine}: benchmark cases failed`);
+    } else {
     // M007: the native test exports here; the files are restored below with the server's client.
     const exports = join(temp, 'exports');
     if (nativeEvaluation) { mkdirSync(exports); env.STONEQL_EXPORT_DIR = exports; }
@@ -234,7 +263,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     }
     writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
     console.log(executionEvaluation ? `${engine}: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)` : resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);
-    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation && !executionEvaluation) {
+    if (!packetEvaluation && !nativeEvaluation && !resourceEvaluation && !executionEvaluation && !importBench) {
       run('docker', [...args, 'stop', engine], env);
       writeFileSync(join(exposed, 'server.pem'), readFileSync(join(tls, 'expired-server.pem')));
       run('docker', [...args, 'up', '-d', '--force-recreate', engine], env);
@@ -242,6 +271,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
       const expired = JSON.parse(run(resolve(root, binary), ['--expired-certificate'], env));
       writeFileSync(join(output, `expired-${engine}.json`), JSON.stringify(expired, null, 2) + '\n');
       console.log(`${engine}: expired-certificate rejection passed`);
+    }
     }
 
   } finally {
@@ -261,7 +291,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
         rmSync(temp, { recursive: true, force: true });
       } finally {
         cleanup.temporaryRemoved = !existsSync(temp);
-        writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
+        writeFileSync(join(output, `${executionEvaluation ? 'execution-' : importBench ? 'import-bench-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}cleanup-${engine}.json`), JSON.stringify(cleanup, null, 2) + '\n');
       }
     }
   }

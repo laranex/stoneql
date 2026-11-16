@@ -15,13 +15,14 @@ use std::{
 };
 use stoneql_contracts::v1::{
     CancellationDto, CellValue, ConstraintKindDto, ExecutionOutcomeDto, JobUpdate, LeaseStateDto,
-    ResultBatch, StatementStatusDto,
+    ResultBatch, SqlImportStatus, StatementStatusDto,
 };
 use stoneql_core::{Engine, Outcome};
 use stoneql_runtime::{
     Access, ConnectionId, Connections, DirectServer, EndReason, ExecutionError, ExecutionLimits,
-    JobId, JobOptions, LeaseId, OutcomeId, OwnerId, QueryLimits, ReadError, ScriptError,
-    TransactionEnd, mysql_state_matches, postgres_commit, postgres_state_matches,
+    ExportFormat, ExportProgress, ExportRequest, ImportError, JobId, JobOptions, LeaseId,
+    OutcomeId, OwnerId, QueryLimits, ReadError, ScriptError, TransactionEnd, mysql_state_matches,
+    postgres_commit, postgres_state_matches,
 };
 
 type Failure = Box<dyn std::error::Error>;
@@ -537,6 +538,134 @@ async fn journal_restart(
 }
 
 /// Requests cancellation and returns (cancel→terminal latency, final update).
+async fn import_done(
+    connections: &Connections,
+    owner: OwnerId,
+    id: JobId,
+) -> Result<SqlImportStatus, Failure> {
+    for _ in 0..3000 {
+        let status = connections.sql_import_status(owner, id)?;
+        if status.done {
+            return Ok(status);
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Err("import did not finish".into())
+}
+/// M007 d5 SQL import on the real server (MySQL/MariaDB, A20): a StoneQL SQL export of
+/// `export_values` (CREATE TABLE and data, edge values) is renamed in the text, imported from one
+/// validated snapshot and compared NULL-safely and byte-exactly; a failing statement stops the
+/// import with its number and line; a refused statement means nothing runs.
+async fn sql_import(
+    connections: &Connections,
+    owner: OwnerId,
+    handle: ConnectionId,
+    observer: &mut Observer,
+    report: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), Failure> {
+    let mut exported = Vec::new();
+    let progress = ExportProgress::default();
+    connections
+        .export_table(
+            owner,
+            handle,
+            &ExportRequest {
+                table: "export_values".into(),
+                format: ExportFormat::Sql,
+                structure: true,
+                data: true,
+            },
+            &mut exported,
+            &progress,
+        )
+        .await
+        .map_err(|error| format!("export: {error:?}"))?;
+    let text = String::from_utf8(exported)?.replace("`export_values`", "`import_values`");
+    ensure(
+        text.contains("CREATE TABLE `import_values`"),
+        "export carries structure",
+    )?;
+    let (id, count) = connections
+        .start_sql_import(owner, handle, text.into_bytes())
+        .map_err(|error| format!("{error:?}"))?;
+    let status = import_done(connections, owner, id).await?;
+    ensure(
+        status.outcome == Some(ExecutionOutcomeDto::Succeeded) && status.completed == count,
+        "round-trip import succeeded",
+    )?;
+    let columns = ["t", "d", "dt", "zd", "e", "s", "j", "f"];
+    let same = format!(
+        "SELECT COUNT(*) FROM export_values a JOIN import_values b USING (id) WHERE {}",
+        columns
+            .iter()
+            .map(|c| format!("BINARY a.{c} <=> BINARY b.{c}"))
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    );
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM import_values".into())
+            .await?
+            == 5
+            && observer.scalar(same).await? == 5,
+        "imported rows equal the source exactly",
+    )?;
+    // Statement 3 (line 3) fails on the server: 1–2 stay committed (autocommit), 4 never runs.
+    let (id, _) = connections
+        .start_sql_import(
+            owner,
+            handle,
+            b"INSERT INTO exec_text (id, label) VALUES (31, 'a');\nINSERT INTO exec_text (id, label) VALUES (32, 'b');\nINSERT INTO exec_text (id, label) VALUES (31, 'dup');\nINSERT INTO exec_text (id, label) VALUES (33, 'c');"
+                .to_vec(),
+        )
+        .map_err(|error| format!("{error:?}"))?;
+    let status = import_done(connections, owner, id).await?;
+    let failed = status.failed.clone().ok_or("failed statement reported")?;
+    ensure(
+        status.outcome == Some(ExecutionOutcomeDto::Failed)
+            && status.completed == 2
+            && status.affected_rows == "2"
+            && (failed.index, failed.line) == (2, 3)
+            && failed.failure.as_ref().and_then(|f| f.sql_state.as_deref()) == Some("23000"),
+        "first failure stops the import with its position",
+    )?;
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM exec_text WHERE id IN (31, 32)".into())
+            .await?
+            == 2
+            && observer
+                .scalar("SELECT COUNT(*) FROM exec_text WHERE id = 33".into())
+                .await?
+                == 0,
+        "statements before the failure committed, after it not run",
+    )?;
+    // A refused statement anywhere: nothing is sent.
+    let refused = connections
+        .start_sql_import(
+            owner,
+            handle,
+            b"INSERT INTO exec_text (id) VALUES (34);\nUSE mysql;".to_vec(),
+        )
+        .err()
+        .ok_or("USE refused")?;
+    ensure(
+        matches!(&refused, ImportError::Refused(r) if r.statement == Some(2) && r.line == Some(2)),
+        "refusal names statement and line",
+    )?;
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM exec_text WHERE id = 34".into())
+            .await?
+            == 0,
+        "nothing of a refused file ran",
+    )?;
+    report.insert(
+        "sqlImport".into(),
+        json!({"roundTripRows": 5, "roundTripStatements": count, "stopAtFailure": {"statement": 3, "line": 3, "sqlState": "23000"}, "refusedNothingRan": true}),
+    );
+    Ok(())
+}
 async fn cancel_and_wait(run: &Run, id: JobId) -> Result<(f64, JobUpdate), Failure> {
     let requested = Instant::now();
     run.connections.cancel_job(run.owner, id)?;
@@ -1801,6 +1930,11 @@ async fn harness() -> Result<(), Failure> {
         "rendererCsvImport".into(),
         json!({"committedRows": 3, "nullEmptyTextDistinct": true, "rejectedBatchRolledBack": true}),
     );
+
+    if mysql {
+        step("sql import");
+        sql_import(&connections, owner, handle, &mut observer, &mut report).await?;
+    }
 
     step("expiry lease start");
     // Lease expiry runs in the background on a second handle for the real LEASE_IDLE.

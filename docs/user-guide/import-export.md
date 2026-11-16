@@ -11,7 +11,17 @@ Mock profiles keep the **simulated** workflow described below: no dump, compress
 - A column whose type StoneQL cannot represent exactly (for example PostgreSQL `interval`, arrays or `inet`) stops the export and is named; nothing is written.
 - GZIP, ZIP, JSON and XLSX are not offered for live tables.
 
-**Import** (read-write sessions only; the read-write gate is off in current builds): **Import** accepts CSV in the format above for a table with a primary key, up to 64 MiB. The first line must name columns of the table. All rows are inserted in one transaction in batches; if any batch is rejected, the whole import is rolled back and the message names the record range and SQLSTATE. A COMMIT whose outcome is uncertain is reported as unknown, never as imported. Live SQL import is not available yet (run statements from the SQL tab).
+**Import** (read-write sessions only; the read-write gate is off in current builds): **Import** accepts CSV in the format above for a table with a primary key, up to 64 MiB. The first line must name columns of the table. All rows are inserted in one transaction in batches; if any batch is rejected, the whole import is rolled back and the message names the record range and SQLSTATE. A COMMIT whose outcome is uncertain is reported as unknown, never as imported. 
+
+**SQL import** (MySQL and MariaDB read-write sessions): in **Import**, choose the **SQL** format, then **Choose SQL file…** and **Import**. The desktop app shows its own open dialog; the window never sees the path, and a chosen file can be used once.
+
+- The whole file is read once and checked before anything runs: UTF-8 text, statements split with the same rules as the SQL tab (quotes, comments, `DELIMITER` for routine bodies, MySQL `/*! … */` comments), and the same refusals as read-write scripts (transaction statements, autocommit changes, `CALL`, `PREPARE`/`EXECUTE`, compound statements outside routines) plus `USE` and `LOAD DATA/XML LOCAL`. If any statement is refused, nothing runs and the message names its statement number and line.
+- The checked file is then run from that same copy, one statement at a time with autocommit, on its own connection. It stops at the first failing statement and names it (number, line, SQLSTATE); statements before it stay committed, statements after it are not run. Data definition statements commit implicitly as usual.
+- **Cancel import** stops before the next statement. A statement that was running when you cancelled, or when the connection was lost, has an unknown outcome: the server may or may not have applied it. It is listed under unknown outcomes and survives a restart.
+- Result sets returned by statements in the file are not shown.
+- Limits (Proposed, benchmarked): file up to 1024 MiB, a statement up to 16 MiB, up to 1,000,000 statements. The server's own `max_allowed_packet` also applies to each statement.
+- StoneQL SQL exports import as they are (verified on MySQL 8.4 and MariaDB 11.4). Files from other tools import only when every statement is accepted; a file with `USE`, `START TRANSACTION` or `SET autocommit` is refused before anything runs. Other tools' dumps have not been tested.
+- Not offered: SQL import for PostgreSQL, GZIP/ZIP and XLSX import.
 
 
 ## Export

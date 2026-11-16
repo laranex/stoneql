@@ -10,8 +10,9 @@ mod sqlite;
 mod ssh;
 mod transfer;
 pub use execution::{
-    Access, EndReason, ExecutionError, ExecutionLimits, JobId, JobOptions, LeaseId, OutcomeId,
-    TransactionEnd, mysql_state_matches, postgres_commit, postgres_state_matches,
+    Access, EndReason, ExecutionError, ExecutionLimits, ImportError, ImportRefusal,
+    ImportRefusalReason, JobId, JobOptions, LeaseId, OutcomeId, TransactionEnd,
+    mysql_state_matches, postgres_commit, postgres_state_matches,
 };
 pub use read_only::{QueryLimits, ReadError};
 pub use script::ScriptError;
@@ -716,6 +717,16 @@ impl Connections {
             .get(&id)
             .filter(|entry| entry.usable(owner))
             .map(|entry| entry.engine_version.clone())
+            .ok_or(LifecycleError::Forbidden)
+    }
+    pub fn engine(&self, owner: OwnerId, id: ConnectionId) -> Result<Engine, LifecycleError> {
+        self.0
+            .entries
+            .lock()
+            .expect("connection registry lock")
+            .get(&id)
+            .filter(|entry| entry.usable(owner))
+            .map(|entry| entry.engine)
             .ok_or(LifecycleError::Forbidden)
     }
     pub fn access(&self, owner: OwnerId, id: ConnectionId) -> Result<Access, LifecycleError> {

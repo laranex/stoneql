@@ -9,6 +9,8 @@ User decisions recorded in this run:
   code and regressions but receives no new work; its criteria are out of scope. Platform stays
   macOS only (D021). No OS change was stated.
 - 2026-11-16 — Constraints carried over: no keyboard/window focus use, minimal storage, short tests.
+- 2026-11-16 — A6 (4,096 columns, 4 MiB), A8 (2 MiB per PostgreSQL message) and the A20 alpha SQL import scope for MySQL/MariaDB approved; the import must validate the entire file and execute from the same validated snapshot; limits to be benchmarked and sent for sign-off.
+- 2026-11-16 — A2 closed by the user with the ad-hoc signed build ("A2 close with ad-hoc signed build.").
 - 2026-11-16 — A14 approved: bundle identifier `me.thixpin.stoneql`; use it for the A2 signed-build tests.
 - 2026-11-16 — A2 and A4 approved. The SQLite advisory must stay visible in the full audit and
   must not be added to an ignore list.
@@ -18,13 +20,13 @@ User decisions recorded in this run:
 | # | Milestone | Decision or sign-off needed | Unblocks | Status |
 |---|---|---|---|---|
 | A1 | M002–M006 | Permission to open real StoneQL windows (takes focus) | M002 G3 native E2E, OS fallback close dialog, 30-launch startup profile; M006 physical Cmd+R/context-menu/inspector reload; M005 Keychain prompts and native key-file picker | **Approved 2026-11-16** (user: "You may open real app windows and use keyboard and window focus as needed for those tests"). **Run 2026-11-16**: smoke, 30-launch profile, fallback dialog, reload paths and key picker passed; Keychain prompts and signed-app E2E still need A2 (see Results) |
-| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | **Approved 2026-11-16** (user: "Sign the macOS app and run the signed-build checks"). **Partly run** (user chose ad-hoc signing for now): ad-hoc signed `.app` built, verified, launched and closed; Developer ID signing, notarization, Keychain prompts and full E2E still blocked on a signing certificate — see Results |
+| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | **Approved 2026-11-16; closed 2026-11-16 by user decision with the ad-hoc signed build** (user: "A2 close with ad-hoc signed build."). Verified: ad-hoc + hardened-runtime `StoneQL.app` (identifier `me.thixpin.stoneql`), launch, render, clean exit. Not done and accepted by that decision: Developer ID signing, notarization/Gatekeeper acceptance, Keychain prompts on a Developer ID build, full signed-app E2E — see Results |
 | A3 | M002–M005 | Approve the Proposed numerical budgets and version matrix: M002 startup/IPC, M003 lifecycle/basic-SQL (MySQL 8.4.6, MariaDB 11.4.8 on macOS arm64), M004 PostgreSQL 17.6 lifecycle/query, M005 SSH transport budget and auth-method matrix | G4/G5 and G3 sign-off for M002–M005 | Pending |
 | A4 | M002/M005 | russh RUSTSEC-2026-0495 (agent *server* flaw; StoneQL uses only the agent client, not reachable): approve upgrade `=0.64.1` → 0.65.x (breaking 0.x bump, "russh upgrade policy" from M005 review) or record risk acceptance | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Upgrade `russh`, rerun the SSH tests, and audit the release dependency graph separately"). **Done 2026-11-16**: russh 0.65.1; release-graph audit clean (see Results) |
 | A5 | M002/M004 | libsqlite3-sys 0.37 RUSTSEC-2026-0459 (bundled SQLite < 3.54, local crafted DB+WAL pair leaks stale memory). sqlx 0.9.0 (latest) requires `=0.37`; no upgrade path. Decide: risk acceptance while SQLite is out of scope, or remove/feature-gate SQLite from the desktop build (conflicts with D022 "keep SQLite regressions") | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Exclude SQLite from the release build and verify it is no longer bundled"). **Done 2026-11-16**: not in the release graph or binary; `cargo audit` still reports it from the dev/test lockfile (see Results) |
-| A6 | M003/M006/M007 | Adopt the metadata-limit vendor patch (D002 extension, alpha plan e1): 4,096 columns / 4 MiB descriptor budget per result, `experiments/sqlx-metadata-limit/metadata-limit.patch` (re-verified to apply 2026-11-16). Note: the hostile huge-column-count abort was reasoned, not executed. | M003 G4/G5 aggregate memory bound; same driver path for M006 browse/CRUD and M007 export | Pending |
+| A6 | M003/M006/M007 | Adopt the metadata-limit vendor patch (D002 extension, alpha plan e1): 4,096 columns / 4 MiB descriptor budget per result, `experiments/sqlx-metadata-limit/metadata-limit.patch` (re-verified to apply 2026-11-16). Note: the hostile huge-column-count abort was reasoned, not executed. | M003 G4/G5 aggregate memory bound; same driver path for M006 browse/CRUD and M007 export | **Approved 2026-11-16** (user: "I approve A6 (4,096 columns and 4 MiB of metadata)"). **Done 2026-11-16**: patch adopted in `vendor/sqlx-mysql`, real-server regression passed (see Results) |
 | A7 | M003 | Accept residual read-only trust limits (hostile UDF/plugin/external effects not certifiable; advisory locks possible via definitions) as documented in `docs/development/read-only-safety.md` | M003 G1 sign-off | Pending |
-| A8 | M004/M006/M007 | Adopt the sqlx-postgres message-limit patch as `vendor/sqlx-postgres` (D002-class extension) with a 2 MiB runtime limit mapped to `PacketTooLarge`: fixes a hostile-server panic (length < 4) and unbounded per-message buffering. `.ref/planning/m004-pg-message-limit/findings.md` | M004 G1/G4 message bound; same driver path for PostgreSQL browse (M006) and transfers (M007) | Pending |
+| A8 | M004/M006/M007 | Adopt the sqlx-postgres message-limit patch as `vendor/sqlx-postgres` (D002-class extension) with a 2 MiB runtime limit mapped to `PacketTooLarge`: fixes a hostile-server panic (length < 4) and unbounded per-message buffering. `.ref/planning/m004-pg-message-limit/findings.md` | M004 G1/G4 message bound; same driver path for PostgreSQL browse (M006) and transfers (M007) | **Approved 2026-11-16** (user: "A8 (2 MiB per PostgreSQL backend message)"). **Done 2026-11-16**: `vendor/sqlx-postgres` adopted, real-server regression passed (see Results) |
 | A9 | M004 | Review/approve D011 (PostgreSQL TLS/env refusal), D012 (read-only boundary), D013 (value decoding, interval/arrays/ranges stay unknown) | M004 G1–G3 sign-off | Pending |
 | A10 | M004/M009 | PostgreSQL alpha go/no-go (D022: optional, never blocks the alpha). The 2026-11-16 scope instruction covers milestone work; it is not taken as the alpha go decision | Whether PostgreSQL ships enabled in the alpha | Pending |
 | A11 | M005 | Approve the alpha-fix mechanisms implemented as Proposed (m005-alpha-fix-plan open questions 1–6): native app-data host-key file (not Keychain); native confirmation dialog on trust; re-enrollment instead of import; fingerprint binding for `ssh_password` only (F-08 JSON scopes not adopted); 60 s native secret deadline / 75 s renderer wait with a saved reference; "Remove anyway" when credential deletion fails; trust shared per SSH endpoint; limits 512 hosts / 8 KiB key / 1 MiB file, 16 pending scans / 5 min | M005 F-01/F-02/F-04/F-10 sign-off (implementation and tests done) | Pending |
@@ -36,7 +38,7 @@ User decisions recorded in this run:
 | A17 | M006 | Approve the live CRUD and metadata design implemented as Proposed: rows addressed by full primary key only (keyless tables read-only), `_utf8mb4 X'…'` / `E'…'` literals, binary columns read-only, 0 affected rows = conflict, one DELETE per selected row stopping at the first failure, catalog refresh on DDL keywords | M006 CRUD sign-off (implemented and fixture-verified) | Pending |
 | A18 | M007 | Approve transfer quotas implemented as Proposed defaults: CSV import file ≤ 64 MiB (renderer-held), INSERT batches < 60 KiB, export SQL batches of 500 rows, 8 outstanding export grants / 16 transfer records per session; and the alpha-plan quotas still unimplemented (1 GiB import, free-space floor, +256 MiB RSS for 1M rows) | M007 G4/G5 sign-off | Pending |
 | A19 | M007 | Approve the CSV convention (every value quoted, NULL = unquoted `NULL`; binary columns refused in CSV) and PostgreSQL data-only SQL export (structure would need pg_dump) | M007 G2/G3 format sign-off | Pending |
-| A20 | M007 | D008 transfer library/format decisions: GZIP export (Proposed keep), ZIP, JSON/XLSX export, GZIP import (all Deferred/not offered); and whether live SQL import (d5) is built natively before the alpha | Remaining M007 formats and d5 | Pending |
+| A20 | M007 | D008 transfer library/format decisions: GZIP export (Proposed keep), ZIP, JSON/XLSX export, GZIP import (all Deferred/not offered); and whether live SQL import (d5) is built natively before the alpha | Remaining M007 formats and d5 | **Alpha SQL import scope for MySQL/MariaDB approved 2026-11-16** (user: "A20’s Alpha SQL import scope for MySQL and MariaDB"; "validate the entire file and execute from the same validated snapshot"). Implemented and verified; **limits awaiting sign-off** from the benchmark (see Results). GZIP export keep/defer and the other format items: still Pending |
 
 ## Results
 
@@ -161,4 +163,95 @@ Ad-hoc run (2026-11-16, macOS 27 arm64):
   host-key file existed. Manual reset commands are in the branding doc.
 - A2 signed-build checks now use the new identifier (ad-hoc interim above, rerun under
   `me.thixpin.stoneql`); Developer ID signing remains blocked on a certificate.
+
+### A2 closure (2026-11-16)
+
+Closed by user decision with the ad-hoc signed build. Evidence is the ad-hoc runs above (signature
+valid with hardened runtime, identifier `me.thixpin.stoneql`, launch/render/close). Not performed
+and not claimed as verified: Developer ID signing, notarization and Gatekeeper acceptance, Keychain
+access prompts on a Developer ID build (first save, first use, after upgrade), and the full native
+E2E on a Developer ID-signed `.app`. These remain open release items for M009 distribution: a
+public build that Gatekeeper accepts still needs a Developer ID certificate.
+
+### A6 — MySQL/MariaDB result-metadata limit (done 2026-11-16)
+
+- `experiments/sqlx-metadata-limit/metadata-limit.patch` applied to `vendor/sqlx-mysql` as its second
+  reviewed delta; `dbadmin-provenance.json` regenerated (5 source files + `DBADMIN.md`) with
+  `metadataLimitPatchSha256`; `tools/check-sqlx-vendor.mjs` verifies it; `tests/sqlx-vendor.test.mjs`
+  covers source, provenance, receive-limit and metadata-limit patch drift.
+- Runtime: `max_result_metadata(4096, 4 MiB)` in `mysql.rs`; the fixed driver error maps to
+  `ResultTooWide` (IPC `PACKET_TOO_LARGE`).
+- Tests: vendored driver library suite 35/35 (includes the patch's limit tests); runtime unit test
+  for the mapping; `npm run test:native-database` (MySQL 8.4.6, MariaDB 11.4.8, verified TLS):
+  4,096 columns returned, 4,097 refused, the next query works. Before the patch both servers
+  returned up to 65,535 columns, so the 4,097 assertion only passes with the patch.
+- Remaining gap: the hostile huge-column-count process abort is still reasoned, not reproduced.
+
+### A8 — PostgreSQL backend-message limit (done 2026-11-16)
+
+- `vendor/sqlx-postgres` = registry sqlx-postgres 0.9.0 (crate sha256 `87a2bdd6…`, matches
+  `Cargo.lock`) + `experiments/sqlx-pg-message-limit/message-limit.patch`; MIT selected, full MIT
+  text kept (the registry's `LICENSE-MIT` symlink replaced by the identical text), `Cargo.lock`,
+  `LICENSE-APACHE` and registry bookkeeping files not copied; `DBADMIN.md`, `dbadmin-provenance.json`
+  and `experiments/sqlx-pg-message-limit/upstream.json` added; root `[patch.crates-io]` entry added;
+  `rust:vendor` verifies both drivers (76 + 117 files).
+- Runtime: `max_receive_message_size(2 MiB)` in `postgres.rs`; the error (which carries the
+  driver's source location) maps to `PacketTooLarge` by prefix.
+- Tests: driver library suite 163/163; runtime unit test; `npm run test:native-postgres`
+  (PostgreSQL 17.6, verified TLS): a 3 MiB value is refused with `PACKET_TOO_LARGE` and the next
+  query works; the full PostgreSQL fixture, export restore and execution suites pass.
+- Audit coverage: `cargo audit` (full and `audit:release`) matches advisories against registry
+  packages only, so the vendored `sqlx-mysql` and now `sqlx-postgres` path crates are outside it;
+  their upstream advisories must be reviewed manually on every SQLx upgrade (DBADMIN.md
+  maintenance rule). Full audit and release-graph audit results are otherwise unchanged.
+- Note: the vendored crate shows one upstream `dead_code` warning (non-member path dependency;
+  `rust:lint` passes). The adversarial length-0..3 and 1 GiB-header cases are covered by the
+  prototype's 4/4 tests, not re-run against the vendored copy.
+
+### A20 — alpha SQL import for MySQL/MariaDB (implemented 2026-11-16; limits awaiting sign-off)
+
+Design (as approved): the host reads the granted file once; the runtime validates the entire file
+(UTF-8, size, statement count, per-statement size, the read-write script policy plus `USE` and
+`LOAD DATA/XML LOCAL`) and, only if every statement passes, runs that same in-memory snapshot (same
+buffer, same statement ranges; the file is never read again) one statement at a time with
+autocommit, stopping at the first failure. Each statement is journaled before it is sent;
+cancel, release, reload protection and unknown-outcome recording are the job path's.
+
+Verification: runtime unit tests (validation, refusals with statement number and line, limits,
+BOM/CRLF/`DELIMITER`/executable comments), SQLite runner tests (success with discarded result
+rows, stop at first failure, refusal sends nothing, cancel → unknown + journal, busy handle);
+desktop IPC/host tests (native-only grants, refusals before reading, symlink swap, oversize from
+size; 31 commands in the ACL sweep); real servers via `npm run test:execution` on MySQL 8.4.6 and
+MariaDB 11.4.8: a StoneQL export with `CREATE TABLE` round-trips 5 edge-value rows exactly, a
+duplicate key stops at statement 3 / line 3 (SQLSTATE 23000) with statements 1–2 committed and 4
+not run, a refused statement runs nothing; browser spec in both themes.
+
+Benchmark (`npm run bench:sql-import`, release build, Apple M5 10-core / 24 GiB, macOS 27.0.1,
+Docker MySQL 8.4.6 and MariaDB 11.4.8 with a 1 GiB memory cap each, verified TLS, durable journal
+attached as in the app; StoneQL-export-style multi-row INSERTs; one process per case):
+
+| Case | Statements | Read | Validate | Execute MySQL / MariaDB | Throughput MySQL / MariaDB | Client peak RSS |
+|---|---|---|---|---|---|---|
+| 4 MiB, 1 KiB statements | 4,310 | 0–1 ms | 15–19 ms | 36.6 s / 37.6 s | 118 / 115 statements/s | 12 MiB |
+| same, journal off (diagnostic) | 4,310 | — | — | 3.2 s / 4.2 s | 1,341 / 1,017 statements/s | 12 MiB |
+| 64 MiB, 64 KiB statements | 1,029 | 11–12 ms | 93–106 ms | 9.7 s / 10.2 s | 6.6 / 6.3 MiB/s | 73 MiB |
+| 256 MiB, 1 MiB statements | 259 | 55 ms | 347–423 ms | 8.8 s / 8.7 s | 29.2 / 29.5 MiB/s | 272 MiB |
+| statements just under 4 / 8 / 15 / 16 MiB | 3 each | ≤ 2 ms | ≤ 34 ms | all succeeded on both | 17–32 MiB/s | 27–90 MiB |
+| 1 GiB, ~1.3 KiB statements (validation only) | 813,051 | 176–181 ms | 1.64–1.72 s | — | — | 1,045 MiB |
+| 1 GiB, 4 MiB statements | 259 | 160–251 ms | 1.58–1.68 s | 37.5 s / 29.4 s | 27.3 / 34.9 MiB/s | 1,052 MiB |
+
+Findings for the sign-off:
+1. Memory: the client holds the file once (peak RSS ≈ file size + ~30 MiB). A first run showed
+   2× (the validated text was copied into an `Arc<str>`); fixed and re-measured.
+2. Per-statement journaling dominates small statements: ~7.7 ms of the ~8.5 ms per statement
+   (journal on vs off). At the proposed 1,000,000-statement limit a file of small statements would
+   take ~2.4 h and hit the 2 h import deadline.
+3. Server limits: `max_allowed_packet` is 64 MiB (MySQL 8.4) and 16 MiB (MariaDB 11.4). Statements
+   just under 16 MiB succeeded on both. A statement of exactly the 16 MiB StoneQL limit would exceed
+   MariaDB's default by the 1-byte command header (protocol reasoning; not executed).
+4. Fixture capacity: in one full-matrix run the MySQL container was OOM-killed (its 1 GiB memory
+   cap) during the 1 GiB import after ~1.3 GiB of earlier inserts; the same case passed in a fresh
+   container. A server-side limit, not a StoneQL client failure; how StoneQL reported that lost
+   connection was not captured by the benchmark.
+5. Validation is fast: ~1.7 s per GiB including ~0.8 M statements; reading ~0.2 s per GiB.
 

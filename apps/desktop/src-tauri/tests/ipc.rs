@@ -550,7 +550,7 @@ fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
     let commands = registered_commands();
-    assert_eq!(commands.len(), 28, "{commands:?}");
+    assert_eq!(commands.len(), 31, "{commands:?}");
     for command in &commands {
         let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
         assert!(
@@ -1112,4 +1112,88 @@ fn sqlite_capability_matches_the_build() {
         assert!(stoneql_desktop::authorize_sqlite_file(app.handle(), &file).is_err());
         std::fs::remove_file(&file).unwrap();
     }
+}
+
+/// M007 d5: SQL import files are granted only by native code (dialog/tests), never by a path
+/// from the renderer; grants name canonical regular files; the commands refuse malformed ids,
+/// foreign handles and engines other than MySQL/MariaDB before reading anything.
+#[test]
+fn sql_import_grants_are_native_and_commands_refuse_before_reading() {
+    let (app, _journal) = app();
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let call = |command: &str, payload: Value| {
+        let mut payload = payload;
+        payload["sessionId"] = json!(session);
+        invoke(
+            &webview,
+            command,
+            json!({"version":1,"requestId":"import","payload":payload}),
+            "tauri://localhost",
+        )
+    };
+    let root = std::fs::canonicalize(std::env::temp_dir())
+        .unwrap()
+        .join(format!("stoneql-import-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let file = root.join("dump.sql");
+    std::fs::write(&file, b"INSERT INTO t VALUES (1);").unwrap();
+    let granted = stoneql_desktop::authorize_import_file(app.handle(), &file).unwrap();
+    assert_eq!(granted.file_name.as_deref(), Some("dump.sql"));
+    let grant = granted.grant.unwrap();
+    for refused in [root.clone(), root.join("missing.sql")] {
+        assert_eq!(
+            stoneql_desktop::authorize_import_file(app.handle(), &refused)
+                .unwrap_err()
+                .code,
+            stoneql_contracts::v1::ErrorCodeDto::Forbidden
+        );
+    }
+    assert_eq!(
+        call(
+            "start_sql_import",
+            json!({"handle":"h","grant":"../dump.sql"})
+        )
+        .unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    let foreign = call(
+        "start_sql_import",
+        json!({"handle":"00000000-0000-4000-8000-000000000000","grant":grant}),
+    )
+    .unwrap_err();
+    assert_eq!(foreign["code"], "FORBIDDEN", "{foreign}");
+    assert_eq!(
+        call(
+            "sql_import_status",
+            json!({"importId":"00000000-0000-4000-8000-000000000000"})
+        )
+        .unwrap_err()["code"],
+        "FORBIDDEN"
+    );
+    // A connected engine other than MySQL/MariaDB is refused before the grant is used.
+    #[cfg(feature = "sqlite")]
+    {
+        let database = root.join("db.sqlite");
+        std::fs::write(&database, b"").unwrap();
+        let sqlite = stoneql_desktop::authorize_sqlite_file(app.handle(), &database)
+            .unwrap()
+            .grant
+            .unwrap();
+        let connection =
+            call("connect_sqlite", json!({"grant":sqlite})).unwrap()["payload"].clone();
+        let error = call(
+            "start_sql_import",
+            json!({"handle":connection["handle"],"grant":grant}),
+        )
+        .unwrap_err();
+        assert_eq!(error["code"], "UNSUPPORTED_CAPABILITY");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("MySQL and MariaDB")
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
 }

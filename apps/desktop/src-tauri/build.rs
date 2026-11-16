@@ -29,6 +29,9 @@ fn main() {
             "end_transaction",
             "list_unresolved_outcomes",
             "acknowledge_outcome",
+            "pick_import_file",
+            "start_sql_import",
+            "sql_import_status",
         ]),
     ))
     .expect("validate StoneQL native configuration and command permissions");

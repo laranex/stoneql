@@ -2,7 +2,7 @@
 //! by the disposable-fixture example `examples/execution.rs`.
 use super::*;
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
-use stoneql_contracts::v1::ExecutionOutcomeDto;
+use stoneql_contracts::v1::{ExecutionOutcomeDto, SqlImportStatus};
 
 struct Fixture(PathBuf);
 impl Fixture {
@@ -843,6 +843,7 @@ async fn large_results_apply_backpressure_and_bounds() {
 fn unsplit(sql: &str) -> Statement {
     Statement {
         sql: sql.into(),
+        span: 0..sql.len(),
         words: vec!["CREATE".into()],
         compound: false,
         semicolon: false,
@@ -2707,4 +2708,144 @@ async fn j11_a_known_outcome_removal_completes_with_the_next_successful_write() 
     drop(connections);
     let (connections, owner, _) = open_journaled(&fixture).await;
     assert_eq!(listed(&connections.0.execution, owner), [other.opaque()]);
+}
+
+async fn import_done(connections: &Connections, owner: OwnerId, id: JobId) -> SqlImportStatus {
+    for _ in 0..600 {
+        let status = connections.sql_import_status(owner, id).unwrap();
+        if status.done {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("import did not finish");
+}
+
+#[tokio::test]
+async fn sql_import_runs_the_validated_snapshot_and_stops_at_the_first_failure() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    // A statement returning rows is driven to its end and discarded; nothing stalls. (It runs
+    // first: SQLite reports the previous statement's change count for a SELECT.)
+    let (id, count) = connections
+        .start_sql_import(
+            owner,
+            handle,
+            b"SELECT * FROM parent;\nINSERT INTO parent VALUES (2);\nINSERT INTO parent VALUES (3), (4);"
+                .to_vec(),
+        )
+        .unwrap();
+    assert_eq!(count, 3);
+    assert!(connections.has_active_work(owner));
+    let status = import_done(&connections, owner, id).await;
+    assert_eq!(status.outcome, Some(ExecutionOutcomeDto::Succeeded));
+    assert_eq!((status.completed, status.affected_rows.as_str()), (3, "3"));
+    assert!(status.failed.is_none() && status.unknown.is_none());
+    // The final status released the record.
+    assert_eq!(
+        connections.sql_import_status(owner, id).unwrap_err(),
+        ExecutionError::Forbidden
+    );
+    assert!(!connections.has_active_work(owner));
+    // Statement 2 (line 2) fails: statement 1 stays committed (autocommit), 3 is not run.
+    let (id, _) = connections
+        .start_sql_import(
+            owner,
+            handle,
+            b"INSERT INTO parent VALUES (10);\nINSERT INTO parent VALUES (1);\nINSERT INTO parent VALUES (11);"
+                .to_vec(),
+        )
+        .unwrap();
+    let status = import_done(&connections, owner, id).await;
+    assert_eq!(status.outcome, Some(ExecutionOutcomeDto::Failed));
+    assert_eq!(status.completed, 1);
+    let failed = status.failed.unwrap();
+    assert_eq!((failed.index, failed.line), (1, 2));
+    assert!(failed.failure.is_some());
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 10")
+            .await,
+        1
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 11")
+            .await,
+        0
+    );
+    // A refused statement anywhere means nothing runs.
+    let refused = connections
+        .start_sql_import(
+            owner,
+            handle,
+            b"INSERT INTO parent VALUES (20);\nCOMMIT;".to_vec(),
+        )
+        .unwrap_err();
+    let ImportError::Refused(refusal) = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!((refusal.statement, refusal.line), (Some(2), Some(2)));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 20")
+            .await,
+        0
+    );
+    assert!(!connections.has_active_work(owner));
+    // Read-only handles never import.
+    let (connections, owner, handle) = open(&fixture, Access::ReadOnly).await;
+    assert_eq!(
+        connections
+            .start_sql_import(owner, handle, b"INSERT INTO parent VALUES (21)".to_vec())
+            .unwrap_err(),
+        ImportError::Execution(ExecutionError::ReadOnlyHandle)
+    );
+}
+
+#[tokio::test]
+async fn sql_import_cancel_reports_the_statement_in_flight_as_unknown_and_journals_it() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    let (id, _) = connections
+        .start_sql_import(
+            owner,
+            handle,
+            format!("INSERT INTO parent VALUES (29);\n{SLOW};\nINSERT INTO parent VALUES (30);")
+                .into_bytes(),
+        )
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Busy while the import runs: nothing is queued beside it.
+    assert_eq!(
+        connections
+            .submit_job(owner, handle, JobOptions::new("SELECT 1"))
+            .unwrap_err(),
+        ExecutionError::Busy
+    );
+    assert!(connections.cancel_job(owner, id).unwrap());
+    let status = import_done(&connections, owner, id).await;
+    assert_eq!(status.outcome, Some(ExecutionOutcomeDto::Unknown));
+    assert_eq!(status.cancellation, CancellationDto::Confirmed);
+    assert_eq!(status.completed, 1);
+    let unknown = status.unknown.unwrap();
+    assert_eq!((unknown.index, unknown.line), (1, 2));
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 29")
+            .await,
+        1
+    );
+    assert_eq!(
+        fixture
+            .count("SELECT count(*) FROM parent WHERE id = 30")
+            .await,
+        0
+    );
+    let listed = connections.unresolved_outcomes(owner).outcomes;
+    let job = listed
+        .iter()
+        .find_map(|outcome| outcome.job.clone())
+        .expect("unknown import outcome listed");
+    assert_eq!((job.statement_count, job.unknown_statement), (3, Some(1)));
 }

@@ -73,6 +73,8 @@ impl std::error::Error for ScriptError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Statement {
     pub sql: String,
+    /// Byte range of `sql` (the trimmed statement text) in the input.
+    pub span: std::ops::Range<usize>,
     /// Every bare word, upper-cased, including words inside MySQL executable comments (and,
     /// for SET statements, quoted identifiers such as `` `autocommit` ``).
     pub words: Vec<String>,
@@ -94,10 +96,66 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
     if sql.len() > ExecutionLimits::MAX_SCRIPT_BYTES {
         return Err(ScriptError::TooLarge);
     }
-    let bytes = sql.as_bytes();
     let mut statements = Vec::new();
-    let mut delimiter: Vec<u8> = b";".to_vec();
+    split_each(sql, dialect, &mut |statement| {
+        statements.push(statement);
+        if statements.len() > ExecutionLimits::MAX_STATEMENTS {
+            return Err(ScriptError::TooManyStatements);
+        }
+        Ok(())
+    })
+    .map_err(|(_, error)| error)?;
+    if statements.is_empty() {
+        return Err(ScriptError::Empty);
+    }
+    Ok(statements)
+}
+
+/// The splitter itself, handing each statement to `each` as soon as it ends, so a caller can
+/// check statements one at a time without holding them all (SQL import). On error it returns
+/// the byte offset where the failing statement starts. No size or count limit is applied here.
+pub(crate) fn split_each(
+    sql: &str,
+    dialect: Dialect,
+    each: &mut dyn FnMut(Statement) -> Result<(), ScriptError>,
+) -> Result<(), (usize, ScriptError)> {
     let mut start = 0;
+    scan(sql, dialect, each, &mut start).map_err(|error| (start, error))
+}
+fn emit(
+    each: &mut dyn FnMut(Statement) -> Result<(), ScriptError>,
+    sql: &str,
+    range: std::ops::Range<usize>,
+    words: &mut Vec<String>,
+    body: &mut Body,
+) -> Result<(), ScriptError> {
+    let raw = &sql[range.clone()];
+    let text = raw.trim();
+    let begin = range.start + (raw.len() - raw.trim_start().len());
+    let result = if words.is_empty() {
+        Ok(())
+    } else {
+        each(Statement {
+            sql: text.to_owned(),
+            span: begin..begin + text.len(),
+            words: std::mem::take(words),
+            compound: body.compound,
+            semicolon: body.semicolon,
+            label: body.label,
+        })
+    };
+    words.clear();
+    *body = Body::default();
+    result
+}
+fn scan(
+    sql: &str,
+    dialect: Dialect,
+    each: &mut dyn FnMut(Statement) -> Result<(), ScriptError>,
+    start: &mut usize,
+) -> Result<(), ScriptError> {
+    let bytes = sql.as_bytes();
+    let mut delimiter: Vec<u8> = b";".to_vec();
     let mut index = 0;
     let mut words: Vec<String> = Vec::new();
     let mut depth = 0usize;
@@ -107,21 +165,6 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
     // SQLite `CREATE TRIGGER` bodies end only at `; END ;` (as in SQLite's sqlite3_complete and
     // its grammar), never at a `BEGIN`/`END` used as an identifier.
     let mut trigger = Trigger::Outside;
-    let push =
-        |statements: &mut Vec<Statement>, text: &str, words: &mut Vec<String>, body: &mut Body| {
-            let text = text.trim();
-            if !words.is_empty() {
-                statements.push(Statement {
-                    sql: text.to_owned(),
-                    words: std::mem::take(words),
-                    compound: body.compound,
-                    semicolon: body.semicolon,
-                    label: body.label,
-                });
-            }
-            words.clear();
-            *body = Body::default();
-        };
     let sqlite = dialect == Dialect::Sqlite;
     while index < bytes.len() {
         let byte = bytes[index];
@@ -129,7 +172,7 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
         if dialect == Dialect::MySql
             && matches!(byte, b'D' | b'd')
             && words.is_empty()
-            && sql[start..index].trim().is_empty()
+            && sql[*start..index].trim().is_empty()
         {
             let rest = &sql[index..];
             if rest.len() > 10
@@ -143,7 +186,7 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
                 }
                 delimiter = value.as_bytes().to_vec();
                 index += line_end;
-                start = index;
+                *start = index;
                 continue;
             }
         }
@@ -157,13 +200,10 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
             continue;
         }
         if depth == 0 && bytes[index..].starts_with(&delimiter) {
-            push(&mut statements, &sql[start..index], &mut words, &mut body);
+            emit(each, sql, *start..index, &mut words, &mut body)?;
             trigger = Trigger::Outside;
             index += delimiter.len();
-            start = index;
-            if statements.len() > ExecutionLimits::MAX_STATEMENTS {
-                return Err(ScriptError::TooManyStatements);
-            }
+            *start = index;
             continue;
         }
         match byte {
@@ -288,14 +328,7 @@ pub(crate) fn split(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, Scrip
     if executable_comment || depth > 0 || trigger.open() {
         return Err(ScriptError::Unterminated);
     }
-    push(&mut statements, &sql[start..], &mut words, &mut body);
-    if statements.is_empty() {
-        return Err(ScriptError::Empty);
-    }
-    if statements.len() > ExecutionLimits::MAX_STATEMENTS {
-        return Err(ScriptError::TooManyStatements);
-    }
-    Ok(statements)
+    emit(each, sql, *start..sql.len(), &mut words, &mut body)
 }
 
 /// MySQL/MariaDB compound-statement depth: `BEGIN` and `CASE` open, `END` closes except in
@@ -471,6 +504,14 @@ pub(crate) fn check(
         classify(statement, dialect, in_transaction).map_err(|error| (position, error))?;
     }
     Ok(())
+}
+/// One statement's policy check (SQL import checks statements as the splitter yields them).
+pub(crate) fn check_one(
+    statement: &Statement,
+    dialect: Dialect,
+    in_transaction: bool,
+) -> Result<(), ScriptError> {
+    classify(statement, dialect, in_transaction)
 }
 fn classify(
     statement: &Statement,

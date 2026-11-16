@@ -800,6 +800,72 @@ pub struct JobUpdate {
     pub lease: Option<LeaseStateDto>,
     pub done: bool,
 }
+/// Asks the host to show its native open dialog for a SQL file (M007 d5). The chosen path never
+/// crosses IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFileRequest {
+    pub session_id: String,
+}
+/// One-shot, session-scoped source grant; `fileName` is display-only. `None` = cancelled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFileGrant {
+    pub grant: Option<String>,
+    pub file_name: Option<String>,
+}
+/// Reads the granted file once, validates every statement and, only if all pass, runs them one
+/// by one (autocommit) from that same validated snapshot. Cancel with `cancel_job`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlImportRequest {
+    pub session_id: String,
+    pub handle: String,
+    pub grant: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlImportAccepted {
+    pub import_id: String,
+    pub statement_count: u32,
+    // Exact decimal text.
+    pub bytes: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlImportStatusRequest {
+    pub session_id: String,
+    pub import_id: String,
+}
+/// A statement by its 0-based position in the file and its 1-based starting line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportStatementDto {
+    pub index: u32,
+    pub line: u32,
+    pub failure: Option<StatementFailure>,
+}
+/// `completed` statements succeeded (and, under autocommit, are committed). `failed` stopped the
+/// import with a database error; `unknown` was in flight when the import was interrupted or
+/// the connection was lost, so its effect is unknown. Statements after either were not run.
+/// `done` means the final status was delivered and the record is released.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlImportStatus {
+    pub import_id: String,
+    pub state: JobStateDto,
+    pub outcome: Option<ExecutionOutcomeDto>,
+    pub cancellation: CancellationDto,
+    pub server_cancel_sent: bool,
+    pub deadline_exceeded: bool,
+    pub statement_count: u32,
+    pub completed: u32,
+    // Exact decimal text.
+    pub affected_rows: String,
+    pub failed: Option<ImportStatementDto>,
+    pub unknown: Option<ImportStatementDto>,
+    pub done: bool,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelJobResult {
@@ -990,6 +1056,13 @@ pub fn typescript() -> String {
         CancellationDto::decl(&config),
         LeaseStateDto::decl(&config),
         JobUpdate::decl(&config),
+        ImportFileRequest::decl(&config),
+        ImportFileGrant::decl(&config),
+        SqlImportRequest::decl(&config),
+        SqlImportAccepted::decl(&config),
+        SqlImportStatusRequest::decl(&config),
+        ImportStatementDto::decl(&config),
+        SqlImportStatus::decl(&config),
         CancelJobResult::decl(&config),
         TransactionLease::decl(&config),
         TransactionActionDto::decl(&config),

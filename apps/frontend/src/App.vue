@@ -76,6 +76,7 @@ import RawTextarea from './components/RawTextarea.vue';
 import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import LiveExport from './components/LiveExport.vue';
+import LiveSqlImport from './components/LiveSqlImport.vue';
 import { liveCsvImportPlan, MAX_IMPORT_BYTES } from './services/liveImport';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
@@ -1183,7 +1184,7 @@ async function importData() {
   const file = importFile.value, target = table.value, database = store.database, engine = store.connection.engine;
   if (!file || !target || !database) { importError.value = 'Choose a file and target table first.'; return; }
   if (isLive.value) {
-    if (importFormat.value === 'SQL') { importError.value = 'Live SQL import is not available yet; run the statements from the SQL tab.'; return; }
+    if (importFormat.value === 'SQL') return; // Live SQL import has its own panel (LiveSqlImport).
     await importLiveCsv(file, target);
     return;
   }
@@ -2428,7 +2429,7 @@ onBeforeUnmount(() => {
               <label v-if="w.scope === 'database'" class="form-label">Target table<select v-model="w.table"><option v-for="target in store.database?.tables" :key="target.name" :value="target.name">{{ target.name }}</option></select></label>
               <div v-if="importError" class="notice error" role="alert">{{ importError }}</div>
               <div v-if="importNotice" class="notice" role="status">{{ importNotice }}</div>
-              <label class="upload-area"
+              <label v-if="!(isLive && importFormat === 'SQL')" class="upload-area"
                 ><Upload :size="16" /><strong>{{
                   importFile?.name || 'Choose a SQL or CSV file'
                 }}</strong
@@ -2446,6 +2447,8 @@ onBeforeUnmount(() => {
                   <option>SQL</option>
                 </select></label
               >
+              <LiveSqlImport v-if="isLive && importFormat === 'SQL'" :key="store.activeId" />
+              <template v-else>
               <div class="notice info">
                 <CircleHelp :size="15" />{{
                   importFormat === 'CSV'
@@ -2464,6 +2467,7 @@ onBeforeUnmount(() => {
                   />{{ transferBusy ? `${transferProgress}%` : 'Import' }}
                 </button>
               </div>
+              </template>
             </div></template
           >
           <template v-else-if="table && w.view === 'Operations'">

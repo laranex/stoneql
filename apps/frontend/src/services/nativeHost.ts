@@ -92,8 +92,10 @@ const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOME
  * Renderer waits never end before the native worst case: end_transaction is COMMIT (10 s) +
  * ROLLBACK (2 s) + close (2 s); disconnect releases jobs/leases (5 s) then closes the pool and tunnel.
  */
-export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000 };
-export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome';
+// start_sql_import reads and validates the whole file before it answers (Proposed bound; see the
+// M007 import benchmark).
+export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000, start_sql_import: 120_000 };
+export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome'|'pick_import_file'|'start_sql_import'|'sql_import_status';
 /** Proposed (M005 T2): above the native 60 s secret deadline, so the host answers first. */
 export const SECRET_CONNECT_WAIT_MS = 75_000;
 /** True when connecting resolves a saved reference natively (a Keychain prompt may appear). */
@@ -103,7 +105,7 @@ function usesSavedSecret(payload: Record<string, unknown>): boolean {
 }
 export function nativeWaitFor(command: NativeDatabaseCommand, payload: Record<string, unknown>): number {
   // Native pickers and the OS credential store may wait for the user; database work is bounded.
-  if (['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret','trust_ssh_host_key','pick_export_file'].includes(command)) return 120_000;
+  if (['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret','trust_ssh_host_key','pick_export_file','pick_import_file'].includes(command)) return 120_000;
   if (command === 'connect_direct' && usesSavedSecret(payload)) return SECRET_CONNECT_WAIT_MS;
   return nativeWaitMs[command] ?? 8000;
 }

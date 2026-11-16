@@ -63,6 +63,15 @@ impl ExecutionLimits {
     pub const MAX_LEASES_PER_OWNER: usize = 2;
     pub const MAX_STATEMENTS: usize = 100;
     pub const MAX_SCRIPT_BYTES: usize = 65_536;
+    /// SQL import (A20, MySQL/MariaDB). PROPOSED values, benchmarked for sign-off: the whole
+    /// file is held once in memory as the validated snapshot it executes from.
+    pub const MAX_IMPORT_BYTES: usize = 1024 * 1024 * 1024;
+    pub const MAX_IMPORT_STATEMENT_BYTES: usize = 16 * 1024 * 1024;
+    /// Bounds the snapshot's statement index (16 bytes each).
+    pub const MAX_IMPORT_STATEMENTS: usize = 1_000_000;
+    /// Per statement; the whole import is bounded by `IMPORT_DEADLINE`.
+    pub const IMPORT_STATEMENT_DEADLINE: Duration = Self::MAX_STATEMENT_DEADLINE;
+    pub const IMPORT_DEADLINE: Duration = Duration::from_secs(2 * 3600);
     pub const DEFAULT_STATEMENT_DEADLINE: Duration = Duration::from_secs(30);
     pub const MAX_STATEMENT_DEADLINE: Duration = Duration::from_secs(300);
     pub const JOB_DEADLINE: Duration = Duration::from_secs(600);
@@ -792,6 +801,8 @@ struct Progress {
     stop_confirmed: bool,
     lease: Option<LeaseStateDto>,
     finished_at: Option<Instant>,
+    /// SQL imports keep compact counters instead of one report per statement.
+    import: Option<import::ImportProgress>,
 }
 struct Job {
     owner: OwnerId,
@@ -801,6 +812,38 @@ struct Job {
     finished: Notify,
 }
 impl Job {
+    fn new(
+        owner: OwnerId,
+        handle: ConnectionId,
+        deadline: Duration,
+        statements: Vec<StatementReport>,
+        lease: Option<LeaseStateDto>,
+        import: Option<import::ImportProgress>,
+    ) -> Arc<Self> {
+        let job_deadline = Instant::now() + deadline;
+        Arc::new(Job {
+            owner,
+            handle,
+            control: Control {
+                reason: Mutex::new(None),
+                notify: Notify::new(),
+                job_deadline,
+                deadline: Mutex::new(job_deadline),
+            },
+            progress: Mutex::new(Progress {
+                state: JobStateDto::Running,
+                outcome: None,
+                statements,
+                server_cancel_sent: false,
+                server_timeout: false,
+                stop_confirmed: false,
+                lease,
+                finished_at: None,
+                import,
+            }),
+            finished: Notify::new(),
+        })
+    }
     fn update(&self, change: impl FnOnce(&mut Progress)) {
         change(&mut self.progress.lock().expect("job progress lock"));
     }
@@ -845,10 +888,14 @@ struct Sink {
     /// The current statement's result data (rows, or a whole page or set) was read but not
     /// delivered because the job was interrupted (B-11). Reset per statement.
     withheld: bool,
+    /// SQL import: result sets are driven to their end and discarded, never delivered, so a
+    /// statement that returns rows cannot stall the import waiting for a reader.
+    discard: bool,
 }
 impl Sink {
     fn new(tx: mpsc::Sender<ResultBatch>, rows_per_result: usize) -> Self {
         Self {
+            discard: false,
             tx,
             statement: 0,
             next_result: 0,
@@ -866,7 +913,8 @@ impl Sink {
     fn begin(&mut self, columns: Vec<Column>) {
         let size = serde_json::to_vec(&columns).map_or(usize::MAX, |json| json.len());
         // Past the job's result-set or byte bounds, sets are reported (flagged) without data.
-        let withheld = self.result_sets >= ExecutionLimits::MAX_RESULT_SETS
+        let withheld = self.discard
+            || self.result_sets >= ExecutionLimits::MAX_RESULT_SETS
             || size > ExecutionLimits::MAX_METADATA_BYTES
             || self.job_bytes.saturating_add(size) > ExecutionLimits::MAX_BYTES_PER_JOB;
         if !withheld {
@@ -925,6 +973,9 @@ impl Sink {
         let Some(mut batch) = self.batch.take() else {
             return;
         };
+        if self.discard {
+            return;
+        }
         batch.last = last;
         batch.truncated = self.set_truncated;
         if !last {
@@ -1154,6 +1205,29 @@ fn sqlite_parse_error(message: &str) -> bool {
         || message.ends_with(": syntax error")
 }
 
+type Classified = (
+    StatementStatusDto,
+    Option<StatementFailure>,
+    Option<(u64, u32)>,
+);
+/// What one sent statement became, shared by jobs and SQL imports.
+fn classify(guarded: &Guarded<Result<Completed, sqlx::Error>>) -> Classified {
+    match &guarded.result {
+        Some(Ok(done)) => (
+            StatementStatusDto::Succeeded,
+            None,
+            Some((done.affected, done.result_sets)),
+        ),
+        // Interrupted after it was sent: even an observed end (a cancel error) cannot rule
+        // out effects, so the statement is unknown.
+        Some(Err(_)) if guarded.interrupted => (StatementStatusDto::Unknown, None, None),
+        Some(Err(error @ sqlx::Error::Database(_))) if !session_lost(error) => {
+            (StatementStatusDto::Failed, Some(failure(error)), None)
+        }
+        // Transport/protocol failure or abandoned: the server may have applied it.
+        Some(Err(_)) | None => (StatementStatusDto::Unknown, None, None),
+    }
+}
 struct Guarded<T> {
     /// `None` when the statement did not end within the cancel grace period.
     result: Option<T>,
@@ -1803,6 +1877,12 @@ async fn release_within(inner: &Inner, handle: Option<ConnectionId>, bound: Dura
 
 /// A lease whose connection slot is held by the running job.
 type HeldLease = (LeaseId, Arc<Lease>, OwnedMutexGuard<Option<Physical>>);
+struct Admitted {
+    pool: EnginePool,
+    engine: Engine,
+    lease: Option<HeldLease>,
+    permit: Option<OwnedSemaphorePermit>,
+}
 struct Plan {
     id: JobId,
     job: Arc<Job>,
@@ -1866,6 +1946,61 @@ impl Connections {
         statements: Vec<Statement>,
         options: JobOptions,
     ) -> Result<(JobId, usize), ExecutionError> {
+        let Admitted {
+            pool,
+            engine,
+            lease,
+            permit,
+        } = self.admit_work(owner, handle, options.lease)?;
+        let count = statements.len();
+        let (tx, rx) = mpsc::channel(ExecutionLimits::BUFFERED_PAGES);
+        let job = Job::new(
+            owner,
+            handle,
+            ExecutionLimits::JOB_DEADLINE,
+            (0..count)
+                .map(|index| StatementReport {
+                    index: index as u32,
+                    status: StatementStatusDto::NotRun,
+                    in_transaction: lease.is_some(),
+                    affected_rows: "0".into(),
+                    result_sets: 0,
+                    failure: None,
+                    results_withheld: false,
+                })
+                .collect(),
+            lease.as_ref().map(|_| LeaseStateDto::Active),
+            None,
+        );
+        let id = JobId(Uuid::new_v4());
+        let target = Target::of(&pool);
+        let origin = Origin::of(engine, &target);
+        self.register_job(owner, handle, id, &job, &origin, count, lease.is_some(), rx)?;
+        tokio::spawn(run(Plan {
+            id,
+            job,
+            statements,
+            target,
+            origin,
+            statement_deadline: options.statement_deadline,
+            lease,
+            _permit: permit,
+            connect_deadline: self.0.deadline,
+            sink: Sink::new(tx, options.max_rows_per_result),
+            registry: Arc::downgrade(&self.0),
+        }));
+        Ok((id, count))
+    }
+
+    /// Admission shared by jobs and SQL imports: a usable read-write handle, the journal and
+    /// unresolved-outcome gates, the per-owner record cap, and the handle's exclusive work
+    /// (its lease's connection slot, or its work permit). Nothing is queued.
+    fn admit_work(
+        &self,
+        owner: OwnerId,
+        handle: ConnectionId,
+        lease: Option<LeaseId>,
+    ) -> Result<Admitted, ExecutionError> {
         let (pool, work, engine) = self.writable(owner, handle)?;
         let execution = &self.0.execution;
         execution.admit(owner)?;
@@ -1881,7 +2016,7 @@ impl Connections {
         {
             return Err(ExecutionError::Capacity);
         }
-        let (lease, permit) = match options.lease {
+        let (lease, permit) = match lease {
             Some(id) => {
                 let lease = execution
                     .leases
@@ -1910,45 +2045,32 @@ impl Connections {
                 Some(work.try_acquire_owned().map_err(|_| ExecutionError::Busy)?),
             ),
         };
-        let count = statements.len();
-        let (tx, rx) = mpsc::channel(ExecutionLimits::BUFFERED_PAGES);
-        let job_deadline = Instant::now() + ExecutionLimits::JOB_DEADLINE;
-        let job = Arc::new(Job {
-            owner,
-            handle,
-            control: Control {
-                reason: Mutex::new(None),
-                notify: Notify::new(),
-                job_deadline,
-                deadline: Mutex::new(job_deadline),
-            },
-            progress: Mutex::new(Progress {
-                state: JobStateDto::Running,
-                outcome: None,
-                statements: (0..count)
-                    .map(|index| StatementReport {
-                        index: index as u32,
-                        status: StatementStatusDto::NotRun,
-                        in_transaction: lease.is_some(),
-                        affected_rows: "0".into(),
-                        result_sets: 0,
-                        failure: None,
-                        results_withheld: false,
-                    })
-                    .collect(),
-                server_cancel_sent: false,
-                server_timeout: false,
-                stop_confirmed: false,
-                lease: lease.as_ref().map(|_| LeaseStateDto::Active),
-                finished_at: None,
-            }),
-            finished: Notify::new(),
-        });
-        let id = JobId(Uuid::new_v4());
-        let target = Target::of(&pool);
-        let origin = Origin::of(engine, &target);
-        // Write-ahead: the first statement's in-flight record is durable before the job exists.
-        if !execution.journal_job(id, &origin, count, 0, lease.is_some()) {
+        Ok(Admitted {
+            pool,
+            engine,
+            lease,
+            permit,
+        })
+    }
+
+    /// Makes a started job visible: statement 0's in-flight record is durable first
+    /// (write-ahead), then the record is inserted. A disconnect/expiry removes the handle before
+    /// it releases the handle's jobs; if that raced this submission the job is ended here
+    /// (nothing sent) instead of running untracked.
+    #[allow(clippy::too_many_arguments)]
+    fn register_job(
+        &self,
+        owner: OwnerId,
+        handle: ConnectionId,
+        id: JobId,
+        job: &Arc<Job>,
+        origin: &Origin,
+        count: usize,
+        in_lease: bool,
+        pages: mpsc::Receiver<ResultBatch>,
+    ) -> Result<(), ExecutionError> {
+        let execution = &self.0.execution;
+        if !execution.journal_job(id, origin, count, 0, in_lease) {
             execution.concluded(id.0);
             return Err(ExecutionError::JournalUnavailable);
         }
@@ -1956,31 +2078,16 @@ impl Connections {
             id,
             JobEntry {
                 job: job.clone(),
-                pages: Arc::new(tokio::sync::Mutex::new(rx)),
+                pages: Arc::new(tokio::sync::Mutex::new(pages)),
             },
         );
-        // A disconnect/expiry removes the handle before it releases the handle's jobs. If that
-        // raced this submission, the job is ended here (nothing sent) instead of running untracked.
         if self.writable(owner, handle).is_err() {
-            finish(&job, ExecutionOutcome::Cancelled, true, None);
+            finish(job, ExecutionOutcome::Cancelled, true, None);
             execution.jobs.lock().expect("job lock").remove(&id);
             execution.concluded(id.0);
             return Err(ExecutionError::Forbidden);
         }
-        tokio::spawn(run(Plan {
-            id,
-            job,
-            statements,
-            target,
-            origin,
-            statement_deadline: options.statement_deadline,
-            lease,
-            _permit: permit,
-            connect_deadline: self.0.deadline,
-            sink: Sink::new(tx, options.max_rows_per_result),
-            registry: Arc::downgrade(&self.0),
-        }));
-        Ok((id, count))
+        Ok(())
     }
 
     /// Next bounded page and a progress snapshot. `done` is set once the job finished and every
@@ -2450,21 +2557,7 @@ async fn run(mut plan: Plan) {
             && !guarded.interrupted
             && matches!(&guarded.result, Some(Err(error)) if statement_timeout_error(error))
             && sent_at.elapsed() >= server_timeout;
-        let (status, report_failure, completed) = match &guarded.result {
-            Some(Ok(done)) => (
-                StatementStatusDto::Succeeded,
-                None,
-                Some((done.affected, done.result_sets)),
-            ),
-            // Interrupted after it was sent: even an observed end (a cancel error) cannot rule
-            // out effects, so the statement is unknown.
-            Some(Err(_)) if guarded.interrupted => (StatementStatusDto::Unknown, None, None),
-            Some(Err(error @ sqlx::Error::Database(_))) if !session_lost(error) => {
-                (StatementStatusDto::Failed, Some(failure(error)), None)
-            }
-            // Transport/protocol failure or abandoned: the server may have applied it.
-            Some(Err(_)) | None => (StatementStatusDto::Unknown, None, None),
-        };
+        let (status, report_failure, completed) = classify(&guarded);
         if guarded.interrupted {
             stop_confirmed = guarded.result.is_some();
             // L-8: a statement that did not end, or a server interrupt still in flight, leaves
@@ -2624,7 +2717,9 @@ fn finish(
     job.finished.notify_waiters();
 }
 
+mod import;
 mod journal;
+pub use import::{ImportError, ImportRefusal, ImportRefusalReason};
 // The execution suite runs against SQLite fixture files (A5: `sqlite` is a default feature).
 #[cfg(all(test, feature = "sqlite"))]
 mod ssh_fixture;

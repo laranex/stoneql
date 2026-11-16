@@ -19,7 +19,7 @@ use stoneql_runtime::{
 use tauri::{Runtime, State, WebviewWindow};
 
 /// Fixed, allowlisted text only; never SQL, values or driver messages.
-fn execution_error(error: ExecutionError) -> ErrorDto {
+pub(crate) fn execution_error(error: ExecutionError) -> ErrorDto {
     let code = match error {
         ExecutionError::Forbidden => ErrorCode::Forbidden,
         ExecutionError::ReadOnlyHandle => ErrorCode::UnsupportedCapability,
@@ -54,7 +54,7 @@ fn reply<T>(request_id: String, payload: T) -> Envelope<T> {
         payload,
     }
 }
-fn job_id(value: &str) -> Result<JobId, ErrorDto> {
+pub(crate) fn job_id(value: &str) -> Result<JobId, ErrorDto> {
     if !is_opaque_id(value) {
         return Err(invalid());
     }

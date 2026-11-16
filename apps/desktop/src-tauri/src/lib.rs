@@ -2,6 +2,7 @@ mod database;
 mod execution;
 mod host_keys;
 mod secrets;
+mod sql_import;
 mod sqlite_file;
 mod ssh_transport;
 mod transfer;
@@ -13,6 +14,8 @@ use execution::{
 pub use host_keys::{FileHostKeyStore, HostKeyStore, HostKeyStoreError, MemoryHostKeyStore};
 pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
 use secrets::{delete_secret, store_secret};
+pub use sql_import::authorize_import_file;
+use sql_import::{pick_import_file, sql_import_status, start_sql_import};
 pub use sqlite_file::authorize_sqlite_file;
 use sqlite_file::{connect_sqlite, pick_sqlite_file};
 pub use ssh_transport::{authorize_ssh_key_file, commit_ssh_host_key};
@@ -94,6 +97,7 @@ pub struct NativeSession {
         Mutex<std::collections::HashMap<(String, u16), (stoneql_runtime::HostKey, Instant)>>,
     /// M007 export grants and transfer records of the current renderer session.
     transfers: transfer::Transfers,
+    imports: sql_import::ImportGrants,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
@@ -136,6 +140,7 @@ impl NativeSession {
             .expect("pending host keys lock")
             .clear();
         self.transfers.reset();
+        self.imports.reset();
         self.echoed.store(false, Ordering::SeqCst);
         self.close_pending.store(false, Ordering::SeqCst);
         self.close_prompted.store(false, Ordering::SeqCst);
@@ -183,6 +188,7 @@ impl NativeSession {
                 .unwrap_or_default(),
             pending_host_keys: Mutex::new(std::collections::HashMap::new()),
             transfers: transfer::Transfers::default(),
+            imports: sql_import::ImportGrants::default(),
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
@@ -326,6 +332,7 @@ fn shutdown_and_exit<R: Runtime>(app: &tauri::AppHandle<R>) {
         .expect("pending host keys lock")
         .clear();
     state.transfers.reset();
+    state.imports.reset();
     let connections = state.connections.clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -546,7 +553,10 @@ pub fn app_builder_with<R: Runtime>(
             begin_transaction,
             end_transaction,
             list_unresolved_outcomes,
-            acknowledge_outcome
+            acknowledge_outcome,
+            pick_import_file,
+            start_sql_import,
+            sql_import_status
         ])
 }
 pub fn run() {
