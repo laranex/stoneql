@@ -31,12 +31,40 @@ export function labelledRows(result: SqlResult): Row[] {
   return result.rows.map((row) => Object.fromEntries(result.columns.map((key, index) => [labels[index]!, row[key] ?? null])));
 }
 
+/**
+ * Catalog rows. MySQL 8 reports several information_schema columns (TABLE_TYPE, COLUMN_TYPE,
+ * COLUMN_KEY, COLUMN_DEFAULT) with the binary character set, so the native result carries them as
+ * binary cells; they are catalog text and are decoded as strict UTF-8 here. User data is never
+ * reinterpreted this way.
+ */
+export function catalogRows(result: SqlResult): Row[] {
+  if (!result.raw) return labelledRows(result);
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const labels = result.raw.columns.map((c) => c.name);
+  return result.raw.rows.map((cells) =>
+    Object.fromEntries(
+      cells.map((cell, index) => {
+        let value: string | null;
+        if (cell.kind === 'null') value = null;
+        else if (cell.kind === 'binary') {
+          const bytes = new Uint8Array(cell.hex.length / 2);
+          for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(cell.hex.slice(i * 2, i * 2 + 2), 16);
+          value = decoder.decode(bytes);
+        } else if (cell.kind === 'boolean') value = cell.value ? 'true' : 'false';
+        else if (cell.kind === 'unknown') throw new Error(`Unexpected ${cell.databaseType} value in the live catalog.`);
+        else value = cell.text;
+        return [labels[index]!, value];
+      }),
+    ),
+  );
+}
+
 function text(value: Row[string]): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
 export function toLiveTables(result: SqlResult): Table[] {
-  return labelledRows(result).map((row) => ({
+  return catalogRows(result).map((row) => ({
     name: text(row.name),
     kind: text(row.kind) === 'VIEW' || text(row.kind) === 'SYSTEM VIEW' ? 'view' : 'table',
     columns: [],
@@ -46,7 +74,7 @@ export function toLiveTables(result: SqlResult): Table[] {
 
 /** Column metadata exactly as the catalog reports it; the type keeps the server's spelling. */
 export function toLiveColumns(result: SqlResult, engine: Engine): Column[] {
-  return labelledRows(result).map((row) => {
+  return catalogRows(result).map((row) => {
     const type = text(row.type), extra = text(row.extra).toLowerCase(), key = text(row.ckey);
     const column: Column = {
       name: text(row.name),
