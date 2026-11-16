@@ -1735,6 +1735,73 @@ async fn harness() -> Result<(), Failure> {
     )?;
     report.insert("rendererCrud".into(), json!({"statements": crud.len(), "affected": crud_report, "exactText": true, "staleRowAffected": "0"}));
 
+    step("renderer CSV import batches");
+    // M007 live CSV import: the exact batches apps/frontend/src/services/liveImport.ts builds
+    // (pinned) run inside one lease; a committed batch keeps NULL / '' / 'NULL' distinct, and a
+    // rejected batch rolls the whole import back.
+    let [import_ok, import_dup]: [&str; 2] = if mysql {
+        [
+            r#"INSERT INTO `exec_text` (`id`, `label`, `amount`) VALUES
+(_utf8mb4 X'3231', NULL, _utf8mb4 X'312e3530'),
+(_utf8mb4 X'3232', _utf8mb4 X'', _utf8mb4 X'2d302e3031'),
+(_utf8mb4 X'3233', _utf8mb4 X'4e554c4c', NULL);"#,
+            r#"INSERT INTO `exec_text` (`id`, `label`, `amount`) VALUES
+(_utf8mb4 X'3234', _utf8mb4 X'78', _utf8mb4 X'31'),
+(_utf8mb4 X'3234', _utf8mb4 X'79', _utf8mb4 X'32');"#,
+        ]
+    } else {
+        [
+            r#"INSERT INTO "exec_text" ("id", "label", "amount") VALUES
+(E'21', NULL, E'1.50'),
+(E'22', E'', E'-0.01'),
+(E'23', E'NULL', NULL);"#,
+            r#"INSERT INTO "exec_text" ("id", "label", "amount") VALUES
+(E'24', E'x', E'1'),
+(E'24', E'y', E'2');"#,
+        ]
+    };
+    let lease = connections.begin_transaction(owner, handle).await?;
+    let (_, update) = run.run(import_ok, Some(lease)).await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+        "import batch succeeded",
+    )?;
+    ensure(
+        update.statements.first().map(|s| s.affected_rows.as_str()) == Some("3"),
+        "import batch inserted three rows",
+    )?;
+    let end = connections.end_transaction(owner, lease, true).await?;
+    ensure(end.outcome == Outcome::Committed, "import committed")?;
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM exec_text WHERE (id = 21 AND label IS NULL AND amount = 1.50) OR (id = 22 AND label = '' AND amount = -0.01) OR (id = 23 AND label = 'NULL' AND amount IS NULL)".into())
+            .await?
+            == 3,
+        "import kept NULL, empty and 'NULL' distinct",
+    )?;
+    let lease = connections.begin_transaction(owner, handle).await?;
+    let (_, update) = run.run(import_dup, Some(lease)).await?;
+    ensure(
+        update.outcome == Some(ExecutionOutcomeDto::Failed),
+        "duplicate batch rejected",
+    )?;
+    let end = connections.end_transaction(owner, lease, false).await?;
+    ensure(
+        end.outcome == Outcome::RolledBack,
+        "rejected import rolled back",
+    )?;
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM exec_text WHERE id = 24".into())
+            .await?
+            == 0,
+        "nothing of the rejected import applied",
+    )?;
+    report.insert(
+        "rendererCsvImport".into(),
+        json!({"committedRows": 3, "nullEmptyTextDistinct": true, "rejectedBatchRolledBack": true}),
+    );
+
     step("expiry lease start");
     // Lease expiry runs in the background on a second handle for the real LEASE_IDLE.
     let expiry_handle = connections
