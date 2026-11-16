@@ -1181,14 +1181,16 @@ fn session_lost(error: &sqlx::Error) -> bool {
             .and_then(|error| error.code())
             .is_some_and(|code| code.starts_with("08") || code.starts_with("57P"))
 }
-/// PostgreSQL's own report that `statement_timeout` ended the statement (SQLSTATE 57014 is also
-/// used for other cancellations, so the server's message is checked too; it is never surfaced).
-/// The statement failed and, as PostgreSQL's timeout is disabled before a commit starts, was not
-/// committed; inside a transaction block the block is aborted.
+/// SQLSTATE 57014 (query_canceled). The caller attributes it to the `statement_timeout` StoneQL
+/// set only when StoneQL sent no interrupt and the statement ran at least that long (F-5: the
+/// server's message text is localized by `lc_messages`, so it is not used). Another session's
+/// cancel after that long would be reported as the timeout, a wording-only difference: either
+/// way the statement failed and, as PostgreSQL's timeout is disabled before a commit starts, was
+/// not committed; inside a transaction block the block is aborted.
 fn statement_timeout_error(error: &sqlx::Error) -> bool {
-    error.as_database_error().is_some_and(|error| {
-        error.code().as_deref() == Some("57014") && error.message().contains("statement timeout")
-    })
+    error
+        .as_database_error()
+        .is_some_and(|error| error.code().as_deref() == Some("57014"))
 }
 fn failure(error: &sqlx::Error) -> StatementFailure {
     use sqlx::error::ErrorKind;
