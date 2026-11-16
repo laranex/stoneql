@@ -66,6 +66,14 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await expect(page.locator('.cell-editor')).toHaveCount(0);
   expect((await jobs()).length).toBe(3);
 
+  // Edit form on an existing row: only the changed column is written.
+  await page.getByRole('button', { name: 'Edit record 9007199254740993' }).click();
+  const form = page.locator('form.record-form[aria-label="Edit record"]');
+  await form.getByLabel('Value for name', { exact: true }).fill('Grace');
+  await form.locator('button.primary').click();
+  await expect(page.getByText('1 row updated.')).toBeVisible();
+  expect((await jobs()).at(-1)).toBe("UPDATE `accounts` SET `name` = _utf8mb4 X'4772616365' WHERE `id` = _utf8mb4 X'39303037313939323534373430393933' LIMIT 1;");
+
   // Delete by primary key after confirmation.
   await page.getByRole('button', { name: 'Delete record 9007199254740994' }).click();
   await page.getByRole('button', { name: 'Delete 1 record', exact: true }).click();
@@ -77,7 +85,7 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await page.getByRole('button', { name: /Save|Insert/ }).filter({ hasText: /^(Save|Insert)/ }).first().click();
   await expect(page.getByText('1 row inserted.')).toBeVisible();
   expect((await jobs()).at(-1)).toBe('INSERT INTO `accounts` () VALUES ();');
-  expect((await jobs()).length).toBe(5);
+  expect((await jobs()).length).toBe(6);
 
   // Metadata invalidation: a schema statement run from the SQL tab re-reads the catalog.
   await page.getByRole('tab', { name: 'SQL', exact: true }).click();

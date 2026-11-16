@@ -35,7 +35,10 @@ test('inserts omit defaulted columns and keep explicit NULL', () => {
 });
 test('success is claimed only for exactly one affected row; conflicts and unknowns are explicit', () => {
   const job = (outcome: any, affectedRows: string, status = 'succeeded') => ({ outcome, cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, lease: null, resultSets: [], statements: [{ index: 0, status, inTransaction: false, affectedRows, resultSets: 0, failure: null, resultsWithheld: false }] }) as any;
-  assert.deepEqual(liveMutationOutcome(job('succeeded', '1'), 'updated'), { ok: true, text: '1 row updated.' });
+  assert.deepEqual(liveMutationOutcome(job('succeeded', '1'), 'updated'), { ok: true, inTransaction: false, text: '1 row updated.' });
+  const inLease = job('succeeded', '1');
+  inLease.statements[0].inTransaction = true;
+  assert.equal(liveMutationOutcome(inLease, 'inserted').text, '1 row inserted in the open transaction; Browse shows it after you commit.');
   assert.equal(liveMutationOutcome(job('succeeded', '0'), 'deleted').ok, false);
   assert.match(liveMutationOutcome(job('succeeded', '0'), 'deleted').text, /changed or deleted since it was loaded/);
   assert.match(liveMutationOutcome(job('unknown', '0', 'unknown'), 'updated').text, /Outcome unknown/);

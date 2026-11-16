@@ -79,7 +79,7 @@ export function liveInsertSql(engine: Engine, table: string, columns: readonly C
   return `INSERT INTO ${quoteIdentifier(table, engine)} (${names.map((n) => quoteIdentifier(n, engine)).join(', ')}) VALUES (${names.map((n) => liveLiteral(engine, values[n]!)).join(', ')});`;
 }
 
-export type LiveMutationOutcome = { ok: true; text: string } | { ok: false; kind: 'conflict' | 'error'; text: string };
+export type LiveMutationOutcome = { ok: true; text: string; inTransaction: boolean } | { ok: false; kind: 'conflict' | 'error'; text: string };
 /**
  * Success only when the job succeeded and changed exactly one row. A succeeded statement that
  * matched no row is a conflict (changed or deleted elsewhere); failures and unknown outcomes
@@ -87,8 +87,11 @@ export type LiveMutationOutcome = { ok: true; text: string } | { ok: false; kind
  */
 export function liveMutationOutcome(job: LiveJobResult, action: 'updated' | 'inserted' | 'deleted'): LiveMutationOutcome {
   if (job.outcome !== 'succeeded') return { ok: false, kind: 'error', text: describeJob(job, false).text };
-  const affected = job.statements[0]?.affectedRows ?? '0';
-  if (affected === '1') return { ok: true, text: `1 row ${action}.` };
+  const affected = job.statements[0]?.affectedRows ?? '0', inTransaction = !!job.statements[0]?.inTransaction;
+  // Inside an open transaction the change is not committed; Browse reads committed data through
+  // another connection, so it shows the change only after COMMIT.
+  if (affected === '1')
+    return { ok: true, inTransaction, text: inTransaction ? `1 row ${action} in the open transaction; Browse shows it after you commit.` : `1 row ${action}.` };
   if (affected === '0') return { ok: false, kind: 'conflict', text: `No row was ${action}: it was changed or deleted since it was loaded. Refresh and try again.` };
   return { ok: false, kind: 'error', text: `${affected} rows were ${action}; expected exactly one. Verify on the server.` };
 }

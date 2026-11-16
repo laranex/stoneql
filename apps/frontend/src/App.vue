@@ -137,7 +137,7 @@ async function runLiveMutation(sql: string, action: 'updated' | 'inserted' | 'de
   const job = await store.runLiveJob(store.activeId, sql);
   const outcome = liveMutationOutcome(job, action);
   // A conflicted cell edit keeps its editor (bound to the loaded row) open with the message.
-  if (outcome.ok || (outcome.kind === 'conflict' && reloadOnConflict)) void loadLiveBrowse();
+  if ((outcome.ok && !outcome.inTransaction) || (!outcome.ok && outcome.kind === 'conflict' && reloadOnConflict)) void loadLiveBrowse();
   return outcome;
 }
 const liveValue = (value: Row[string] | undefined, useDefault?: boolean): LiveValue => (useDefault ? { default: true } : value === null || value === undefined ? null : String(value));
