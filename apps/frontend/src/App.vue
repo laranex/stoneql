@@ -254,7 +254,7 @@ const filtered = computed(() =>
     table.value?.columns.find((c) => c.name === w.value.sort)?.type,
   ),
 );
-const liveBrowse = ref<{ key: string; sql: string; rows: Row[]; total: number; loading: boolean }>({ key: '', sql: '', rows: [], total: 0, loading: false });
+const liveBrowse = ref<{ key: string; sql: string; rows: Row[]; total: number | null; totalError?: string; loading: boolean }>({ key: '', sql: '', rows: [], total: 0, loading: false });
 let liveBrowseGeneration = 0, liveFilterTimer: ReturnType<typeof setTimeout> | undefined;
 const liveBrowseKey = computed(() => liveCatalog.value && w.value.scope === 'table' && w.value.view === 'Browse' && table.value?.columns.length && liveSession.value?.status === 'connected'
   ? JSON.stringify([store.activeId, w.value.table, w.value.filter, w.value.sort, w.value.descending, w.value.page, store.pageSize]) : '');
@@ -301,8 +301,10 @@ watch(() => [store.activeId, liveCatalog.value, liveSession.value?.status, liveS
   liveCatalogHandles.set(profile, handle);
   void loadLiveCatalog(profile);
 }, { immediate: true });
-const rowTotal = computed(() => (isLive.value ? liveBrowse.value.total : filtered.value.length));
-const pages = computed(() => Math.max(1, Math.ceil(rowTotal.value / store.pageSize)));
+/** Live pages without a total (COUNT(*) failed) count what is known and allow one more page while pages are full. */
+const liveTotalKnown = computed(() => !isLive.value || liveBrowse.value.total !== null);
+const rowTotal = computed(() => !isLive.value ? filtered.value.length : liveBrowse.value.total ?? (w.value.page - 1) * store.pageSize + liveBrowse.value.rows.length);
+const pages = computed(() => liveTotalKnown.value ? Math.max(1, Math.ceil(rowTotal.value / store.pageSize)) : w.value.page + (liveBrowse.value.rows.length === store.pageSize ? 1 : 0));
 const browseNoticeVersion = ref(0);
 watch([filtered, () => w.value.page, () => store.pageSize], () => {
   browseNoticeVersion.value++;
@@ -1497,7 +1499,7 @@ onBeforeUnmount(() => {
                 >{{ rowTotal ? (w.page - 1) * store.pageSize + 1 : 0 }} –
                 {{ Math.min(w.page * store.pageSize, rowTotal) }}</strong
               >
-              ({{ rowTotal }} total · {{ isLive ? 'live, read-only' : 'mock results' }})
+              <template v-if="liveTotalKnown">({{ rowTotal }} total · {{ isLive ? 'live, read-only' : 'mock results' }})</template><template v-else>(total unavailable: {{ liveBrowse.totalError }} · live, read-only)</template>
               <template #end
                 ><span class="notice-end">{{
                   isLive ? (liveBrowse.loading ? 'Loading…' : w.filter ? 'Filtered results' : 'SELECT') : w.filter ? 'Filtered results (mock)' : 'SELECT (mock)'
@@ -1791,7 +1793,7 @@ onBeforeUnmount(() => {
                     Math.min(w.page * store.pageSize, rowTotal)
                   }}</strong
                 >
-                of <strong>{{ rowTotal }}</strong> rows</span
+                <template v-if="liveTotalKnown">of <strong>{{ rowTotal }}</strong> rows</template></span
               >
               <div>
                 <button

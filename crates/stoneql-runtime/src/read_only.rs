@@ -397,7 +397,8 @@ mod tests {
         for sql in [
             "SELECT TABLE_NAME AS name, TABLE_TYPE AS kind FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'o''brien' ORDER BY TABLE_NAME;",
             "SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_KEY AS ckey, COLUMN_DEFAULT AS dflt, EXTRA AS extra FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'shop' AND TABLE_NAME = 'odd`name' ORDER BY ORDINAL_POSITION;",
-            "SELECT * FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!'\nORDER BY `id` IS NULL ASC, `id` DESC\nLIMIT 30, 15;",
+            "SELECT * FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!'\nORDER BY `id` DESC\nLIMIT 30, 15;",
+            "SELECT * FROM `t`\nORDER BY `na``me` IS NULL ASC, `na``me` ASC\nLIMIT 0, 25;",
             "SELECT COUNT(*) AS total FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!';",
         ] {
             assert!(validate_select(sql, Dialect::MySql).is_ok(), "{sql}");

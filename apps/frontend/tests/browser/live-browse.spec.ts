@@ -29,6 +29,7 @@ for (const theme of ['light', 'dark'])
             const filter = /LIKE '%(.*?)%'/.exec(sql)?.[1];
             let matching = filter ? rows.filter((r) => (r[1] ?? '').includes(filter)) : rows;
             if (/`id` DESC/.test(sql)) matching = [...matching].reverse();
+            if (sql.startsWith('SELECT COUNT(*)') && filter === 'name 1') throw { code: 'DEADLINE_EXCEEDED' };
             if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [[String(matching.length)]]);
             else {
               const [, offset, limit] = /LIMIT (\d+), (\d+);$/.exec(sql)!.map(Number);
@@ -55,7 +56,9 @@ for (const theme of ['light', 'dark'])
     await expect(page.locator('.browse-content')).toContainText('(40 total · live, read-only)');
     await expect(page.locator('.browse-content .row-actions, .browse-content .check-cell')).toHaveCount(0);
     await expect(page.locator('.selection-toolbar')).toHaveCount(0);
-    await expect(page.locator('.sql-preview, .browse-content')).toContainText('ORDER BY `id` IS NULL ASC, `id` ASC');
+    await expect(page.locator('.sql-preview, .browse-content')).toContainText('ORDER BY `id` ASC\nLIMIT 0, 25;');
+    await page.getByText('9007199254740993', { exact: true }).dblclick();
+    await expect(page.locator('.cell-editor')).toHaveCount(0);
 
     await page.getByRole('button', { name: /Next page/ }).first().click();
     await expect(page.getByText(String(9007199254740993n + 25n), { exact: true })).toBeVisible();
@@ -64,6 +67,9 @@ for (const theme of ['light', 'dark'])
     const sql: string[] = await page.evaluate(() => (window as any).liveSql);
     expect(sql.every((s) => s.startsWith('SELECT '))).toBe(true);
     expect(sql.filter((s) => s.includes("LIKE '%name 3%'")).length).toBe(2);
+    await page.getByLabel(/Filter rows/i).fill('name 1');
+    await expect(page.locator('.browse-content')).toContainText('total unavailable: Operation timed out');
+    await expect(page.getByText('name 10', { exact: true })).toBeVisible();
 
     await page.getByRole('tab', { name: 'Structure', exact: true }).click();
     await expect(page.locator('.structure-grid tbody tr')).toHaveCount(2);

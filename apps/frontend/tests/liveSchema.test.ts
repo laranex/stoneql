@@ -39,7 +39,8 @@ test('labelled rows keep raw values and NULL', () => {
 test('browse page and count share the escaped filter; sort ignores unknown columns', () => {
   const columns = [{ name: 'id', type: 'bigint', nullable: false }, { name: 'na`me', type: 'text', nullable: true }];
   const plan = liveBrowseQuery({ table: 'users', columns, filter: '50%_off!', sort: 'id', descending: true, offset: 30, limit: 15 });
-  assert.equal(plan.sql, "SELECT * FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!'\nORDER BY `id` IS NULL ASC, `id` DESC\nLIMIT 30, 15;");
+  assert.equal(plan.sql, "SELECT * FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!'\nORDER BY `id` DESC\nLIMIT 30, 15;");
+  assert.equal(liveBrowseQuery({ table: 't', columns, filter: '', sort: 'na`me', descending: false, offset: 0, limit: 25 }).sql, 'SELECT * FROM `t`\nORDER BY `na``me` IS NULL ASC, `na``me` ASC\nLIMIT 0, 25;');
   assert.equal(plan.countSql, "SELECT COUNT(*) AS total FROM `users`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%50!%!_off!!%' ESCAPE '!' OR LOWER(COALESCE(`na``me`, '')) LIKE '%50!%!_off!!%' ESCAPE '!';");
   assert.equal(liveBrowseQuery({ table: 't', columns, filter: '', sort: 'missing', descending: false, offset: 0, limit: 25 }).sql, 'SELECT * FROM `t`\nLIMIT 0, 25;');
   assert.throws(() => liveBrowseQuery({ table: 't', columns, filter: 'a\\b', sort: '', descending: false, offset: 0, limit: 25 }), /backslash/);

@@ -260,10 +260,12 @@ export const useWorkspace = defineStore('workspace', () => {
     const ws=workspaces.value[id]!, table=ws.databases[0]?.tables.find(t=>t.name===ws.table);
     if(!table)throw new Error('Choose a table first.');
     const plan=liveBrowseQuery({table:table.name,columns:table.columns,filter:ws.filter,sort:ws.sort,descending:ws.descending,offset:(ws.page-1)*ws.pageSize,limit:ws.pageSize});
-    const count=await executeLive(id,plan.countSql);
     const page=await executeLive(id,plan.sql);
-    const total=labelledRows(count)[0]?.total;
-    return {sql:plan.sql,rows:labelledRows(page),total:total===null||total===undefined?0:Number(total)};
+    // The page is shown even when COUNT(*) fails (for example the native deadline on a large table).
+    let total:number|null=null, totalError='';
+    try { const value=labelledRows(await executeLive(id,plan.countSql))[0]?.total; total=value===null||value===undefined?0:Number(value); }
+    catch(error){ totalError=(error as Error).message; }
+    return {sql:plan.sql,rows:labelledRows(page),total,totalError};
   }
   async function beginLiveTransaction_(id:string) {
     const current=liveSessions.value[id];

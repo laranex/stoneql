@@ -101,11 +101,13 @@ export function liveBrowseQuery(input: {
         .map((c) => `LOWER(COALESCE(${quoteIdentifier(c.name, engine)}, '')) LIKE ${pattern} ESCAPE '!'`)
         .join(' OR ');
   }
-  const sort = input.columns.some((c) => c.name === input.sort) ? input.sort : '';
+  const sorted = input.columns.find((c) => c.name === input.sort), sort = sorted?.name ?? '';
   let order = '';
-  if (sort) {
-    const identifier = quoteIdentifier(sort, engine);
-    order = `\nORDER BY ${identifier} IS NULL ASC, ${identifier} ${input.descending ? 'DESC' : 'ASC'}`;
+  if (sorted) {
+    // NULLs last only where NULL is possible: an extra expression would force a filesort and
+    // keep the primary-key default page from using its index on large tables.
+    const identifier = quoteIdentifier(sort, engine), direction = input.descending ? 'DESC' : 'ASC';
+    order = sorted.nullable ? `\nORDER BY ${identifier} IS NULL ASC, ${identifier} ${direction}` : `\nORDER BY ${identifier} ${direction}`;
   }
   return {
     sql: `${from}${where}${order}\nLIMIT ${input.offset}, ${input.limit};`,
