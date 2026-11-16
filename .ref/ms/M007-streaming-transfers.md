@@ -1,6 +1,8 @@
 # M007 — Streaming transfers and compression
 
 ## Status
+**Blocked — alpha slice implemented; all unblocked work done (2026-11-16).** Live SQL/CSV export (MySQL, MariaDB, PostgreSQL) and live CSV import are implemented and verified (record below). Live SQL import is not started (needs a native statement splitter command and the read-write gate). Remaining criteria need decisions A1, A2, A6, A8, A15, A18–A20 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+
 Planned / not started. The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## v0.1.0 Alpha slice (D022, Approved product decision 2026-10-26)
@@ -36,3 +38,22 @@ XLSX and ZIP may require bounded temporary storage; SQL export snapshot consiste
 
 
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
+
+## Acceptance record — 2026-11-16 (alpha slice; macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+| Item (alpha plan d1–d6) | Commits | Executed evidence |
+|---|---|---|
+| d1 native save grants, temp file + atomic rename | `13a1ae9`, `3974ef9` | `pick_export_file` / trusted seam `authorize_export_file`: one-shot, owner-session grants; symlink destinations, dot files and missing directories refused; temp file `0600` created `create_new` beside the destination, fsync, rename refusing a non-regular destination; failure/cancel/reset/shutdown remove it (IPC test: failed export leaves no file or `.part`; fixtures: refused exports leave nothing). |
+| d2 CSV export | same | Streaming on one connection in a read-only snapshot; NULL = unquoted `NULL`, everything else quoted; binary columns refused naming the column. |
+| d3 SQL export | same | MySQL/MariaDB `SHOW CREATE TABLE` + 500-row INSERTs with `_utf8mb4 X'…'`/`X'…'` literals in `START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY`; PostgreSQL data only (`REPEATABLE READ, READ ONLY`, structure explicitly refused); unknown types refused naming the column. MariaDB `JSON` (`utf8mb4_bin`, BINARY flag) decoded as text from the catalog's character set. Shared literal vectors (`crates/stoneql-runtime/tests/fixtures/sql-literals.json`) pin the Rust and TypeScript encoders. |
+| d6 independent read-back | same | `test:native-database` / `test:native-postgres`: exported files loaded by the server's own client (`mysql`/`mariadb` `SOURCE` + `LOAD DATA … ENCLOSED BY '"' ESCAPED BY ''`; `psql \\i` + `\\copy … NULL 'NULL'`) into scratch databases/schemas; MySQL and MariaDB 5/5 rows identical column-by-column (NULL-safe, binary) for SQL and CSV; PostgreSQL 5 rows, 0 differences both directions (EXCEPT) for SQL and CSV. Values: BIGINT max, DECIMAL(38,4), NUMERIC NaN, DATETIME(6), zero date, ±infinity, ENUM/SET, JSON/jsonb, float specials, boolean, uuid, quotes/commas/newlines/tab/backslash/non-ASCII, `''` vs NULL vs `'NULL'`. Evidence: `.ref/planning/m007-evidence/`. |
+| d4 CSV import | `7378b86`, `05b30d2` | `liveImport.ts`: quoting-aware parser (NULL convention), header/binary/ragged/oversize checks with record numbers, batches < 60 KiB (job limit 64 KiB) inside one lease via `begin_transaction`/`submit_job`/`end_transaction` (gate, journal and unknown-outcome rules apply); any rejected batch rolls the import back. Exact batches pinned in `test:execution` (committed rows keep NULL/''/'NULL' distinct; duplicate batch rolled back, nothing applied) — see the final run in the verification note. |
+| d5 SQL import | — | Not started (needs native statement splitting under the 64 KiB job limit; gated by A15). Refused in the UI with an explanation. |
+| Renderer | `3974ef9`, `7378b86` | `LiveExport.vue` (Export tab, all live sessions) and Import tab (read-write sessions); browser specs `live-export.spec.ts`, `live-crud.spec.ts` (simulated bridge). |
+
+| Criterion | Status |
+|---|---|
+| G1 unauthorized paths/symlinks refused; no secrets in summaries/temp names | Verified for export grants and temp names (uuid only). Archive/expansion and spreadsheet-formula criteria not applicable (ZIP/GZIP/XLSX not offered, D008). Library/licence review: no new library added. |
+| G2 exact values, NULL/empty, truthful counts | Verified by independent restore (export) and pinned import batches; counts are server-reported. |
+| G3 approved engine/format/OS matrix | Blocked (A3/A20): SQL+CSV on MySQL/MariaDB/PostgreSQL, macOS arm64 only. |
+| G4/G5 million-row memory profile, quotas, disk-full/cancel/restart | Partially verified: streaming design (one batch held), cancel/failure cleanup tested; million-row RSS profile, disk-full on a small volume and slow-consumer sampling not run; quotas Proposed (A18). |
+| G6 restore/read-back for every advertised format | Verified for SQL and CSV on all three engines. |
