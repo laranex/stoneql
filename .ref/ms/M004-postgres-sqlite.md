@@ -1,6 +1,8 @@
 # M004 — PostgreSQL and SQLite adapters
 
 ## Status
+**Blocked — all unblocked work done (2026-11-16).** Scope narrowed by the user on 2026-11-16 to PostgreSQL (with MySQL/MariaDB); SQLite criteria are out of scope (code and regressions kept). Remaining PostgreSQL criteria need decisions A1, A3, A8, A9, A10 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+
 Local implementation and evidence recorded (2026-10-26, under the user's continuation instruction); not complete. Open gates: approved engine/version/OS matrix (only PostgreSQL 17.6 and bundled SQLite 3.51.3 on macOS ARM were executed; Windows/Linux, including Windows verbatim SQLite paths, unverified); real native file-picker and graphical WebView-to-database interaction (tests use Tauri MockRuntime and a trusted grant); approved G4/G5 lifecycle/basic-query numerical budgets and the 100,000-row resource profile for the new engines; PostgreSQL/SQLite per-message allocation bounds (the receive-limit patch is MySQL-only); SQLite WAL files in read-only directories and network filesystems; same-user SQLite path-replacement race; PostgreSQL extensions/arrays/ranges/interval text (explicit unknown today); hostile database definitions/operators; review of decisions D011–D015. No push, publication or deployment is authorized.
 
 ## v0.1.0 Alpha treatment (D022, Approved product decision 2026-10-26)
@@ -43,3 +45,14 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - G3: SQLite routines/events/`CALL`/`PRAGMA`/`ATTACH`/CTEs and PostgreSQL `CALL`/casts/dollar quoting refused, not emulated. MySQL/MariaDB native, lifecycle (incl. expired certificates) fixtures and generated contracts re-passed.
 - G4/G5 (characterization only, not approved budgets): 100 PostgreSQL IPC TLS cycles p50 28.4 ms/p95 31.8 ms (debug, SCRAM); 100 SQLite IPC cycles p50 0.36 ms/p95 0.58 ms. Deadline interrupt releases the SQLite worker (mutation without it fails); PostgreSQL statement timeout stopped server work; lease expiry, reload cleanup and eight-slot reuse verified.
 - Safe evidence: `.ref/planning/m004-evidence/`; decisions D011–D015 in `.ref/planning/architecture-decisions.md`; public page `docs/development/postgres-sqlite.md`.
+
+## Acceptance record — 2026-11-16 (PostgreSQL 17.6, macOS arm64; SQLite out of scope)
+| Criterion | Evidence (executed) | Status |
+|---|---|---|
+| G1 PostgreSQL TLS/privilege boundaries, mutation refused | `npm run test:native-postgres` on `6b3a464` (2026-11-16): passed, 100 verified-TLS lifecycle samples, plus the 2026-10-26 untrusted-CA/hostname/28P01/42501/25006 evidence. **New risk found:** hostile-server backend header panics the driver (length < 4) and buffers unbounded (1 GiB declared → +411 MiB RSS) — `.ref/planning/m004-pg-message-limit/findings.md`; patch prototyped (4/4 adversarial tests), adoption pending. | Verified for TLS/privileges; message bound Blocked (A8) |
+| G2 ENUM/unknown types, temporal text, NULL/default | Earlier fixture evidence (D013); unchanged decoders. Arrays/ranges/interval/inet/extensions are explicit `unknown` by D013 (awaiting review). | Verified; D013 review A9 |
+| G3 approved engine/version/OS matrix; unsupported capabilities rejected | PostgreSQL 17.6 on macOS arm64 executed; matrix approval pending. `CALL`/casts/dollar quoting refused (earlier). | Blocked (A3) |
+| G4/G5 approved lifecycle/basic-query budgets; bounded resources | **New:** PostgreSQL 100,000-row resource profile (`npm run test:resources` now covers PostgreSQL via `tools/test-postgres-fixture.mjs --resource-profile`): PRIMARY index plan verified, 100 × 200-row selects p50 36.9 ms / p95 39.3 ms (debug, runtime+JSON, verified TLS), 16–1600-column metadata with rejection/recovery, 8 concurrent bounded results (8,386,400 B), max RSS 24.47 MiB, owned sessions and containers cleaned (`.ref/planning/m004-evidence/resource-postgresql.json`). Budgets Proposed. | Characterized; Blocked (A3, A8) |
+| Generated contracts and MySQL/MariaDB regressions still pass | `test:native-database` both engines on `2cf6676`; desktop:test 24 passed (2026-11-16). | Verified |
+| Native GUI to PostgreSQL | MockRuntime + real SQLx only. | Blocked (A1) |
+| SQLite rows (canonical paths, WAL, path race, busy lock, Windows paths) | Out of scope per user 2026-11-16; existing regressions retained (desktop:test sqlite_* passed 2026-11-16). | Out of scope |
