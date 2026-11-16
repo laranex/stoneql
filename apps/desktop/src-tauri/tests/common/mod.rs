@@ -15,10 +15,14 @@ impl TempJournal {
     pub fn dir(&self) -> PathBuf {
         self.0.join("outcome-journal")
     }
-    /// Production services with this journal directory.
+    /// Production services with this journal directory and an in-memory host-key store (tests
+    /// never touch the real app data directory).
     pub fn services(&self) -> stoneql_desktop::HostServices {
         stoneql_desktop::HostServices {
             outcome_journal: Some(self.dir()),
+            host_keys: Some(std::sync::Arc::new(
+                stoneql_desktop::MemoryHostKeyStore::default(),
+            )),
             ..stoneql_desktop::HostServices::system()
         }
     }

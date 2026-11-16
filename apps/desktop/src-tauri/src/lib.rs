@@ -1,5 +1,6 @@
 mod database;
 mod execution;
+mod host_keys;
 mod secrets;
 mod sqlite_file;
 mod ssh_transport;
@@ -8,12 +9,16 @@ use execution::{
     acknowledge_outcome, begin_transaction, cancel_job, end_transaction, fetch_job,
     list_unresolved_outcomes, submit_job,
 };
+pub use host_keys::{FileHostKeyStore, HostKeyStore, HostKeyStoreError, MemoryHostKeyStore};
 pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
 use secrets::{delete_secret, store_secret};
 pub use sqlite_file::authorize_sqlite_file;
 use sqlite_file::{connect_sqlite, pick_sqlite_file};
-pub use ssh_transport::authorize_ssh_key_file;
-use ssh_transport::{cancel_connect, pick_ssh_key_file, ssh_host_key};
+pub use ssh_transport::{authorize_ssh_key_file, commit_ssh_host_key};
+use ssh_transport::{
+    cancel_connect, forget_ssh_host_key, pick_ssh_key_file, ssh_host_key, ssh_host_key_status,
+    trust_ssh_host_key,
+};
 use std::{
     path::PathBuf,
     sync::{
@@ -49,6 +54,9 @@ pub struct HostServices {
     pub outcome_journal: Option<PathBuf>,
     /// Bound on resolving saved secrets (a Keychain prompt) inside a connect attempt (F-02).
     pub secret_deadline: std::time::Duration,
+    /// Native SSH host-key trust (F-01). `None` = `<app data dir>/ssh-host-keys.json`, resolved
+    /// at the first renderer bootstrap; until then every SSH connect is refused.
+    pub host_keys: Option<Arc<dyn HostKeyStore>>,
 }
 impl HostServices {
     /// Proposed (M005 alpha fix plan T1, awaiting approval): long enough to answer a Keychain
@@ -65,6 +73,7 @@ impl HostServices {
             read_write_sql: READ_WRITE_SQL_ENABLED,
             outcome_journal: None,
             secret_deadline: Self::SECRET_DEADLINE,
+            host_keys: None,
         }
     }
 }
@@ -75,6 +84,11 @@ pub struct NativeSession {
     agent_socket: Option<PathBuf>,
     read_write_sql: bool,
     secret_deadline: std::time::Duration,
+    host_keys: std::sync::OnceLock<Arc<dyn HostKeyStore>>,
+    /// Keys native scans actually presented, by `(lowercase host, port)`, waiting for explicit
+    /// enrollment: at most 16, 5 minutes each, cleared on renderer reset and shutdown.
+    pending_host_keys:
+        Mutex<std::collections::HashMap<(String, u16), (stoneql_runtime::HostKey, Instant)>>,
     closing: AtomicBool,
     active_requests: AtomicUsize,
     /// One owner per app process, kept across renderer sessions: unknown outcomes recorded
@@ -112,6 +126,10 @@ impl NativeSession {
     /// outcomes stay listable by the next renderer. Callers hold `bootstrap`.
     async fn end_renderer(&self) {
         *self.renderer.lock().expect("renderer session lock") = None;
+        self.pending_host_keys
+            .lock()
+            .expect("pending host keys lock")
+            .clear();
         self.echoed.store(false, Ordering::SeqCst);
         self.close_pending.store(false, Ordering::SeqCst);
         self.close_prompted.store(false, Ordering::SeqCst);
@@ -125,12 +143,16 @@ impl NativeSession {
         if self.journal_opened.swap(true, Ordering::SeqCst) {
             return;
         }
-        let dir = self.outcome_journal.clone().or_else(|| {
-            app.path()
-                .app_data_dir()
-                .ok()
-                .map(|dir| dir.join(OUTCOME_JOURNAL_DIR))
-        });
+        let data_dir = app.path().app_data_dir().ok();
+        if let Some(data_dir) = &data_dir {
+            let _ = self
+                .host_keys
+                .set(Arc::new(FileHostKeyStore::new(data_dir)));
+        }
+        let dir = self
+            .outcome_journal
+            .clone()
+            .or_else(|| data_dir.map(|dir| dir.join(OUTCOME_JOURNAL_DIR)));
         if let Some(dir) = dir {
             self.connections.open_outcome_journal(&dir, self.owner);
         }
@@ -149,6 +171,11 @@ impl NativeSession {
             agent_socket: services.agent_socket,
             read_write_sql: services.read_write_sql,
             secret_deadline: services.secret_deadline,
+            host_keys: services
+                .host_keys
+                .map(std::sync::OnceLock::from)
+                .unwrap_or_default(),
+            pending_host_keys: Mutex::new(std::collections::HashMap::new()),
             closing: AtomicBool::new(false),
             active_requests: AtomicUsize::new(0),
             owner: stoneql_runtime::OwnerId::new(),
@@ -285,6 +312,11 @@ fn shutdown_and_exit<R: Runtime>(app: &tauri::AppHandle<R>) {
     if state.closing.swap(true, Ordering::SeqCst) {
         return;
     }
+    state
+        .pending_host_keys
+        .lock()
+        .expect("pending host keys lock")
+        .clear();
     let connections = state.connections.clone();
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -490,6 +522,9 @@ pub fn app_builder_with<R: Runtime>(
             ssh_host_key,
             pick_ssh_key_file,
             cancel_connect,
+            ssh_host_key_status,
+            trust_ssh_host_key,
+            forget_ssh_host_key,
             store_secret,
             delete_secret,
             submit_job,

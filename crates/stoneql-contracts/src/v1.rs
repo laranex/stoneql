@@ -368,10 +368,7 @@ pub struct SshTunnelRequest {
     pub host: String,
     pub port: u16,
     pub username: String,
-    // Absent means not enrolled; the host refuses before contacting the server.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub host_key: Option<String>,
+    // The trusted host key never crosses IPC (F-01): the host reads it from its native store.
     pub auth: SshAuthRequest,
 }
 /// Agent auth uses the host's own agent socket; agent forwarding is never requested.
@@ -469,6 +466,29 @@ pub struct SshHostKey {
     pub algorithm: String,
     pub public_key: String,
     pub fingerprint: String,
+}
+/// Enrolls the key a native scan of exactly this endpoint presented, after native confirmation.
+/// The fingerprint names which scan; the key itself never comes from the renderer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyTrustRequest {
+    pub session_id: String,
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+}
+/// An enrolled host key, derived natively from the stored key on every read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTrustedHostKey {
+    pub algorithm: String,
+    pub fingerprint: String,
+}
+/// Native trust state of one SSH endpoint; `trusted: null` means not enrolled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SshHostKeyStatus {
+    pub trusted: Option<SshTrustedHostKey>,
 }
 /// Asks the trusted host to show its native SSH private-key picker. Carries no path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -864,6 +884,9 @@ pub fn typescript() -> String {
         SecretReferenceRequest::decl(&config),
         SshHostKeyRequest::decl(&config),
         SshHostKey::decl(&config),
+        SshHostKeyTrustRequest::decl(&config),
+        SshTrustedHostKey::decl(&config),
+        SshHostKeyStatus::decl(&config),
         SshKeyFileRequest::decl(&config),
         SshKeyFileGrant::decl(&config),
         CancelConnectRequest::decl(&config),

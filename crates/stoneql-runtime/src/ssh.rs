@@ -99,6 +99,11 @@ pub(crate) fn parse_host_key(key: &str) -> Result<PublicKey, LifecycleError> {
     PublicKey::from_openssh(key.trim()).map_err(|_| LifecycleError::InvalidConfiguration)
 }
 
+/// Parses an OpenSSH public key and derives its algorithm and SHA256 fingerprint. Used by hosts
+/// to validate stored trust entries; the fingerprint is never taken from storage.
+pub fn describe_host_key(openssh: &str) -> Result<HostKey, LifecycleError> {
+    describe(&parse_host_key(openssh)?)
+}
 pub(crate) fn describe(key: &PublicKey) -> Result<HostKey, LifecycleError> {
     let mut public_key = key.clone();
     public_key.set_comment("");

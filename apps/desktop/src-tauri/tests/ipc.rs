@@ -7,6 +7,8 @@ use tauri::{
     test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+const ED25519: &str =
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
 /// The only `generate_context!` expansion in this test binary (it embeds Info.plist once).
 fn build(builder: tauri::Builder<MockRuntime>) -> tauri::App<MockRuntime> {
     builder.build(tauri::generate_context!()).unwrap()
@@ -324,6 +326,10 @@ impl stoneql_desktop::SecretStore for MemoryStore {
 #[test]
 fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
     let store = std::sync::Arc::new(MemoryStore::default());
+    // The bastion is enrolled natively; `unenrolled.internal` is not.
+    let host_keys = std::sync::Arc::new(stoneql_desktop::MemoryHostKeyStore::default());
+    stoneql_desktop::HostKeyStore::trust(host_keys.as_ref(), "bastion.internal", 22, ED25519)
+        .unwrap();
     let journal = common::TempJournal::new();
     let app = build(stoneql_desktop::app_builder_with(
         mock_builder(),
@@ -334,6 +340,7 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
+            host_keys: Some(host_keys),
         },
     ));
     let webview = window(&app, "main");
@@ -395,9 +402,13 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
         )),
         "INVALID_REQUEST"
     );
-    // An unenrolled SSH host key is refused before any network access.
+    // An unenrolled SSH endpoint is refused before any network access.
+    let mut unenrolled = ssh.clone();
+    unenrolled["host"] = json!("unenrolled.internal");
     assert_eq!(
-        code(connect(json!({"password":"synthetic-secret","ssh":ssh}))),
+        code(connect(
+            json!({"password":"synthetic-secret","ssh":unenrolled})
+        )),
         "SSH_HOST_KEY_UNKNOWN"
     );
     let mut keyed = ssh.clone();
@@ -535,7 +546,7 @@ fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
     let commands = registered_commands();
-    assert_eq!(commands.len(), 21, "{commands:?}");
+    assert_eq!(commands.len(), 24, "{commands:?}");
     for command in &commands {
         let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
         assert!(
@@ -655,6 +666,9 @@ fn failed_secret_deletion_is_reported_and_the_item_remains() {
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
+            host_keys: Some(std::sync::Arc::new(
+                stoneql_desktop::MemoryHostKeyStore::default(),
+            )),
         },
     ));
     let webview = window(&app, "main");
@@ -741,6 +755,9 @@ fn prompt_app(
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
             secret_deadline: deadline,
+            host_keys: Some(std::sync::Arc::new(
+                stoneql_desktop::MemoryHostKeyStore::default(),
+            )),
         },
     ));
     (app, journal)
@@ -838,4 +855,104 @@ fn secret_resolution_is_bounded_and_locked_keychains_fail_closed() {
     let error =
         connect_with_reference(&webview, &session, &reference, "attempt_locked").unwrap_err();
     assert_eq!(error["code"], "SECRET_UNAVAILABLE");
+}
+/// M005 F-01 (T4) without network: status, forget, refused trust without a native scan,
+/// SSH passwords need an enrolled key, and `hostKey` can never be supplied by the renderer.
+#[test]
+fn host_key_trust_is_native_and_bound_to_scans() {
+    let host_keys = std::sync::Arc::new(stoneql_desktop::MemoryHostKeyStore::default());
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            outcome_journal: Some(journal.dir()),
+            host_keys: Some(host_keys.clone()),
+            secrets: std::sync::Arc::new(MemoryStore::default()),
+            ..stoneql_desktop::HostServices::system()
+        },
+    ));
+    let webview = window(&app, "main");
+    let session = json!(bootstrap(&webview).payload.session_id);
+    let call = |command: &str, payload: Value| {
+        let mut payload = payload;
+        payload["sessionId"] = session.clone();
+        invoke(
+            &webview,
+            command,
+            json!({"version":1,"requestId":"trust","payload":payload}),
+            "tauri://localhost",
+        )
+    };
+    let endpoint = json!({"host":"Bastion.Internal","port":22});
+    assert_eq!(
+        call("ssh_host_key_status", endpoint.clone()).unwrap()["payload"],
+        json!({"trusted":null})
+    );
+    // No pending native scan: refused before any dialog; nothing enrolled.
+    let mut trust = endpoint.clone();
+    trust["fingerprint"] = json!("SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M");
+    assert_eq!(
+        call("trust_ssh_host_key", trust).unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    assert_eq!(
+        stoneql_desktop::commit_ssh_host_key(app.handle(), "bastion.internal", 22, "SHA256:x")
+            .unwrap_err()
+            .code,
+        stoneql_contracts::v1::ErrorCodeDto::InvalidRequest
+    );
+    assert_eq!(
+        stoneql_desktop::HostKeyStore::get(host_keys.as_ref(), "bastion.internal", 22).unwrap(),
+        None
+    );
+    // SSH passwords cannot be saved for an unenrolled host (their scope names the fingerprint).
+    let target = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader","ssh":{"host":"bastion.internal","port":22,"username":"deploy"}});
+    assert_eq!(
+        call(
+            "store_secret",
+            json!({"purpose":"ssh_password","target":target,"secret":"synthetic-secret"})
+        )
+        .unwrap_err()["code"],
+        "SSH_HOST_KEY_UNKNOWN"
+    );
+    // Enrolled natively: status reports the derived fingerprint, case-insensitively.
+    stoneql_desktop::HostKeyStore::trust(host_keys.as_ref(), "bastion.internal", 22, ED25519)
+        .unwrap();
+    let status = call("ssh_host_key_status", endpoint.clone()).unwrap()["payload"].clone();
+    assert_eq!(status["trusted"]["algorithm"], "ssh-ed25519");
+    assert!(
+        status["trusted"]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("SHA256:")
+    );
+    assert!(
+        call(
+            "store_secret",
+            json!({"purpose":"ssh_password","target":target,"secret":"synthetic-secret"})
+        )
+        .is_ok()
+    );
+    // The renderer can never supply the key.
+    let connect = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader","password":"","database":"app","rootCertificatePem":null,"ssh":{"host":"bastion.internal","port":22,"username":"deploy","hostKey":ED25519,"auth":{"method":"agent"}}});
+    assert_eq!(
+        call("connect_direct", connect).unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
+    // Forget is idempotent and fails closed.
+    for _ in 0..2 {
+        assert_eq!(
+            call("forget_ssh_host_key", endpoint.clone()).unwrap()["payload"],
+            json!({"trusted":null})
+        );
+    }
+    assert_eq!(
+        stoneql_desktop::HostKeyStore::get(host_keys.as_ref(), "bastion.internal", 22).unwrap(),
+        None
+    );
+    assert_eq!(
+        call("ssh_host_key_status", json!({"host":"two words","port":22})).unwrap_err()["code"],
+        "INVALID_REQUEST"
+    );
 }

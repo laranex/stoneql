@@ -48,6 +48,9 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
             read_write_sql: true,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
+            host_keys: Some(std::sync::Arc::new(
+                stoneql_desktop::MemoryHostKeyStore::default(),
+            )),
         },
     )
     .build(tauri::generate_context!())

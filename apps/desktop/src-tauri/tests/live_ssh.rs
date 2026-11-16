@@ -48,6 +48,8 @@ fn ssh_commands_use_owned_fixture() {
     let keychain = Arc::new(OsSecretStore::new(&service));
     let created = Created(keychain.clone(), Default::default());
     let journal = common::TempJournal::new();
+    let host_keys = Arc::new(stoneql_desktop::MemoryHostKeyStore::default());
+    let rotated_key = var("STONEQL_SSH_ROTATED_HOST_KEY");
     let app = stoneql_desktop::app_builder_with(
         mock_builder(),
         false,
@@ -57,6 +59,7 @@ fn ssh_commands_use_owned_fixture() {
             read_write_sql: false,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
+            host_keys: Some(host_keys.clone()),
         },
     )
     .build(tauri::generate_context!())
@@ -107,18 +110,52 @@ fn ssh_commands_use_owned_fixture() {
     };
     let tunnel = |auth: Value| {
         let mut ssh = endpoint.clone();
-        ssh["hostKey"] = json!(host_key);
         ssh["auth"] = auth;
         ssh
     };
-    let mut unenrolled = endpoint.clone();
-    unenrolled["auth"] = json!({"method":"agent"});
     assert_eq!(
         code(call(
             "connect_direct",
-            database("db.stoneql.test", unenrolled, json!({}))
+            database(
+                "db.stoneql.test",
+                tunnel(json!({"method":"agent"})),
+                json!({})
+            )
         )),
         "SSH_HOST_KEY_UNKNOWN"
+    );
+    // F-01: enrollment binds to the native scan: a wrong fingerprint or another endpoint is
+    // refused and nothing is stored; the scanned fingerprint enrolls (the native dialog is the
+    // separate GUI gate, bypassed here through the trusted-caller seam).
+    let fingerprint = scanned["payload"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let commit = |port: u16, print: &str| {
+        stoneql_desktop::commit_ssh_host_key(app.handle(), "127.0.0.1", port, print)
+            .map_err(|error| serde_json::to_value(error).unwrap()["code"].clone())
+    };
+    assert_eq!(
+        commit(ssh_port, "SHA256:wrong").unwrap_err(),
+        "INVALID_REQUEST"
+    );
+    assert_eq!(
+        commit(rotated_port, &fingerprint).unwrap_err(),
+        "INVALID_REQUEST"
+    );
+    assert_eq!(
+        stoneql_desktop::HostKeyStore::get(host_keys.as_ref(), "127.0.0.1", ssh_port).unwrap(),
+        None
+    );
+    let enrolled = commit(ssh_port, &fingerprint).unwrap();
+    assert_eq!(enrolled.trusted.unwrap().fingerprint, fingerprint);
+    assert_eq!(
+        call(
+            "ssh_host_key_status",
+            json!({"host":"127.0.0.1","port":ssh_port})
+        )
+        .unwrap()["payload"]["trusted"]["fingerprint"],
+        json!(fingerprint)
     );
 
     // OS secret references: saved once, bound to target+route, never returned over IPC.
@@ -254,6 +291,49 @@ fn ssh_commands_use_owned_fixture() {
     assert_eq!(query(&handle), json!("1"));
     call("disconnect_database", json!({"handle":handle})).unwrap();
 
+    // F-01 swapped key: a same-user tamper replaces the stored key; the saved SSH password is
+    // bound to the original fingerprint, so it no longer resolves and is never sent.
+    let mut swapped_key = None;
+    if let Some(reference) = &ssh_ref {
+        stoneql_desktop::HostKeyStore::trust(
+            host_keys.as_ref(),
+            "127.0.0.1",
+            ssh_port,
+            &rotated_key,
+        )
+        .unwrap();
+        assert_eq!(
+            code(call(
+                "connect_direct",
+                database(
+                    "db.stoneql.test",
+                    tunnel(json!({"method":"password","passwordRef":reference})),
+                    db_secret.clone()
+                )
+            )),
+            "SECRET_UNAVAILABLE"
+        );
+        stoneql_desktop::HostKeyStore::trust(host_keys.as_ref(), "127.0.0.1", ssh_port, &host_key)
+            .unwrap();
+        swapped_key = Some("SECRET_UNAVAILABLE");
+    }
+    // A rotated server: with the old key enrolled for its endpoint, connecting is refused as
+    // changed, and enrolling the new scan over it is refused too (rotation needs a forget).
+    stoneql_desktop::HostKeyStore::trust(host_keys.as_ref(), "127.0.0.1", rotated_port, &host_key)
+        .unwrap();
+    let rescanned = call(
+        "ssh_host_key",
+        json!({"host":"127.0.0.1","port":rotated_port}),
+    )
+    .unwrap();
+    let rotated_print = rescanned["payload"]["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        commit(rotated_port, &rotated_print).unwrap_err(),
+        "SSH_HOST_KEY_CHANGED"
+    );
     // Failure codes surfaced to the renderer.
     // Session-only password here: the saved one is bound to the enrolled endpoint's port.
     let mut rotated = tunnel(json!({"method":"password","password":ssh_password}));
@@ -319,6 +399,6 @@ fn ssh_commands_use_owned_fixture() {
     }
     report["keychainItemsDeleted"] = json!(created.1.lock().unwrap().len());
     created.1.lock().unwrap().clear();
-    report["ipc"] = json!({"scan": true, "unknownHostKey": "SSH_HOST_KEY_UNKNOWN", "changedHostKey": "SSH_HOST_KEY_CHANGED", "wrongPassword": "SSH_AUTHENTICATION_FAILED", "tlsMismatch": "CONNECTION_UNAVAILABLE", "keyFileGrant": true, "agent": true, "reloadClosesTunnel": true, "secretsInReplies": 0});
+    report["ipc"] = json!({"scan": true, "unknownHostKey": "SSH_HOST_KEY_UNKNOWN", "changedHostKey": "SSH_HOST_KEY_CHANGED", "wrongPassword": "SSH_AUTHENTICATION_FAILED", "tlsMismatch": "CONNECTION_UNAVAILABLE", "keyFileGrant": true, "agent": true, "reloadClosesTunnel": true, "secretsInReplies": 0, "nativeEnrollment": true, "rotatedCommitRefused": "SSH_HOST_KEY_CHANGED", "swappedKeySecret": swapped_key});
     println!("STONEQL_NATIVE_RESULT {report}");
 }

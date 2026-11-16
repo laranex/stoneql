@@ -132,6 +132,13 @@ pub async fn connect_direct<R: Runtime>(
         return Err(invalid());
     }
     let mode = access(&session, input.access, input.ssh.is_some())?;
+    // F-01: the trusted key comes only from the native store; an unenrolled endpoint is refused
+    // before any secret is resolved, key file read or network I/O.
+    let host_key = input
+        .ssh
+        .as_ref()
+        .map(|ssh| super::ssh_transport::enrolled_key(&session, &ssh.host, ssh.port))
+        .transpose()?;
     // F-02: the attempt is registered before resolution, so cancel_connect and a renderer reset
     // reach a pending Keychain prompt. The capacity permit is only taken after resolution.
     let mut attempt = session
@@ -152,7 +159,8 @@ pub async fn connect_direct<R: Runtime>(
     let resolve = blocking(move || {
         let password = choose(secrets.as_ref(), Some(password), password_ref, || scope)?;
         let tunnel = tunnel
-            .map(|tunnel| tunnel_config(secrets.as_ref(), tunnel, agent_socket))
+            .zip(host_key)
+            .map(|(tunnel, key)| tunnel_config(secrets.as_ref(), tunnel, key, agent_socket))
             .transpose()?;
         Ok((password.unwrap_or_default(), tunnel))
     });
@@ -322,6 +330,7 @@ mod tests {
                 read_write_sql: false,
                 outcome_journal: None,
                 secret_deadline: std::time::Duration::from_secs(60),
+                host_keys: None,
             },
         );
         let mut slots = Vec::new();
@@ -346,6 +355,7 @@ mod tests {
                 read_write_sql: true,
                 outcome_journal: None,
                 secret_deadline: std::time::Duration::from_secs(60),
+                host_keys: None,
             },
         );
         assert_eq!(

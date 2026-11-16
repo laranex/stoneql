@@ -13,7 +13,7 @@ pub use execution::{
 pub use read_only::{QueryLimits, ReadError};
 pub use script::ScriptError;
 use sqlx::{MySqlPool, PgPool, SqlitePool};
-pub use ssh::{ENDPOINT_PREFIX, HostKey, SshAuth, SshConfig, endpoint_root};
+pub use ssh::{ENDPOINT_PREFIX, HostKey, SshAuth, SshConfig, describe_host_key, endpoint_root};
 use std::{
     collections::HashMap,
     fmt,

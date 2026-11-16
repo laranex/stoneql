@@ -125,8 +125,16 @@ pub(crate) fn database_scope(
         ssh.map_or_else(|| "direct".to_owned(), |ssh| ssh_scope("via", ssh))
     )
 }
-pub(crate) fn ssh_password_scope(ssh: &SshEndpoint) -> String {
-    ssh_scope("ssh_password", ssh)
+/// SSH passwords are sent to the server, so they are also bound to the enrolled host-key
+/// fingerprint (F-01, scope v2): after a key swap or rotation a saved reference no longer
+/// resolves and is never sent; the user enters it again.
+pub(crate) fn ssh_password_scope(ssh: &SshEndpoint, fingerprint: &str) -> String {
+    format!(
+        "v2|ssh_password|{}@{}:{}|{fingerprint}",
+        ssh.username,
+        ssh.host.to_ascii_lowercase(),
+        ssh.port
+    )
 }
 pub(crate) fn ssh_passphrase_scope(ssh: &SshEndpoint) -> String {
     ssh_scope("ssh_passphrase", ssh)
@@ -228,7 +236,11 @@ pub async fn store_secret<R: Runtime>(
                 ssh,
             )
         }
-        (SecretPurpose::SshPassword, Some(ssh)) => ssh_password_scope(ssh),
+        (SecretPurpose::SshPassword, Some(ssh)) => {
+            // Saving requires an enrolled host key: the scope names its fingerprint.
+            let key = super::ssh_transport::enrolled_key(&session, &ssh.host, ssh.port)?;
+            ssh_password_scope(ssh, &key.fingerprint)
+        }
         (SecretPurpose::SshPassphrase, Some(ssh)) => ssh_passphrase_scope(ssh),
         _ => return Err(invalid()),
     };
@@ -319,7 +331,7 @@ pub(crate) mod tests {
                 "app",
                 Some(&bastion()),
             ),
-            ssh_password_scope(&bastion()),
+            ssh_password_scope(&bastion(), "SHA256:a"),
         ] {
             assert_eq!(
                 resolve(&store_impl, &reference, &other).unwrap_err().code,
@@ -332,8 +344,23 @@ pub(crate) mod tests {
             direct
         );
         assert_ne!(
-            ssh_password_scope(&bastion()),
+            ssh_password_scope(&bastion(), "SHA256:a"),
             ssh_passphrase_scope(&bastion())
+        );
+    }
+    /// F-01: a saved SSH password resolves only under the fingerprint it was saved for, so a
+    /// swapped or rotated host key cannot unlock it.
+    #[test]
+    fn ssh_password_references_are_bound_to_the_enrolled_fingerprint() {
+        let store_impl = MemoryStore::default();
+        let saved = ssh_password_scope(&bastion(), "SHA256:A");
+        let reference = store(&store_impl, saved.clone(), "ssh-secret".into()).unwrap();
+        assert_eq!(resolve(&store_impl, &reference, &saved).unwrap(), "ssh-secret");
+        assert_eq!(
+            resolve(&store_impl, &reference, &ssh_password_scope(&bastion(), "SHA256:B"))
+                .unwrap_err()
+                .code,
+            stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
         );
     }
     #[test]

@@ -1,6 +1,6 @@
 {
   "identifier": "main-window",
-  "description": "Local main-window protocol, confirmed close, bounded Direct/SSH read-only database commands, bounded read-write SQL jobs and transaction leases on explicitly read-write handles, listing and acknowledging this process's own SQL-free unknown-outcome summaries, native-owned SQLite and SSH key pickers, SSH host-key scan for explicit enrollment and write/delete-only OS secret references. No secret read-back, filesystem, shell, renderer native-dialog or remote-origin grants.",
+  "description": "Local main-window protocol, confirmed close, bounded Direct/SSH read-only database commands, bounded read-write SQL jobs and transaction leases on explicitly read-write handles, listing and acknowledging this process's own SQL-free unknown-outcome summaries, native-owned SQLite and SSH key pickers, SSH host-key scan plus natively confirmed enrollment, status and forget (trust is stored and read only by native code) and write/delete-only OS secret references. No secret read-back, filesystem, shell, renderer native-dialog or remote-origin grants.",
   "windows": [
     "main"
   ],
@@ -17,6 +17,9 @@
     "allow-ssh-host-key",
     "allow-pick-ssh-key-file",
     "allow-cancel-connect",
+    "allow-ssh-host-key-status",
+    "allow-trust-ssh-host-key",
+    "allow-forget-ssh-host-key",
     "allow-store-secret",
     "allow-delete-secret",
     "allow-submit-job",
