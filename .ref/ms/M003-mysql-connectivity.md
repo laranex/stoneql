@@ -1,6 +1,8 @@
 # M003 — MySQL/MariaDB lifecycle and read-only SQL
 
 ## Status
+**Blocked — all unblocked work done (2026-11-16).** Remaining criteria need user decisions A1, A3, A6, A7 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+
 Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native Direct MySQL/MariaDB SQL binding is implemented; complete native GUI/OS, memory and trust acceptance gates remain pending.
 
 ## Objective and scope
@@ -94,3 +96,13 @@ Verified local record: `.ref/planning/m003-renderer-reload/` (checks executed202
 - Release numerical thresholds remain unapproved. This is debug runtime+JSON, excluding Tauri/WebView and Docker server memory. Existing packet cap does not bound cumulative driver descriptors; hostile metadata/protocol, native GUI/OS coverage and external/UDF gates remain open. No driver patch/adoption, production query behavior change or M003 completion.
 
 Safe executed report: `.ref/planning/m003-resource-profile/` (2026-10-26). Both profiles passed; local debug runtime+JSON p95 MySQL14.583ms/MariaDB14.252ms, peak standalone RSS23.375/22.875MiB.157 JS/33 Rust tests and build/lint/contracts/boundaries/vendor/docs checks passed. Numerical budgets remain proposed and full native/aggregate-memory acceptance is open.
+
+## Acceptance record — 2026-11-16 (scope: macOS; MySQL 8.4.6 / MariaDB 11.4.8 fixtures)
+| Criterion | Evidence (executed) | Status |
+|---|---|---|
+| M003-L lifecycle checkpoint | Lifecycle hardening + 100-cycle samples (2026-10-25/26, above). | Verified (earlier evidence) |
+| G1 TLS/target rejection, DML/DDL/CALL/stacked refusal, engine read-only enforcement | Earlier fixtures and `read_only.rs` tests; `npm run test:native-database` 2026-11-16 on commit `2cf6676`: both engines pass (UPDATE → UNSUPPORTED_SQL, 1792 trust checks). Residual limits documented in `docs/development/read-only-safety.md` (hostile UDF/external effects not certified). | Verified; residual risk needs acceptance (A7) |
+| G2 exact values, explicit truncation | Same run: BIGINT UNSIGNED max, DECIMAL(38,4), zero date, NULL, duplicate labels, 1000-row and 1 MiB truncation exact. New: live catalog/browse/count statements decode over verified TLS on both engines (MySQL 8 binary-charset catalog cells handled in the renderer, `a187ead`). | Verified |
+| G3 separate MySQL/MariaDB capability evidence; contract/UI compatibility | Both engines separately in the fixture run; browser suite 52/52; contracts unchanged. Version matrix itself (8.4.6 / 11.4.8, macOS arm64) is Proposed. | Verified; matrix approval A3 |
+| G4/G5 lifecycle/basic-SQL budgets; fail closed; no retry | Characterization only (resource profile 2026-10-26). Budgets Proposed. Aggregate metadata allocation bound: prototype complete (`m003-metadata-limit/findings.md`, patch re-applied cleanly to current vendor 2026-11-16); adoption pending. | Blocked (A3, A6) |
+| Native SQL UI workflow on supported runner | Simulated bridge + MockRuntime with real SQLx only; real-window GUI not run. | Blocked (A1) |
