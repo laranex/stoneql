@@ -1673,6 +1673,68 @@ async fn harness() -> Result<(), Failure> {
         );
     }
 
+    step("renderer CRUD statements");
+    // M006 live CRUD: the exact statements apps/frontend/src/services/liveMutations.ts generates
+    // (pinned here) run as read-write jobs; values round-trip exactly; a stale row is 0 rows.
+    let crud: [&str; 4] = if mysql {
+        [
+            r#"INSERT INTO `exec_text` (`id`, `label`, `amount`) VALUES (_utf8mb4 X'37', _utf8mb4 X'4f27427269656e205c20c3a9', _utf8mb4 X'31323334353637382e3930');"#,
+            r#"UPDATE `exec_text` SET `label` = NULL WHERE `id` = _utf8mb4 X'37' LIMIT 1;"#,
+            r#"UPDATE `exec_text` SET `label` = _utf8mb4 X'78' WHERE `id` = _utf8mb4 X'38' LIMIT 1;"#,
+            r#"DELETE FROM `exec_text` WHERE `id` = _utf8mb4 X'37' LIMIT 1;"#,
+        ]
+    } else {
+        [
+            r#"INSERT INTO "exec_text" ("id", "label", "amount") VALUES (E'7', E'O''Brien \\ é', E'12345678.90');"#,
+            r#"UPDATE "exec_text" SET "label" = NULL WHERE "id" = E'7';"#,
+            r#"UPDATE "exec_text" SET "label" = E'x' WHERE "id" = E'8';"#,
+            r#"DELETE FROM "exec_text" WHERE "id" = E'7';"#,
+        ]
+    };
+    let affected = |update: &JobUpdate| update.statements.first().map(|s| s.affected_rows.clone());
+    let mut crud_report = Vec::new();
+    for (index, (sql, rows)) in crud.iter().zip(["1", "1", "0", "1"]).enumerate() {
+        let (_, update) = run.run(sql, None).await?;
+        ensure(
+            update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+            "CRUD statement succeeded",
+        )?;
+        ensure(
+            affected(&update).as_deref() == Some(rows),
+            "CRUD affected rows",
+        )?;
+        if index == 0 {
+            // O'Brien \ é as UTF-8 bytes, and the exact decimal.
+            let exact = if mysql {
+                "SELECT COUNT(*) FROM exec_text WHERE id = 7 AND HEX(label) = '4F27427269656E205C20C3A9' AND amount = 12345678.90"
+            } else {
+                "SELECT COUNT(*) FROM exec_text WHERE id = 7 AND encode(convert_to(label, 'UTF8'), 'hex') = '4f27427269656e205c20c3a9' AND amount = 12345678.90"
+            };
+            ensure(
+                observer.scalar(exact.into()).await? == 1,
+                "CRUD insert stored exact values",
+            )?;
+        }
+        if index == 1 {
+            ensure(
+                observer
+                    .scalar("SELECT COUNT(*) FROM exec_text WHERE id = 7 AND label IS NULL".into())
+                    .await?
+                    == 1,
+                "CRUD update stored NULL",
+            )?;
+        }
+        crud_report.push(rows);
+    }
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM exec_text".into())
+            .await?
+            == 0,
+        "CRUD delete removed the row",
+    )?;
+    report.insert("rendererCrud".into(), json!({"statements": crud.len(), "affected": crud_report, "exactText": true, "staleRowAffected": "0"}));
+
     step("expiry lease start");
     // Lease expiry runs in the background on a second handle for the real LEASE_IDLE.
     let expiry_handle = connections

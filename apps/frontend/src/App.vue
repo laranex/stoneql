@@ -78,6 +78,7 @@ import EnumEditor from './components/EnumEditor.vue';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
 import { liveCatalogSupported } from './services/liveSchema';
+import { liveEditBlocker, liveEditableColumn, liveUpdateSql, liveInsertSql, liveDeleteSql, liveMutationOutcome, type LiveValue } from './services/liveMutations';
 import { validateValue, choiceDefinition, hasColumnDefault } from './services/valueValidation';
 import { connectionColors, environments, environmentLabel } from './services/connectionPreferences';
 import type { Connection, Row, View, Column } from './types';
@@ -122,7 +123,24 @@ const tableMetadata = computed(() => {
 /** A mock view or materialized view snapshot. */
 const isMockView = computed(() => !isLive.value && !!table.value?.kind && table.value.kind !== 'table');
 /** No row actions: mock views and every live table (live browse is read-only). */
-const isReadOnly = computed(() => isMockView.value || (isLive.value && !!table.value));
+/** Why the open live table is read-only (null = editable): read-only session, view, no key. */
+const liveEditReason = computed(() => {
+  if (!isLive.value || !table.value) return null;
+  const blocker = liveEditBlocker(store.connection.engine, table.value.columns, table.value.kind);
+  if (blocker) return blocker;
+  return liveReadWrite.value ? null : 'This live session is read-only. Reconnect with read-write access to edit rows.';
+});
+/** No row actions: mock views and live tables that cannot be edited (live CRUD needs read-write). */
+const isReadOnly = computed(() => isMockView.value || (isLive.value && !!table.value && liveEditReason.value !== null));
+/** Runs one generated statement as a read-write job; success only for exactly one row. */
+async function runLiveMutation(sql: string, action: 'updated' | 'inserted' | 'deleted', reloadOnConflict = true) {
+  const job = await store.runLiveJob(store.activeId, sql);
+  const outcome = liveMutationOutcome(job, action);
+  // A conflicted cell edit keeps its editor (bound to the loaded row) open with the message.
+  if (outcome.ok || (outcome.kind === 'conflict' && reloadOnConflict)) void loadLiveBrowse();
+  return outcome;
+}
+const liveValue = (value: Row[string] | undefined, useDefault?: boolean): LiveValue => (useDefault ? { default: true } : value === null || value === undefined ? null : String(value));
 const objectManager = ref<InstanceType<typeof DatabaseObjects>>();
 const objectSection = computed(() => w.value.scope === 'database' && objectSections(store.connection.engine).includes(w.value.view as ObjectSection) ? w.value.view as ObjectSection : undefined);
 const viewError = ref('');
@@ -418,6 +436,8 @@ const editing = ref<{
 } | null>(null);
 async function editCell(row: Row, column: string, event?: MouseEvent | KeyboardEvent) {
   if(isReadOnly.value) return;
+  const target = isLive.value ? table.value?.columns.find((c) => c.name === column) : undefined;
+  if (target && !liveEditableColumn(target)) { notify(`${column} holds binary data and cannot be edited here. Use SQL to change it.`, 'error'); return; }
   if (!(await discard())) return;
   editing.value = {
     row,
@@ -475,6 +495,16 @@ function saveCell() {
     e.error = checked.error;
     return;
   }
+  if (isLive.value && table.value) {
+    const sql = liveUpdateSql(store.connection.engine, table.value.name, table.value.columns, e.row, { [c.name]: liveValue(checked.value, e.useDefault) });
+    e.error = '';
+    void runLiveMutation(sql, 'updated', false).then((outcome) => {
+      if (editing.value !== e) return;
+      if (outcome.ok) { editing.value = null; notify(outcome.text); }
+      else { e.error = outcome.text; notify(outcome.text, 'error'); }
+    }, (error) => { if (editing.value === e) e.error = (error as Error).message; });
+    return;
+  }
   try {
     store.updateRow(e.row, { [c.name]: e.useDefault ? store.defaultValue(c) : checked.value! });
   } catch (error) {
@@ -525,7 +555,7 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
-  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && ['Browse','Structure'].includes(view)))) return;
+  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure'].includes(view) || (view==='Insert' && !isReadOnly.value))))) return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -550,7 +580,7 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && ['Browse','Structure'].includes(tab.name)));
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure'].includes(tab.name) || (tab.name==='Insert' && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -629,6 +659,7 @@ function commitInsert() {
   }
   recordErrors.value = errors;
   if (Object.keys(errors).length) return;
+  if (isLive.value) { void commitLiveRecord(t, values); return; }
   try {
     if (insertMode.value) {
       const patch: Row = {};
@@ -649,6 +680,35 @@ function commitInsert() {
   insertOriginal.value = '';
   insertMode.value = null;
   w.value.view = 'Browse';
+}
+/** Live Insert/Edit: one INSERT, or one UPDATE of the editable columns that changed. */
+async function commitLiveRecord(t: NonNullable<typeof table.value>, values: Row) {
+  const engine = store.connection.engine, original = insertMode.value;
+  let sql: string;
+  try {
+    if (original) {
+      const changes: Record<string, LiveValue> = {};
+      for (const c of t.columns) {
+        if (!liveEditableColumn(c)) continue;
+        const next = liveValue(values[c.name], recordDefaults.value[c.name]);
+        if (typeof next === 'object' && next !== null) changes[c.name] = next;
+        else if (next !== (original[c.name] === null || original[c.name] === undefined ? null : String(original[c.name]))) changes[c.name] = next;
+      }
+      if (!Object.keys(changes).length) { notify('Nothing changed.'); return; }
+      sql = liveUpdateSql(engine, t.name, t.columns, original, changes);
+    } else {
+      const inserted: Record<string, LiveValue> = {};
+      for (const c of t.columns) if (liveEditableColumn(c)) inserted[c.name] = liveValue(values[c.name], recordDefaults.value[c.name]);
+      sql = liveInsertSql(engine, t.name, t.columns, inserted);
+    }
+  } catch (error) { notify((error as Error).message, 'error'); return; }
+  try {
+    const outcome = await runLiveMutation(sql, original ? 'updated' : 'inserted');
+    if (!outcome.ok) { notify(outcome.text, 'error'); return; }
+    notify(outcome.text);
+    insertValues.value = {}; recordNulls.value = {}; recordDefaults.value = {}; recordErrors.value = {}; recordLineIssues.value = {};
+    insertOriginal.value = ''; insertMode.value = null; w.value.view = 'Browse';
+  } catch (error) { notify((error as Error).message, 'error'); }
 }
 const confirmation = ref<{
   title: string;
@@ -737,16 +797,30 @@ function removeRows(items: Row[]) {
   confirmation.value = {
     title: `Delete ${items.length === 1 ? 'record' : `${items.length} records`}?`,
     acceptLabel: `Delete ${items.length} record${items.length === 1 ? '' : 's'}`,
-    message: `Remove ${items.length === 1 ? table.value?.columns.filter(c => c.primary).map(c => `${c.name} = ${items[0]![c.name]}`).join(', ') || 'the selected record' : `${items.length} selected records`} from mock table ${w.value.table}?`,
+    message: `Remove ${items.length === 1 ? table.value?.columns.filter(c => c.primary).map(c => `${c.name} = ${items[0]![c.name]}`).join(', ') || 'the selected record' : `${items.length} selected records`} from ${isLive.value ? 'live' : 'mock'} table ${w.value.table}?${isLive.value ? ' Each row is deleted by its primary key in its own statement; this cannot be undone from StoneQL.' : ''}`,
     productionName:
       store.connection.environment === 'Production' ? store.connection.name : undefined,
     action: () => {
+      if (isLive.value && table.value) { void deleteLiveRows(table.value, items); return; }
       store.deleteRows(items);
       if (searchResults.value !== null) runSearch();
       selected.value = [];
       notify(`${items.length} record(s) deleted.`);
     },
   };
+}
+/** One DELETE per row, stopping at the first non-success so nothing is reported falsely. */
+async function deleteLiveRows(t: NonNullable<typeof table.value>, items: Row[]) {
+  let deleted = 0;
+  for (const row of items) {
+    try {
+      const outcome = await runLiveMutation(liveDeleteSql(store.connection.engine, t.name, t.columns, row), 'deleted');
+      if (!outcome.ok) { notify(`${deleted} of ${items.length} deleted. ${outcome.text}`, 'error'); break; }
+      deleted++;
+    } catch (error) { notify(`${deleted} of ${items.length} deleted. ${(error as Error).message}`, 'error'); break; }
+  }
+  selected.value = [];
+  if (deleted === items.length) notify(`${deleted} record(s) deleted.`);
 }
 const connectionSearch = ref(''),
   groupName = ref(''),
@@ -1491,6 +1565,7 @@ onBeforeUnmount(() => {
         >
           <DatabaseOverview v-if="w.scope === 'server' || (w.scope === 'database' && w.view === 'Structure')" :databases="w.databases" :database="store.database" :server="w.scope === 'server'" @database="openDatabaseContext" @table="openOverviewTable" @create-table="objectManager?.openTable()" @create-view="objectManager?.openView()" @definition="objectManager?.openView($event)" @drop-view="objectManager?.dropView($event)" />
           <template v-else-if="table && w.view === 'Browse'">
+            <div v-if="isLive && liveEditReason" class="notice info" data-testid="live-read-only">{{ liveEditReason }}</div>
             <div v-if="isMockView" class="notice info">Read-only {{table.kind === 'materialized-view' ? 'materialized view' : 'view'}} · mock snapshot. Refresh evaluates only the supported SELECT subset; no server query is run.</div>
             <ResultNotice v-if="viewError" kind="error" :notification-key="browseNoticeVersion">{{viewError}}</ResultNotice>
             <ResultNotice :notification-key="browseNoticeVersion">
