@@ -85,6 +85,12 @@ export interface Table {
   schema?: string;
   columns: Column[];
   rows: Row[];
+  /** Live catalog only: indexes and foreign keys exactly as the server reports them. */
+  live?: {
+    indexes: { name: string; unique: boolean; columns: string[]; type: string; definition?: string }[];
+    foreignKeys: { name: string; columns: string[]; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }[];
+    error?: string;
+  };
 }
 export interface Database {
   views?: Table[];

@@ -26,6 +26,9 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
           w.liveSql.push(sql);
           if (/information_schema\.tables/i.test(sql)) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE'], ['active_accounts', 'VIEW']]);
           else if (postgres && sql.includes('information_schema.columns')) payload = result(['name', 'type', 'udt', 'len', 'prec', 'scale', 'dprec', 'nullable', 'dflt', 'ident', 'pk'].map((n) => col(n)), [['id', 'bigint', 'int8', null, '64', '0', null, 'NO', null, 'YES', '1'], ['name', 'character varying', 'varchar', '40', null, null, null, 'YES', null, 'NO', '0']]);
+          else if (sql.includes('information_schema.STATISTICS')) payload = result([col('name'), col('nonunique'), col('col'), col('type')], [['PRIMARY', '0', 'id', 'BTREE']]);
+          else if (sql.includes('pg_catalog.pg_indexes')) payload = result([col('name'), col('definition')], [['accounts_pkey', 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)']]);
+          else if (sql.includes('KEY_COLUMN_USAGE') || sql.includes('pg_catalog.pg_constraint')) payload = result(['name', 'col', 'ref_table', 'ref_col', 'on_delete', 'on_update', 'pos'].map((n) => col(n)), [['accounts_owner', 'name', 'owners', 'login', postgres ? 'c' : 'CASCADE', postgres ? 'a' : 'NO ACTION', '2']]);
           else if (sql.includes('information_schema.COLUMNS')) payload = result([col('name'), col('type'), col('nullable'), col('ckey'), col('dflt'), col('extra')], [['id', 'bigint(20) unsigned', 'NO', 'PRI', null, 'auto_increment'], ['name', 'varchar(40)', 'YES', '', null, '']]);
           else {
             const filter = /LIKE '%(.*?)%'/.exec(sql)?.[1];
@@ -79,4 +82,7 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
     await expect(page.locator('.structure-grid tbody tr')).toHaveCount(2);
     await expect(page.locator('.structure-grid')).toContainText(postgres ? 'character varying(40)' : 'bigint(20) unsigned');
     await expect(page.getByRole('button', { name: /Add column|Change|Drop/ })).toHaveCount(0);
+    await expect(page.getByTestId('live-indexes')).toContainText(postgres ? 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)' : 'PRIMARY');
+    await expect(page.getByTestId('live-foreign-keys')).toContainText('owners(login)');
+    await expect(page.getByTestId('live-foreign-keys')).toContainText('CASCADE');
   });

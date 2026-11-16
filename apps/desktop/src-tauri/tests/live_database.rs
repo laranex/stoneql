@@ -185,6 +185,28 @@ fn actual_database_commands_use_owned_tls_fixtures() {
     assert!(!page["payload"]["rows"].as_array().unwrap().is_empty());
     let count = read(&first["handle"], "SELECT COUNT(*) AS total FROM `raw_values`\nWHERE LOWER(COALESCE(`id`, '')) LIKE '%1%' ESCAPE '!';").unwrap();
     assert_eq!(count["payload"]["rows"][0][0]["kind"], "integer");
+    // Indexes and foreign keys of a child table (fixture seed `fk_child`).
+    let indexes = read(&first["handle"], r#"SELECT INDEX_NAME AS name, NON_UNIQUE AS nonunique, COLUMN_NAME AS col, INDEX_TYPE AS type FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'stoneql_m001_fixture' AND TABLE_NAME = 'fk_child' ORDER BY INDEX_NAME, SEQ_IN_INDEX;"#).unwrap();
+    let names: Vec<String> = indexes["payload"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| catalog_text(&row[0]))
+        .collect();
+    assert!(
+        names.contains(&"PRIMARY".into()) && names.contains(&"fk_parent_idx".into()),
+        "{names:?}"
+    );
+    let keys = read(&first["handle"], r#"SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col, k.REFERENCED_TABLE_NAME AS ref_table, k.REFERENCED_COLUMN_NAME AS ref_col, r.DELETE_RULE AS on_delete, r.UPDATE_RULE AS on_update FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.TABLE_SCHEMA = 'stoneql_m001_fixture' AND k.TABLE_NAME = 'fk_child' AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION;"#).unwrap();
+    let key = &keys["payload"]["rows"][0];
+    assert_eq!(
+        [&key[0], &key[1], &key[2], &key[3]].map(catalog_text),
+        ["fk_child_parent", "parent", "raw_values", "id"]
+    );
+    // MySQL shows the rule to the SELECT-only reader; MariaDB hides REFERENTIAL_CONSTRAINTS
+    // (the LEFT JOIN keeps the key and the renderer says the rule is not visible).
+    let rule = catalog_text(&key[4]);
+    assert!(rule == "CASCADE" || (engine == "mariadb" && rule.is_empty()), "{engine}: {rule}");
     let duplicates = read(
         &first["handle"],
         "SELECT s AS value,u AS value FROM raw_values ORDER BY id",

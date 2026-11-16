@@ -456,6 +456,32 @@ WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("nn")) LIKE '%
     )
     .unwrap();
     assert_eq!(all["payload"]["rows"].as_array().unwrap().len(), 2);
+    // Indexes (server definitions) and a composite foreign key (fixture seed `fk_child`).
+    let indexes = read(&first["handle"], r#"SELECT indexname AS name, indexdef AS definition FROM pg_catalog.pg_indexes WHERE schemaname = current_schema AND tablename = 'fk_child' ORDER BY indexname;"#).unwrap();
+    let definitions: Vec<String> = indexes["payload"]["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| text(&row[1]))
+        .collect();
+    assert!(
+        definitions.iter().any(|d| d
+            .starts_with("CREATE UNIQUE INDEX fk_child_xy ON public.fk_child USING btree (x, y)")),
+        "{definitions:?}"
+    );
+    let keys = read(&first["handle"], r#"SELECT c.conname AS name, a.attname AS col, fr.relname AS ref_table, fa.attname AS ref_col, c.confdeltype AS on_delete, c.confupdtype AS on_update, a.attnum AS pos FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class r ON r.oid = c.conrelid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace JOIN pg_catalog.pg_class fr ON fr.oid = c.confrelid JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid JOIN pg_catalog.pg_attribute fa ON fa.attrelid = c.confrelid WHERE c.contype = 'f' AND n.nspname = current_schema AND r.relname = 'fk_child' AND CONCAT(',', SUBSTRING(CONCAT(c.conkey), 2, CHAR_LENGTH(CONCAT(c.conkey)) - 2), ',') LIKE CONCAT('%,', a.attnum, ',%') AND CONCAT(',', SUBSTRING(CONCAT(c.confkey), 2, CHAR_LENGTH(CONCAT(c.confkey)) - 2), ',') LIKE CONCAT('%,', fa.attnum, ',%') ORDER BY c.conname, a.attnum, fa.attnum;"#).unwrap();
+    let rows = keys["payload"]["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        4,
+        "column x referenced-column product of one composite key"
+    );
+    for row in rows {
+        assert_eq!(
+            (text(&row[0]), text(&row[2]), text(&row[4])),
+            ("fk_child_pair".into(), "fk_parent".into(), "n".into())
+        );
+    }
     let duplicates = read(&first["handle"], "SELECT 1 AS value, 2 AS value").unwrap();
     assert_eq!(duplicates["payload"]["columns"][1]["name"], "value");
     let many = read(&first["handle"], "SELECT a.n FROM big a CROSS JOIN big b").unwrap()["payload"]

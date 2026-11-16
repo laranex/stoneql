@@ -2,7 +2,7 @@ import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransa
 import {NativeOperationError, hostState} from '../services/nativeHost';
 import type {AccessModeDto, JournalProblemDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
-import { liveCatalogSupported, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery } from '../services/liveSchema';
+import { liveCatalogSupported, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery, liveIndexesSql, liveForeignKeysSql, toLiveIndexes, toLiveForeignKeys } from '../services/liveSchema';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
 import type { TableIndex, Routine, Trigger, ScheduledEvent } from '../types/objects';
@@ -254,6 +254,13 @@ export const useWorkspace = defineStore('workspace', () => {
     if(!table)throw new Error(`Table ${name} is no longer in the loaded catalog. Refresh the explorer.`);
     table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.engine,profile.database,name)),profile.engine);
     if(!table.columns.length)throw new Error(`No columns are visible for ${name}; it may have been dropped or your account lacks privileges.`);
+    // Indexes and foreign keys are read-only catalog detail; a failure keeps the columns usable.
+    try {
+      table.live={
+        indexes:toLiveIndexes(await executeLive(id,liveIndexesSql(profile.engine,profile.database,name)),profile.engine),
+        foreignKeys:toLiveForeignKeys(await executeLive(id,liveForeignKeysSql(profile.engine,profile.database,name)),profile.engine),
+      };
+    } catch(error) { table.live={indexes:[],foreignKeys:[],error:(error as Error).message}; }
   }
   /** One server-side page plus the matching total; both are plain read-only SELECTs. */
   async function browseLive(id:string) {

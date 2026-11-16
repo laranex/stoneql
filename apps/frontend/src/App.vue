@@ -1890,7 +1890,35 @@ onBeforeUnmount(() => {
               </table>
             </div>
             <IndexManager v-if="!isLive && (!isReadOnly || table.kind === 'materialized-view')" :confirm-discard="askDiscard" @confirm="requestObjectConfirmation" />
-            <p v-if="isLive" class="muted">Live catalog · columns as reported by information_schema. Indexes and foreign keys are not listed yet; use SQL to inspect them.</p>
+            <template v-if="isLive">
+              <p v-if="table.live?.error" class="notice error" role="alert">Indexes and foreign keys could not be read: {{ table.live.error }}</p>
+              <div class="panel" data-testid="live-indexes">
+                <h3><SchemaIcon kind="index" detail="Indexes" /> Indexes</h3>
+                <table class="data-grid">
+                  <thead><tr><th>Name</th><th>Unique</th><th>{{ store.connection.engine === 'PostgreSQL' ? 'Definition' : 'Columns' }}</th><th v-if="store.connection.engine !== 'PostgreSQL'">Type</th></tr></thead>
+                  <tbody>
+                    <tr v-for="index in table.live?.indexes || []" :key="index.name">
+                      <td class="mono">{{ index.name }}</td><td>{{ index.unique ? 'Yes' : 'No' }}</td>
+                      <td class="mono">{{ index.definition ?? index.columns.join(', ') }}</td><td v-if="store.connection.engine !== 'PostgreSQL'">{{ index.type }}</td>
+                    </tr>
+                    <tr v-if="!table.live?.indexes.length"><td :colspan="store.connection.engine === 'PostgreSQL' ? 3 : 4" class="muted">No indexes visible to this account.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="panel" data-testid="live-foreign-keys">
+                <h3><SchemaIcon kind="foreign" detail="Relationships" /> Foreign key relationships</h3>
+                <table class="data-grid">
+                  <thead><tr><th>Name</th><th>Columns</th><th>References</th><th>On delete</th><th>On update</th></tr></thead>
+                  <tbody>
+                    <tr v-for="key in table.live?.foreignKeys || []" :key="key.name">
+                      <td class="mono">{{ key.name }}</td><td class="mono">{{ key.columns.join(', ') }}</td>
+                      <td class="mono">{{ key.refTable }}({{ key.refColumns.join(', ') }})</td><td>{{ key.onDelete }}</td><td>{{ key.onUpdate }}</td>
+                    </tr>
+                    <tr v-if="!table.live?.foreignKeys.length"><td colspan="5" class="muted">No foreign keys on this table.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
             <div v-else class="panel">
               <h3>
                 <SchemaIcon kind="foreign" detail="Relationships" /> Foreign key relationships

@@ -421,6 +421,22 @@ WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("n")) LIKE '%5
         }
     }
     #[test]
+    fn accepts_the_renderer_index_and_foreign_key_catalog_statements() {
+        // Exact shapes from apps/frontend/src/services/liveSchema.ts.
+        for sql in [
+            r#"SELECT INDEX_NAME AS name, NON_UNIQUE AS nonunique, COLUMN_NAME AS col, INDEX_TYPE AS type FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'stoneql_m001_fixture' AND TABLE_NAME = 'fk_child' ORDER BY INDEX_NAME, SEQ_IN_INDEX;"#,
+            r#"SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col, k.REFERENCED_TABLE_NAME AS ref_table, k.REFERENCED_COLUMN_NAME AS ref_col, r.DELETE_RULE AS on_delete, r.UPDATE_RULE AS on_update FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.TABLE_SCHEMA = 'stoneql_m001_fixture' AND k.TABLE_NAME = 'fk_child' AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION;"#,
+        ] {
+            assert!(validate_select(sql, Dialect::MySql).is_ok(), "{sql}");
+        }
+        for sql in [
+            r#"SELECT indexname AS name, indexdef AS definition FROM pg_catalog.pg_indexes WHERE schemaname = current_schema AND tablename = 'fk_child' ORDER BY indexname;"#,
+            r#"SELECT c.conname AS name, a.attname AS col, fr.relname AS ref_table, fa.attname AS ref_col, c.confdeltype AS on_delete, c.confupdtype AS on_update, a.attnum AS pos FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class r ON r.oid = c.conrelid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace JOIN pg_catalog.pg_class fr ON fr.oid = c.confrelid JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid JOIN pg_catalog.pg_attribute fa ON fa.attrelid = c.confrelid WHERE c.contype = 'f' AND n.nspname = current_schema AND r.relname = 'fk_child' AND CONCAT(',', SUBSTRING(CONCAT(c.conkey), 2, CHAR_LENGTH(CONCAT(c.conkey)) - 2), ',') LIKE CONCAT('%,', a.attnum, ',%') AND CONCAT(',', SUBSTRING(CONCAT(c.confkey), 2, CHAR_LENGTH(CONCAT(c.confkey)) - 2), ',') LIKE CONCAT('%,', fa.attnum, ',%') ORDER BY c.conname, a.attnum, fa.attnum;"#,
+        ] {
+            assert!(validate_select(sql, Dialect::Postgres).is_ok(), "{sql}");
+        }
+    }
+    #[test]
     fn rejects_stacked_comments_locks_outfile_variables_and_unverified_functions() {
         for sql in [
             "SELECT 1; DELETE FROM users",

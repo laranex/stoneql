@@ -94,3 +94,20 @@ test('PostgreSQL columns keep catalog spelling, keys, identity and expression de
     ['seq', 'bigint', false, true, 'none', undefined],
   ]);
 });
+test('indexes group per name in column order; PostgreSQL keeps the server definition', async () => {
+  const { toLiveIndexes, toLiveForeignKeys, RULE_NOT_VISIBLE } = await import('../src/services/liveSchema.ts');
+  assert.deepEqual(toLiveIndexes(result(['name', 'nonunique', 'col', 'type'], [['PRIMARY', '0', 'id', 'BTREE'], ['ab', '1', 'a', 'BTREE'], ['ab', '1', 'b', 'BTREE']]), 'MySQL'), [
+    { name: 'PRIMARY', unique: true, columns: ['id'], type: 'BTREE' },
+    { name: 'ab', unique: false, columns: ['a', 'b'], type: 'BTREE' },
+  ]);
+  const [pg] = toLiveIndexes(result(['name', 'definition'], [['t_xy', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)']]), 'PostgreSQL');
+  assert.deepEqual([pg!.unique, pg!.type, pg!.definition], [true, 'btree', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)']);
+  // PostgreSQL composite key rows are a product; each column is kept once, rules named.
+  const [key] = toLiveForeignKeys(result(['name', 'col', 'ref_table', 'ref_col', 'on_delete', 'on_update'], [
+    ['k', 'x', 'p', 'a', 'n', 'a'], ['k', 'x', 'p', 'b', 'n', 'a'], ['k', 'y', 'p', 'a', 'n', 'a'], ['k', 'y', 'p', 'b', 'n', 'a'],
+  ]), 'PostgreSQL');
+  assert.deepEqual(key, { name: 'k', columns: ['x', 'y'], refTable: 'p', refColumns: ['a', 'b'], onDelete: 'SET NULL', onUpdate: 'NO ACTION' });
+  // MariaDB: rules hidden from SELECT-only accounts are reported as such, never guessed.
+  const [hidden] = toLiveForeignKeys(result(['name', 'col', 'ref_table', 'ref_col', 'on_delete', 'on_update'], [['k', 'parent', 'p', 'id', null, null]]), 'MariaDB');
+  assert.equal(hidden!.onDelete, RULE_NOT_VISIBLE);
+});

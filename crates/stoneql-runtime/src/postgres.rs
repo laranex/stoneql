@@ -177,7 +177,9 @@ fn decode_binary(info: &PgTypeInfo, name: &str, bytes: &[u8]) -> Option<CellValu
             text: float_text(f64::from_be_bytes(bytes.try_into().ok()?)),
         }),
         "NUMERIC" => numeric(bytes).map(|text| CellValue::Decimal { text }),
-        "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" | "CHAR" | "UNKNOWN" => {
+        // `"CHAR"` (quoted) is PostgreSQL's internal one-byte "char" type, used by catalog codes
+        // such as pg_constraint.confdeltype; its byte is the character itself.
+        "TEXT" | "VARCHAR" | "BPCHAR" | "NAME" | "CHAR" | "\"CHAR\"" | "UNKNOWN" => {
             text().map(|text| CellValue::Text { text })
         }
         "JSON" => text().map(|text| CellValue::Json { text }),

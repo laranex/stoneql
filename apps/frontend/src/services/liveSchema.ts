@@ -193,3 +193,62 @@ export function liveBrowseQuery(input: {
     sort,
   };
 }
+
+/** A live table's index as the server reports it; `definition` is PostgreSQL's own text. */
+export interface LiveIndex { name: string; unique: boolean; columns: string[]; type: string; definition?: string }
+/** A live foreign key; `onDelete`/`onUpdate` are the server's rule names. */
+export interface LiveForeignKey { name: string; columns: string[]; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
+
+export function liveIndexesSql(engine: Engine, database: string, table: string): string {
+  if (!mysqlFamily(engine))
+    return `SELECT indexname AS name, indexdef AS definition FROM pg_catalog.pg_indexes WHERE schemaname = current_schema AND tablename = ${literal(table, 'A table name', engine)} ORDER BY indexname;`;
+  return `SELECT INDEX_NAME AS name, NON_UNIQUE AS nonunique, COLUMN_NAME AS col, INDEX_TYPE AS type FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ${literal(database, 'A database name')} AND TABLE_NAME = ${literal(table, 'A table name')} ORDER BY INDEX_NAME, SEQ_IN_INDEX;`;
+}
+
+/**
+ * PostgreSQL foreign keys come from pg_constraint (information_schema hides their rules from
+ * SELECT-only accounts). Key arrays print as `{1,2}`; the braces are cut with the comma form of
+ * SUBSTRING (FOR, ANY and subscripts are outside the read-only subset) and members matched as
+ * `,n,`. Without subscripts the pairing of a composite key's columns is not recoverable, so its
+ * columns are listed in attribute order (documented limit).
+ */
+export function liveForeignKeysSql(engine: Engine, database: string, table: string): string {
+  if (!mysqlFamily(engine))
+    return `SELECT c.conname AS name, a.attname AS col, fr.relname AS ref_table, fa.attname AS ref_col, c.confdeltype AS on_delete, c.confupdtype AS on_update, a.attnum AS pos FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_class r ON r.oid = c.conrelid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace JOIN pg_catalog.pg_class fr ON fr.oid = c.confrelid JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid JOIN pg_catalog.pg_attribute fa ON fa.attrelid = c.confrelid WHERE c.contype = 'f' AND n.nspname = current_schema AND r.relname = ${literal(table, 'A table name', engine)} AND CONCAT(',', SUBSTRING(CONCAT(c.conkey), 2, CHAR_LENGTH(CONCAT(c.conkey)) - 2), ',') LIKE CONCAT('%,', a.attnum, ',%') AND CONCAT(',', SUBSTRING(CONCAT(c.confkey), 2, CHAR_LENGTH(CONCAT(c.confkey)) - 2), ',') LIKE CONCAT('%,', fa.attnum, ',%') ORDER BY c.conname, a.attnum, fa.attnum;`;
+  return `SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS col, k.REFERENCED_TABLE_NAME AS ref_table, k.REFERENCED_COLUMN_NAME AS ref_col, r.DELETE_RULE AS on_delete, r.UPDATE_RULE AS on_update FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME WHERE k.TABLE_SCHEMA = ${literal(database, 'A database name')} AND k.TABLE_NAME = ${literal(table, 'A table name')} AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION;`;
+}
+
+export function toLiveIndexes(result: SqlResult, engine: Engine): LiveIndex[] {
+  const rows = catalogRows(result);
+  if (!mysqlFamily(engine))
+    return rows.map((row) => {
+      const definition = text(row.definition);
+      return { name: text(row.name), unique: /^CREATE UNIQUE INDEX /.test(definition), columns: [], type: /USING (\w+)/.exec(definition)?.[1] ?? '', definition };
+    });
+  const indexes = new Map<string, LiveIndex>();
+  for (const row of rows) {
+    const name = text(row.name);
+    const index = indexes.get(name) ?? { name, unique: text(row.nonunique) === '0', columns: [], type: text(row.type) };
+    index.columns.push(text(row.col));
+    indexes.set(name, index);
+  }
+  return [...indexes.values()];
+}
+
+/** PostgreSQL stores rules as one-letter codes (pg_constraint docs); shown by their SQL names. */
+const postgresRules: Record<string, string> = { a: 'NO ACTION', r: 'RESTRICT', c: 'CASCADE', n: 'SET NULL', d: 'SET DEFAULT' };
+/** MariaDB hides REFERENTIAL_CONSTRAINTS from SELECT-only accounts while keys stay visible. */
+export const RULE_NOT_VISIBLE = 'not visible to this account';
+export function toLiveForeignKeys(result: SqlResult, engine: Engine): LiveForeignKey[] {
+  const keys = new Map<string, LiveForeignKey>();
+  for (const row of catalogRows(result)) {
+    const name = text(row.name);
+    const rule = (value: string) => (!value ? RULE_NOT_VISIBLE : mysqlFamily(engine) ? value : postgresRules[value] ?? value);
+    const key = keys.get(name) ?? { name, columns: [], refTable: text(row.ref_table), refColumns: [], onDelete: rule(text(row.on_delete)), onUpdate: rule(text(row.on_update)) };
+    // PostgreSQL rows are the column × referenced-column product of one key; keep each once.
+    if (!key.columns.includes(text(row.col))) key.columns.push(text(row.col));
+    if (!key.refColumns.includes(text(row.ref_col))) key.refColumns.push(text(row.ref_col));
+    keys.set(name, key);
+  }
+  return [...keys.values()];
+}
