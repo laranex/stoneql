@@ -621,6 +621,8 @@ impl Connections {
         let id = ConnectionId(Uuid::new_v4());
         let (cancel, cancelled) = oneshot::channel();
         let expires = Instant::now() + self.0.lifetime;
+        // F-03: a dead SSH session releases the handle through the same close path as expiry.
+        let tunnel_closed = tunnel.as_ref().map(ssh::Tunnel::closed);
         {
             let mut entries = self.0.entries.lock().expect("connection registry lock");
             if self.0.slots.is_closed() {
@@ -647,8 +649,15 @@ impl Connections {
         }
         let registry = Arc::downgrade(&self.0);
         tokio::spawn(async move {
+            let tunnel_closed = async {
+                match tunnel_closed {
+                    Some(closed) => closed.await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 _ = tokio::time::sleep_until(expires) => {},
+                () = tunnel_closed => {},
                 _ = cancelled => return,
             }
             let Some(inner) = registry.upgrade() else {

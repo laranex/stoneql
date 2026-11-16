@@ -631,3 +631,89 @@ async fn overhead(fixture: &Fixture, connections: &Connections, owner: OwnerId) 
     assert_clean(connections, "overhead");
     result
 }
+
+/// Runs a docker CLI action against the dedicated `ssh-dead` container (owned by the runner).
+fn dead_container(action: &str) {
+    let container = var("STONEQL_SSH_DEAD_CONTAINER");
+    let status = std::process::Command::new("docker")
+        .args([action, container.as_str()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .expect("docker CLI");
+    assert!(status.success(), "docker {action} failed");
+}
+/// Waits until the handle and its tunnel are gone; returns the elapsed time.
+async fn released(
+    registry: &Connections,
+    owner: OwnerId,
+    id: ConnectionId,
+    bound: Duration,
+) -> Duration {
+    let started = Instant::now();
+    while registry.is_connected(owner, id) || registry.open_tunnels() > 0 {
+        assert!(
+            started.elapsed() < bound,
+            "dead tunnel not released within {bound:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    started.elapsed()
+}
+/// M005 F-03 (T3): a tunnel whose SSH server dies releases its handle, slot, endpoint
+/// directory and descriptors automatically: within 5 s when the server is killed and within
+/// keepalive (3 × 30 s) + 10 s when the path silently stops (`docker pause`, MySQL only).
+#[tokio::test]
+#[ignore = "owning fixture: npm run test:ssh"]
+async fn dead_tunnels_release_their_handles() {
+    let fixture = Fixture::load();
+    let dead_port: u16 = var("STONEQL_SSH_DEAD_PORT").parse().unwrap();
+    let registry = Connections::new(8, Duration::from_secs(3), Duration::from_secs(3600)).unwrap();
+    let owner = OwnerId::new();
+    // Warm up so lazily created runtime descriptors are part of the baseline.
+    let warm = registry.connect(owner, fixture.direct()).await.unwrap();
+    registry.disconnect(owner, warm).await.unwrap();
+    let baseline = open_descriptors();
+    let ssh = || SshConfig {
+        port: dead_port,
+        ..fixture.ssh(SshAuth::Agent(Some(fixture.agent.clone())))
+    };
+    let mut report = json!({"engine": var("STONEQL_SSH_ENGINE")});
+    if fixture.full {
+        let id = registry
+            .connect_with(owner, fixture.database(DB_HOST), Some(ssh()), None)
+            .await
+            .unwrap();
+        assert_eq!(registry.open_tunnels(), 1);
+        dead_container("pause");
+        let elapsed = released(&registry, owner, id, Duration::from_secs(130)).await;
+        dead_container("unpause");
+        report["pausedReleaseMs"] = json!(elapsed.as_millis());
+    }
+    let id = registry
+        .connect_with(owner, fixture.database(DB_HOST), Some(ssh()), None)
+        .await
+        .unwrap();
+    assert_eq!(registry.open_tunnels(), 1);
+    dead_container("kill");
+    let elapsed = released(&registry, owner, id, Duration::from_secs(5)).await;
+    report["killedReleaseMs"] = json!(elapsed.as_millis());
+    assert_eq!(endpoint_directories(), 0, "endpoint directory left");
+    // Every slot is free again: 8 direct handles fit.
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        handles.push(registry.connect(owner, fixture.direct()).await.unwrap());
+    }
+    for handle in handles {
+        registry.disconnect(owner, handle).await.unwrap();
+    }
+    let descriptors = open_descriptors();
+    report["descriptorsBaseline"] = json!(baseline);
+    report["descriptorsAfter"] = json!(descriptors);
+    assert!(
+        descriptors <= baseline,
+        "descriptors leaked: {baseline} -> {descriptors}"
+    );
+    registry.shutdown().await;
+    println!("STONEQL_SSH_DEAD_RESULT {report}");
+}

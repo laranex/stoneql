@@ -45,6 +45,8 @@ const binaries = [
   { name: 'native', path: testBinary('stoneql-desktop', 'live_ssh', ['--features', 'custom-protocol']), test: 'ssh_commands_use_owned_fixture', marker: 'STONEQL_NATIVE_RESULT ' },
   // Contract 5.2: job cancellation through the tunnel with a free and with no free forward.
   { name: 'cancellation', path: testBinary('stoneql-runtime', null), test: 'execution::ssh_fixture::ssh_cancellation_uses_owned_fixture', marker: 'STONEQL_SSH_CANCEL_RESULT ' },
+  // F-03: kills (and, for MySQL, pauses) the dedicated ssh-dead service; must run last.
+  { name: 'deadTunnel', path: testBinary('stoneql-runtime', 'ssh_tunnel'), test: 'dead_tunnels_release_their_handles', marker: 'STONEQL_SSH_DEAD_RESULT ' },
 ];
 run('docker', ['build', '-q', '-t', IMAGE, resolve(root, 'tools/ssh-fixture')]);
 const output = resolve(root, 'artifacts/m005');
@@ -187,9 +189,9 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_reader;
       writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE stoneql_fixture_marker(id VARCHAR(64) PRIMARY KEY); INSERT INTO stoneql_fixture_marker VALUES ('${marker}');
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
     }
-    writeFileSync(override, JSON.stringify({ services: { [engine]: database, ssh: sshService(sshA), 'ssh-rotated': sshService(sshB) } }));
+    writeFileSync(override, JSON.stringify({ services: { [engine]: database, ssh: sshService(sshA), 'ssh-rotated': sshService(sshB), 'ssh-dead': sshService(sshA) } }));
     started = true;
-    run('docker', [...args, 'up', '-d', engine, 'ssh', 'ssh-rotated'], env);
+    run('docker', [...args, 'up', '-d', engine, 'ssh', 'ssh-rotated', 'ssh-dead'], env);
 
     const probe = engine === 'postgresql'
       ? ['psql', '-U', 'stoneql_fixture', '-d', 'stoneql_m001_fixture', '-tAc', 'SELECT id FROM stoneql_fixture_marker']
@@ -205,7 +207,8 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
       if (!/^127\.0\.0\.1:\d+$/.test(value)) throw Error('Loopback fixture required');
       return value.split(':')[1];
     };
-    const ports = { direct: published(engine), ssh: published('ssh'), rotated: published('ssh-rotated') };
+    const ports = { direct: published(engine), ssh: published('ssh'), rotated: published('ssh-rotated'), dead: published('ssh-dead') };
+    await waitFor(() => banner(Number(ports.dead)), 'dead-tunnel ssh');
     await waitFor(() => banner(Number(ports.ssh)), 'ssh');
     await waitFor(() => banner(Number(ports.rotated)), 'rotated ssh');
 
@@ -220,6 +223,7 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
       STONEQL_SSH_ENGINE: engine, STONEQL_SSH_SCOPE: engine === 'mysql' ? 'full' : 'parity',
       STONEQL_SSH_DB_PORT: String(databasePort), STONEQL_LIFECYCLE_PORT: ports.direct,
       STONEQL_SSH_PORT: ports.ssh, STONEQL_SSH_ROTATED_PORT: ports.rotated, STONEQL_SSH_USER: 'stoneql',
+      STONEQL_SSH_DEAD_PORT: ports.dead, STONEQL_SSH_DEAD_CONTAINER: run('docker', [...args, 'ps', '-q', 'ssh-dead'], env),
       STONEQL_SSH_HOST_KEY: hostKey(join(sshA, 'host_key.pub')), STONEQL_SSH_ROTATED_HOST_KEY: hostKey(join(sshB, 'host_key.pub')),
       STONEQL_SSH_KEY_PLAIN: join(client, 'plain'), STONEQL_SSH_KEY_LOCKED: join(client, 'locked'), STONEQL_SSH_KEY_PASSPHRASE: passphrase,
       STONEQL_SSH_KEY_OTHER: join(client, 'other'), STONEQL_SSH_KEY_ECDSA: join(client, 'ecdsa'), STONEQL_SSH_AGENT: agentSocket,
@@ -245,7 +249,7 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
       established = Number(run('docker', [...args, 'exec', '-T', 'ssh', 'sh', '-c', 'netstat -tn 2>/dev/null | grep -c ":22 .*ESTABLISHED" || true'], env));
       return established === 0;
     }, 'server-side SSH connection drain', 15_000);
-    const logs = run('docker', [...args, 'logs', 'ssh'], env) + run('docker', [...args, 'logs', 'ssh-rotated'], env);
+    const logs = run('docker', [...args, 'logs', 'ssh'], env) + run('docker', [...args, 'logs', 'ssh-rotated'], env) + run('docker', [...args, 'logs', 'ssh-dead'], env);
     const count = pattern => (logs.match(pattern) || []).length;
     report.server = {
       establishedAfter: established,

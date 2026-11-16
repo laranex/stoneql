@@ -125,6 +125,10 @@ enum KeyCheck {
 struct Verifier {
     expected: Option<PublicKey>,
     outcome: Arc<Mutex<Option<KeyCheck>>>,
+    /// Dropped with the handler when russh's session task ends on any path (remote disconnect,
+    /// keepalive timeout, I/O error, our own close). Receivers then observe the tunnel as dead
+    /// (F-03); `Handler::disconnected` alone can be skipped when the final shutdown fails.
+    _alive: Option<tokio::sync::watch::Sender<()>>,
 }
 impl client::Handler for Verifier {
     type Error = russh::Error;
@@ -162,18 +166,20 @@ async fn handshake(
     host: &str,
     port: u16,
     expected: Option<PublicKey>,
-) -> Result<(Session, Arc<Mutex<Option<KeyCheck>>>), LifecycleError> {
+) -> Result<(Session, tokio::sync::watch::Receiver<()>), LifecycleError> {
     let socket = tokio::net::TcpStream::connect((host, port))
         .await
         .map_err(|_| LifecycleError::Unavailable)?;
     let _ = socket.set_nodelay(true);
     let outcome = Arc::new(Mutex::new(None));
+    let (alive, alive_receiver) = tokio::sync::watch::channel(());
     let verifier = Verifier {
         expected,
         outcome: outcome.clone(),
+        _alive: Some(alive),
     };
     match client::connect_stream(client_config(), socket, verifier).await {
-        Ok(session) => Ok((session, outcome)),
+        Ok(session) => Ok((session, alive_receiver)),
         Err(_) => Err(
             match outcome.lock().expect("host key outcome lock").take() {
                 Some(KeyCheck::Unknown(_) | KeyCheck::Certificate) => {
@@ -202,6 +208,7 @@ pub(crate) async fn scan(
     let verifier = Verifier {
         expected: None,
         outcome: outcome.clone(),
+        _alive: None,
     };
     let _ = tokio::time::timeout(
         deadline,
@@ -301,6 +308,14 @@ pub(crate) struct Tunnel {
     session: Arc<Session>,
     endpoint: Endpoint,
     accept: Option<tokio::task::JoinHandle<()>>,
+    alive: tokio::sync::watch::Receiver<()>,
+}
+
+/// Resolves once the SSH session task has ended (its handler, the only sender, was dropped).
+fn session_ended(
+    mut alive: tokio::sync::watch::Receiver<()>,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    async move { while alive.changed().await.is_ok() {} }
 }
 
 /// Private per-tunnel directory (mode 0700) holding exactly one listening socket.
@@ -318,6 +333,10 @@ impl Drop for Endpoint {
 impl Tunnel {
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.endpoint
+    }
+    /// Resolves when the SSH session has died, so the registry can release the handle (F-03).
+    pub(crate) fn closed(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        session_ended(self.alive.clone())
     }
     pub(crate) fn is_closed(&self) -> bool {
         self.session.is_closed() || self.accept.as_ref().is_none_or(|task| task.is_finished())
@@ -416,12 +435,17 @@ fn serve(
     listener: tokio::net::UnixListener,
     host: String,
     port: u16,
+    alive: tokio::sync::watch::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         // Owned by this task: aborting it drops every forward and its SSH channel.
         let mut forwards = tokio::task::JoinSet::new();
+        let ended = session_ended(alive);
+        tokio::pin!(ended);
         loop {
             tokio::select! {
+                // A dead session accepts nothing more; stop serving (F-03).
+                () = &mut ended => break,
                 accepted = listener.accept() => {
                     let Ok((stream, _)) = accepted else { break };
                     if forwards.len() >= MAX_FORWARDS || session.is_closed() {
@@ -459,7 +483,7 @@ pub(crate) async fn open(
     }
     #[cfg(unix)]
     {
-        let (mut session, _) = handshake(&config.host, config.port, Some(expected)).await?;
+        let (mut session, alive) = handshake(&config.host, config.port, Some(expected)).await?;
         authenticate(&mut session, &config.username, config.auth, key_text).await?;
         let session = Arc::new(session);
         let (endpoint, listener) = bind(socket_name)?;
@@ -468,11 +492,13 @@ pub(crate) async fn open(
             listener,
             target_host.to_owned(),
             target_port,
+            alive.clone(),
         );
         Ok(Tunnel {
             session,
             endpoint,
             accept: Some(accept),
+            alive,
         })
     }
 }
@@ -531,5 +557,26 @@ mod tests {
             open(input, None, "db", 3306, "s").await,
             Err(LifecycleError::HostKeyUnknown)
         ));
+    }
+}
+
+#[cfg(test)]
+mod session_end_tests {
+    /// F-03 plumbing: the end signal resolves once the handler (sole sender) is dropped.
+    #[tokio::test]
+    async fn session_end_resolves_when_the_handler_is_dropped() {
+        let (alive, receiver) = tokio::sync::watch::channel(());
+        let ended = super::session_ended(receiver);
+        tokio::pin!(ended);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut ended)
+                .await
+                .is_err(),
+            "pending while the session lives"
+        );
+        drop(alive);
+        tokio::time::timeout(std::time::Duration::from_secs(1), ended)
+            .await
+            .expect("resolves after the handler is dropped");
     }
 }
