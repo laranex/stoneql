@@ -1,6 +1,8 @@
 # M002 — Tauri host integration
 
 ## Status
+**Blocked — all unblocked work done (2026-11-16).** Remaining criteria need user decisions A1–A5 in `.ref/planning/approvals-ledger.md` (real windows, signed artifact, budgets, two dependency advisories). Earlier status text follows.
+
 Authorized by user instruction to continue all milestones. Implemented development host; local verification in progress. Not complete. **Re-scoped for v0.1.0 Alpha (D021, Approved product decision 2026-10-26):** only macOS gates block the alpha (arm64 required, x86_64 if shipped). Open for the alpha: native macOS E2E, release-build startup/IPC profile, OS fallback-dialog interaction, macOS-applicable audit result. Windows/Linux execution and the Linux GTK advisories are Deferred (see below), not passed. D022 (Approved 2026-10-26) adds alpha IPC surface for jobs, transactions, metadata, browse/CRUD and native transfer file grants; each new command needs the same G1 ACL negatives, strict decoding and session checks before the alpha, and the shared crates stay free of macOS host APIs.
 
 ## Objective and scope
@@ -53,3 +55,14 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - `cargo audit --deny warnings` failed: RUSTSEC-2024-0429 (glib 0.18.5, Linux GTK graph) and RUSTSEC-2024-0370 (proc-macro-error 1.0.4). No ignores. Not a clean security gate.
 - Windows/Linux native runtime, OS fallback dialog, repeated benchmark profile and production packaging not verified. CI preparation is not execution evidence.
 - See `docs/development/desktop-host.md`. Preserve these open gates while proceeding with independent M003-L lifecycle work.
+
+## Acceptance record — 2026-11-16 (scope: macOS, MySQL/MariaDB/PostgreSQL)
+| Criterion | Evidence (executed) | Status |
+|---|---|---|
+| G1 window/command ACL, no renderer shell/fs, no secrets in storage | `tests/ipc.rs::every_command_refuses_foreign_windows_origins_versions_and_unknown_fields` (all 21 registered commands, list parsed from `generate_handler!` so new commands cannot skip it): auxiliary window and `https://untrusted.invalid` refused. `ssh_and_secret_commands_refuse_forged_sessions` closes M005 review "missing tests" 1 for the five SSH/secret commands. Existing shell/fs/dialog plugin denials. Mutation note: removing the in-command `guard` label check is masked by the Tauri capability layer (still refused), so the test proves denial, not the second layer in isolation. | Verified |
+| G2 raw values/errors over IPC, no cross-workspace targeting | Existing `actual_ipc_preserves_values_and_rejects_foreign_sessions`, renderer bootstrap rotation, handle ownership tests (desktop:test 2026-11-16: 24 passed, 3 opt-in ignored). | Verified (MockRuntime) |
+| G3 macOS native smoke + E2E; reject unsupported DTO versions; browser independent | Version 2 → `UNSUPPORTED_VERSION` and unknown envelope field → `INVALID_REQUEST` for all 21 commands. Browser suite runs without Tauri (52/52 on 2026-11-16). Native E2E on the signed `.app` not run: needs A1 (real windows) and A2 (signed artifact), and the CRUD/transfer steps need M006/M007 features. | Blocked (A1, A2) |
+| G4/G5 startup/IPC overhead, bounded errors, clean shutdown | Earlier debug smoke only. 30-launch release profile needs A1; budgets need A3. | Blocked (A1, A3) |
+| G6 reproducible development bundle documented | `docs/development/desktop-host.md` (`npm run desktop:build`). | Verified |
+| Alpha: dependency audit applicable to the macOS artifact | cargo-audit 0.22.1 (2026-11-16, advisory DB of that date). `cargo tree -p stoneql-desktop --target {aarch64,x86_64}-apple-darwin`: glib (RUSTSEC-2024-0429), proc-macro-error (RUSTSEC-2024-0370) and rsa are **absent** from both macOS graphs (present only for x86_64-unknown-linux-gnu) → Linux-only, Deferred as recorded. **New:** RUSTSEC-2026-0495 russh 0.64.1 (agent server; StoneQL uses only `AgentClient`, `ssh.rs:256`, not reachable) and RUSTSEC-2026-0459 libsqlite3-sys 0.37.0 (bundled SQLite; sqlx 0.9.0 pins it; no upgrade path) are in the macOS graph. | Blocked (A4, A5) |
+| Alpha: OS fallback close dialog on unresponsive renderer | Needs a real window. | Blocked (A1) |

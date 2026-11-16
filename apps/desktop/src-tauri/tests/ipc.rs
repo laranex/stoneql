@@ -513,3 +513,84 @@ fn read_write_is_refused_natively_while_the_gate_is_off() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Every registered command, parsed from the handler list so a new command cannot skip this test.
+fn registered_commands() -> Vec<String> {
+    let source = include_str!("../src/lib.rs");
+    let start = source.find("generate_handler![").unwrap() + "generate_handler![".len();
+    let end = start + source[start..].find(']').unwrap();
+    source[start..end]
+        .split(',')
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+/// M002 G1/G3 for the whole IPC surface: auxiliary windows and remote origins are refused,
+/// unsupported envelope versions and unknown envelope fields are rejected, before any command work.
+#[test]
+fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    let other = window(&app, "auxiliary");
+    let session = bootstrap(&main).payload.session_id;
+    let commands = registered_commands();
+    assert_eq!(commands.len(), 21, "{commands:?}");
+    for command in &commands {
+        let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
+        assert!(
+            invoke(&other, command, payload.clone(), "tauri://localhost").is_err(),
+            "{command} accepted an auxiliary window"
+        );
+        assert!(
+            invoke(&main, command, payload, "https://untrusted.invalid").is_err(),
+            "{command} accepted a remote origin"
+        );
+        let newer = json!({"version":2,"requestId":"acl","payload":{"sessionId":session}});
+        assert_eq!(
+            invoke(&main, command, newer, "tauri://localhost").unwrap_err()["code"],
+            "UNSUPPORTED_VERSION",
+            "{command} version"
+        );
+        let extra =
+            json!({"version":1,"requestId":"acl","payload":{"sessionId":session},"extra":1});
+        assert_eq!(
+            invoke(&main, command, extra, "tauri://localhost").unwrap_err()["code"],
+            "INVALID_REQUEST",
+            "{command} unknown envelope field"
+        );
+    }
+}
+/// The five M005 commands with otherwise valid payloads still refuse a stale or forged session
+/// (security review "missing tests" 1); the key-file picker must not open for a forged session.
+#[test]
+fn ssh_and_secret_commands_refuse_forged_sessions() {
+    let (app, _journal) = app();
+    let main = window(&app, "main");
+    bootstrap(&main);
+    let target = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader"});
+    for (command, payload) in [
+        ("ssh_host_key", json!({"host":"bastion.internal","port":22})),
+        ("pick_ssh_key_file", json!({})),
+        ("cancel_connect", json!({"attemptId":"attempt_1"})),
+        (
+            "store_secret",
+            json!({"purpose":"database_password","target":target,"secret":"synthetic-secret"}),
+        ),
+        (
+            "delete_secret",
+            json!({"reference":"00000000-0000-4000-8000-000000000000"}),
+        ),
+    ] {
+        let mut payload = payload;
+        payload["sessionId"] = json!("forged_session");
+        let reply = invoke(
+            &main,
+            command,
+            json!({"version":1,"requestId":"forged","payload":payload}),
+            "tauri://localhost",
+        );
+        let error = reply.unwrap_err();
+        assert_eq!(error["code"], "FORBIDDEN", "{command}: {error}");
+        assert!(!error.to_string().contains("synthetic-secret"));
+    }
+}
