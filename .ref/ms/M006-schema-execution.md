@@ -1,6 +1,8 @@
 # M006 — Advanced SQL, schema metadata and integrity
 
 ## Status
+**Blocked — all unblocked work done (2026-11-16).** Schema/metadata/browse/CRUD half implemented and verified on real MySQL 8.4.6, MariaDB 11.4.8 and PostgreSQL 17.6 fixtures (record below). Live CRUD is reachable only with the read-write gate, which stays OFF (A15). Remaining criteria need decisions A1, A2, A6, A8, A15–A17 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+
 **In progress. Not complete; no acceptance criterion is signed off.** (Updated 2026-10-29.)
 
 - **Execution half: implemented locally, uncommitted.** This covers read-write jobs, scripts, multiple result sets, transaction leases, cancellation and outcomes. The user instructed that it not be committed before reconciliation. Builder evidence (MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6, SQLite; macOS ARM; debug build) is in `.ref/planning/m006-evidence/execution/`. The reconciliation review re-ran only the runtime suite (45 passed), the desktop lib + SQLite execution tests (6 + 1 passed) and `liveJobs.test.ts` (4 passed). The Docker fixtures, browser suite, lint/boundary checks and `contracts:check` were not re-run by the review.
@@ -77,3 +79,24 @@ Raw SQL can mutate session state; pool reset/discard must be proved. Engine canc
 
 
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
+
+## Acceptance record — 2026-11-16 (macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+Increments (all committed, not pushed):
+| Increment | Commits | Executed evidence |
+|---|---|---|
+| Live catalog + read-only Browse, MySQL/MariaDB | `0e58432`, `a1af4b5`, `a187ead`, `2cf6676` | Exact catalog/browse/count SQL pinned in `read_only.rs` validator tests; real TLS fixtures (`test:native-database`) both engines; MySQL 8 binary-charset catalog cells decoded (probe on MySQL 8.4.11/MariaDB 11.4.13). |
+| PostgreSQL catalog + Browse | `c711afd` | `current_schema` without parentheses; PKs from `pg_catalog` (visible to the SELECT-only reader); `CONCAT` filter; `test:native-postgres` passes (tables/views, PK, numeric(38,4), ENUM udt, `'fallback'::text`, quoted identifiers). |
+| Indexes and foreign keys | `50d72bb` | MySQL/MariaDB `STATISTICS` + `KEY_COLUMN_USAGE` LEFT JOIN `REFERENTIAL_CONSTRAINTS` (MariaDB hides rules from SELECT-only accounts: shown as *not visible*, probe-verified); PostgreSQL `pg_indexes.indexdef` + `pg_constraint` (composite keys listed in attribute order — documented limit); internal `"char"` decoded (`postgres.rs`). Both native fixtures pass with seeded `fk_child`. |
+| Live CRUD behind the gate | `c7f0463` | `liveMutations.ts`: PK-addressed single-row UPDATE/DELETE (`LIMIT 1` on MySQL family), INSERT omitting defaulted columns; `_utf8mb4 X'…'` / `E'…'` literals; binary columns and keyless tables read-only; 0 rows = conflict, never success. `test:execution` (gate-enabled test host) on all three engines: the exact generated statements affected 1/1/0/1 rows, stored `O'Brien \ é` byte-exact and DECIMAL exact, stale row = 0 rows. Browser: cell edit, conflict + retry, delete, insert, DDL refresh (simulated bridge). |
+| Metadata invalidation | `ff24b57` | Catalog and open table re-read after a job whose DDL statements ran and after transaction end; latest table choice wins. |
+| F-4 / F-5 | `b0e5786`, `ba2d19a` | `serve()` reaps finished forwards before the slot check; PostgreSQL timeout attribution by SQLSTATE 57014 + no StoneQL interrupt + elapsed ≥ server timeout (no localized message text). |
+| Journal real-process validation | `e20efb8` | `npm run test:journal-crash`: 40 SIGKILL restarts ×2 runs (252/249 unknown outcomes, 291/281 acknowledged, 16/13 open transactions at kill) — none lost or resurrected, open transactions listed, second process refused (`in_use`); sabotage (journal deleted) detected (12 lost). |
+
+| Criterion | Status |
+|---|---|
+| G1 owner-scoped handles/jobs/leases/caches; unauthorized refused | Verified (runtime/IPC/fixtures). Metadata cache is the renderer's per-profile workspace state; no native metadata cache exists (not needed by the implemented flows). |
+| G2 constraints authoritative, raw values unchanged, partial/unknown outcomes | Verified: CRUD uses server constraints (0-row conflict, failures keep job's own description); exact text/decimal round trips; lost-COMMIT n=50 and journal crash evidence. |
+| G3 object/index workflows on approved versions; multiple results; contracts | Index/FK listing and DDL through SQL verified; advanced object management (routines/triggers/events/materialized views live) deferred by D022 (approved). Version matrix approval A3. |
+| G4/G5 bounded results, cancel profile, no dirty connections, stale metadata cannot cross generations | Verified at characterization level (cancel p95 MySQL 72.6 / MariaDB 23.3 / PostgreSQL 55.1 ms, 100 fault cycles, browse/catalog generation guards). Limits approval A16; release-build measurements need A1/A2. |
+| Read-write enabled in builds | Blocked (A15): `READ_WRITE_SQL_ENABLED = false`. |
+| Physical Cmd+R / context-menu / Web Inspector reload with open work | Blocked (A1): harness `apps/desktop/src-tauri/examples/journal_window.rs` exists, not run. |
