@@ -126,14 +126,13 @@ pub async fn ssh_host_key<R: Runtime>(
             .lock()
             .expect("pending host keys lock");
         pending.retain(|_, (_, at)| at.elapsed() < PENDING_SCAN_LIFETIME);
-        if pending.len() >= MAX_PENDING_SCANS {
-            if let Some(oldest) = pending
+        if pending.len() >= MAX_PENDING_SCANS
+            && let Some(oldest) = pending
                 .iter()
                 .min_by_key(|(_, (_, at))| *at)
                 .map(|(endpoint, _)| endpoint.clone())
-            {
-                pending.remove(&oldest);
-            }
+        {
+            pending.remove(&oldest);
         }
         pending.insert(
             (

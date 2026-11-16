@@ -355,11 +355,18 @@ pub(crate) mod tests {
         let store_impl = MemoryStore::default();
         let saved = ssh_password_scope(&bastion(), "SHA256:A");
         let reference = store(&store_impl, saved.clone(), "ssh-secret".into()).unwrap();
-        assert_eq!(resolve(&store_impl, &reference, &saved).unwrap(), "ssh-secret");
         assert_eq!(
-            resolve(&store_impl, &reference, &ssh_password_scope(&bastion(), "SHA256:B"))
-                .unwrap_err()
-                .code,
+            resolve(&store_impl, &reference, &saved).unwrap(),
+            "ssh-secret"
+        );
+        assert_eq!(
+            resolve(
+                &store_impl,
+                &reference,
+                &ssh_password_scope(&bastion(), "SHA256:B")
+            )
+            .unwrap_err()
+            .code,
             stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
         );
     }

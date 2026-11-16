@@ -37,6 +37,15 @@ impl SecretStore for RecordingStore {
 #[test]
 fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() {
     let store = Arc::new(RecordingStore::default());
+    // Enrolled natively, so the read-only control reaches the Keychain step.
+    let host_keys = Arc::new(stoneql_desktop::MemoryHostKeyStore::default());
+    stoneql_desktop::HostKeyStore::trust(
+        host_keys.as_ref(),
+        "192.0.2.1",
+        9,
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+    )
+    .unwrap();
     let journal = common::TempJournal::new();
     let app = stoneql_desktop::app_builder_with(
         mock_builder(),
@@ -48,9 +57,7 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
             read_write_sql: true,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
-            host_keys: Some(std::sync::Arc::new(
-                stoneql_desktop::MemoryHostKeyStore::default(),
-            )),
+            host_keys: Some(host_keys),
         },
     )
     .build(tauri::generate_context!())
@@ -71,7 +78,7 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
         let mut payload = json!({"sessionId": session, "engine": engine, "host": "db.example", "port": 3306, "username": "app", "password": "", "passwordRef": reference, "database": "app", "rootCertificatePem": null, "access": access});
         if ssh {
             // 192.0.2.1:9 (TEST-NET-1) never answers: any network attempt would stall.
-            payload["ssh"] = json!({"host": "192.0.2.1", "port": 9, "username": "deploy", "hostKey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "auth": {"method": "password", "passwordRef": reference}});
+            payload["ssh"] = json!({"host": "192.0.2.1", "port": 9, "username": "deploy", "auth": {"method": "password", "passwordRef": reference}});
         }
         payload
     };

@@ -317,10 +317,8 @@ pub(crate) struct Tunnel {
 }
 
 /// Resolves once the SSH session task has ended (its handler, the only sender, was dropped).
-fn session_ended(
-    mut alive: tokio::sync::watch::Receiver<()>,
-) -> impl std::future::Future<Output = ()> + Send + 'static {
-    async move { while alive.changed().await.is_ok() {} }
+async fn session_ended(mut alive: tokio::sync::watch::Receiver<()>) {
+    while alive.changed().await.is_ok() {}
 }
 
 /// Private per-tunnel directory (mode 0700) holding exactly one listening socket.
@@ -453,6 +451,9 @@ fn serve(
                 () = &mut ended => break,
                 accepted = listener.accept() => {
                     let Ok((stream, _)) = accepted else { break };
+                    // F-4: finished forwards still count in `len()` until reaped; reap them first
+                    // so a free slot is never refused (select! picks branches at random).
+                    while forwards.try_join_next().is_some() {}
                     if forwards.len() >= MAX_FORWARDS || session.is_closed() {
                         continue;
                     }

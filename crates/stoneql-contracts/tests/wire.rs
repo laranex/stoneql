@@ -223,7 +223,7 @@ fn ssh_requests_are_strict_and_carry_references_or_grants_never_key_material() {
     let mut tunnel = direct.clone();
     tunnel["payload"]["passwordRef"] = json!("00000000-0000-4000-8000-000000000001");
     tunnel["payload"]["attemptId"] = json!("attempt_1");
-    tunnel["payload"]["ssh"] = json!({"host":"bastion","port":22,"username":"deploy","hostKey":"ssh-ed25519 AAAA","auth":{"method":"key_file","grant":"g","passphraseRef":"r"}});
+    tunnel["payload"]["ssh"] = json!({"host":"bastion","port":22,"username":"deploy","auth":{"method":"key_file","grant":"g","passphraseRef":"r"}});
     let decoded: Envelope<DirectConnectionRequest> = decode_envelope(&tunnel.to_string()).unwrap();
     assert!(matches!(
         decoded.payload.ssh.as_ref().unwrap().auth,
@@ -236,7 +236,9 @@ fn ssh_requests_are_strict_and_carry_references_or_grants_never_key_material() {
             json!("-----BEGIN OPENSSH PRIVATE KEY-----"),
         ),
         ("/payload/ssh/auth/path", json!("/Users/me/.ssh/id_ed25519")),
+        // F-01: the trusted host key never comes from the renderer, in any form.
         ("/payload/ssh/hostKey", json!(null)),
+        ("/payload/ssh/hostKey", json!("ssh-ed25519 AAAA")),
         ("/payload/ssh/auth/passphrase", json!(null)),
         ("/payload/ssh/forwardAgent", json!(true)),
     ] {
