@@ -38,7 +38,7 @@
     "rust:vendor": "node tools/check-sqlx-vendor.mjs",
     "test:native-database": "node tools/test-connection-lifecycle.mjs --native-ipc",
     "test:native-postgres": "node tools/test-postgres-fixture.mjs",
-    "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile",
+    "test:resources": "node tools/test-connection-lifecycle.mjs --resource-profile && node tools/test-postgres-fixture.mjs --resource-profile",
     "test:ssh": "node tools/test-ssh-fixture.mjs",
     "test:execution": "node tools/test-connection-lifecycle.mjs --execution && node tools/test-postgres-fixture.mjs --execution"
   }

@@ -1,0 +1,77 @@
+diff --color -ruN --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/connection/stream.rs b/src/connection/stream.rs
+--- a/src/connection/stream.rs	2026-11-16 11:26:17
++++ b/src/connection/stream.rs	2026-11-16 11:26:17
+@@ -38,6 +38,8 @@
+     pub(crate) parameter_statuses: BTreeMap<String, String>,
+ 
+     pub(crate) server_version_num: Option<u32>,
++
++    max_receive_message_size: Option<std::num::NonZeroUsize>,
+ }
+ 
+ impl PgStream {
+@@ -54,6 +56,7 @@
+             notifications: None,
+             parameter_statuses: BTreeMap::default(),
+             server_version_num: None,
++            max_receive_message_size: options.max_receive_message_size,
+         })
+     }
+ 
+@@ -79,6 +82,7 @@
+     pub(crate) async fn recv_unchecked(&mut self) -> Result<ReceivedMessage, Error> {
+         // NOTE: to not break everything, this should be cancel-safe;
+         // DO NOT modify `buf` unless a full message has been read
++        let limit = self.max_receive_message_size;
+         self.inner
+             .try_read(|buf| {
+                 // all packets in postgres start with a 5-byte header
+@@ -90,6 +94,14 @@
+                 let format = BackendMessageFormat::try_from_u8(header.get_u8())?;
+ 
+                 let message_len = header.get_u32() as usize;
++
++                // The length counts its own 4 bytes; a shorter value would panic below.
++                if message_len < 4 {
++                    return Err(err_protocol!("invalid backend message length: {message_len}"));
++                }
++                if limit.is_some_and(|limit| message_len > limit.get()) {
++                    return Err(err_protocol!("receive message exceeds configured byte limit"));
++                }
+ 
+                 let expected_len = message_len
+                     .checked_add(1)
+diff --color -ruN --exclude=.cargo-ok --exclude=.cargo_vcs_info.json a/src/options/mod.rs b/src/options/mod.rs
+--- a/src/options/mod.rs	2026-11-16 11:26:17
++++ b/src/options/mod.rs	2026-11-16 11:26:17
+@@ -30,6 +30,7 @@
+     pub(crate) log_settings: LogSettings,
+     pub(crate) extra_float_digits: Option<Cow<'static, str>>,
+     pub(crate) options: Option<String>,
++    pub(crate) max_receive_message_size: Option<std::num::NonZeroUsize>,
+ }
+ 
+ impl Default for PgConnectOptions {
+@@ -39,6 +40,14 @@
+ }
+ 
+ impl PgConnectOptions {
++    /// Maximum backend message bytes (the length field, which counts itself), checked from the
++    /// 5-byte header before any payload is buffered. An oversized message invalidates the
++    /// connection; callers must discard it. None (the upstream default) keeps upstream behavior.
++    pub fn max_receive_message_size(mut self, bytes: std::num::NonZeroUsize) -> Self {
++        self.max_receive_message_size = Some(bytes);
++        self
++    }
++
+     /// Create a default set of connection options populated from the current environment.
+     ///
+     /// This behaves as if parsed from the connection string `postgres://`
+@@ -96,6 +105,7 @@
+             application_name: var("PGAPPNAME").ok(),
+             extra_float_digits: Some("2".into()),
+             log_settings: Default::default(),
++            max_receive_message_size: None,
+             options: var("PGOPTIONS").ok(),
+         }
+     }

@@ -4,14 +4,18 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, arch, release, cpus, totalmem } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
+import { parseMaximumRss } from './resource-report.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 // `--execution` runs the M006 read-write harness (examples/execution.rs) instead of IPC checks.
 const executionEvaluation = process.argv[2] === '--execution';
-if (process.argv.length > (executionEvaluation ? 3 : 2)) throw Error('Unknown fixture option');
+// `--resource-profile` runs the shared 100,000-row resource profile (examples/resources.rs).
+const resourceEvaluation = process.argv[2] === '--resource-profile';
+if (process.argv.length > (executionEvaluation || resourceEvaluation ? 3 : 2)) throw Error('Unknown fixture option');
+if (resourceEvaluation && !['darwin', 'linux'].includes(process.platform)) throw Error('Resource profiling requires macOS or Linux');
 let binary;
 function run(command, args, env = base) {
   // The execution harness waits for a real lease idle expiry and runs 200+ relayed lease cycles.
@@ -26,15 +30,17 @@ function run(command, args, env = base) {
   return result.stdout.trim();
 }
 assertLocalFixtureDocker(base, context => run('docker', ['context', 'inspect', ...(context ? [context] : []), '--format', '{{.Endpoints.docker.Host}}']));
-if (executionEvaluation) {
-  run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', 'execution']);
-  binary = resolve(root, 'target/debug/examples/execution');
+if (executionEvaluation || resourceEvaluation) {
+  const example = executionEvaluation ? 'execution' : 'resources';
+  run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', example]);
+  binary = resolve(root, `target/debug/examples/${example}`);
 } else {
   const artifacts = run('cargo', ['test', '--locked', '-p', 'stoneql-desktop', '--features', 'custom-protocol', '--test', 'live_postgres', '--no-run', '--message-format=json']);
   binary = artifacts.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === 'live_postgres' && message.executable)?.executable;
 }
 if (!binary) throw Error('PostgreSQL fixture test binary missing');
 const output = resolve(root, executionEvaluation ? 'artifacts/m006' : 'artifacts/m004');
+const mode = executionEvaluation ? 'execution' : resourceEvaluation ? 'resource' : 'native';
 mkdirSync(output, { recursive: true });
 const temp = mkdtempSync(join(tmpdir(), 'stoneql-postgres-'));
 const tls = join(temp, 'tls');
@@ -102,6 +108,11 @@ GRANT USAGE ON SCHEMA public TO stoneql_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_reader;
 GRANT USAGE ON SEQUENCE trust_seq TO stoneql_reader;
 `);
+  // Created before 001's grants so the reader can SELECT it; 1 KiB payloads like the MySQL profile.
+  if (resourceEvaluation) writeFileSync(join(init, '000-resource.sql'), `CREATE TABLE resource_rows(id int PRIMARY KEY, payload varchar(1024) NOT NULL);
+INSERT INTO resource_rows SELECT n, repeat('r', 1024) FROM generate_series(1, 100000) AS n;
+ANALYZE resource_rows;
+`);
   if (executionEvaluation) writeFileSync(join(init, '002-execution.sql'), `CREATE ROLE stoneql_writer LOGIN PASSWORD '${password}';
 GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_writer;
 GRANT USAGE, CREATE ON SCHEMA public TO stoneql_writer;
@@ -151,6 +162,15 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
     report.image = image;
     writeFileSync(join(output, 'execution-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
     console.log(`postgresql: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)`);
+  } else if (resourceEvaluation) {
+    const measured = spawnSync('/usr/bin/time', [process.platform === 'darwin' ? '-l' : '-v', binary], { cwd: root, env: { ...env, STONEQL_LIFECYCLE_ENGINE: 'postgresql' }, encoding: 'utf8', timeout: 240_000 });
+    if (measured.status !== 0 || measured.error) throw Error('Resource fixture execution failed; credentials and raw errors withheld');
+    const report = JSON.parse(measured.stdout.trim());
+    report.processMaxRssBytes = parseMaximumRss(measured.stderr, process.platform);
+    report.machine = { platform: process.platform, arch: arch(), osRelease: release(), cpu: cpus()[0]?.model, logicalCpus: cpus().length, totalMemoryBytes: totalmem() };
+    report.image = image;
+    writeFileSync(join(output, 'resource-postgresql.json'), JSON.stringify(report, null, 2) + '\n');
+    console.log(`postgresql: resource and metadata profile passed (p95 ${(report.p95Us / 1000).toFixed(3)} ms, max RSS ${(report.processMaxRssBytes / 1048576).toFixed(3)} MiB)`);
   } else {
     const result = run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
     const report = JSON.parse(result.split('\n').find(line => line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null');
@@ -176,7 +196,7 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
       rmSync(temp, { recursive: true, force: true });
     } finally {
       cleanup.temporaryRemoved = !existsSync(temp);
-      writeFileSync(join(output, `${executionEvaluation ? 'execution' : 'native'}-cleanup-postgresql.json`), JSON.stringify(cleanup, null, 2) + '\n');
+      writeFileSync(join(output, `${mode}-cleanup-postgresql.json`), JSON.stringify(cleanup, null, 2) + '\n');
     }
   }
 }

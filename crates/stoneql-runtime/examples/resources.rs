@@ -1,8 +1,9 @@
 //! Owned disposable resource profile, not a production benchmark or arbitrary-target client.
 use serde_json::json;
 use sqlx::{
-    ConnectOptions, Connection, MySqlConnection, Row,
+    ConnectOptions, Connection, MySqlConnection, PgConnection, Row,
     mysql::{MySqlConnectOptions, MySqlSslMode},
+    postgres::{PgConnectOptions, PgSslMode},
 };
 use std::{
     env,
@@ -31,10 +32,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|_| "resource profile deadline exceeded")?
 }
+/// The fixture's own verified-TLS observer: ownership marker, index plan and session cleanup.
+enum Observer {
+    MySql(MySqlConnection),
+    Postgres(PgConnection),
+}
+impl Observer {
+    async fn scalar_i64(&mut self, sql: &'static str) -> Result<i64, sqlx::Error> {
+        match self {
+            Self::MySql(c) => sqlx::query_scalar(sql).fetch_one(c).await,
+            Self::Postgres(c) => sqlx::query_scalar(sql).fetch_one(c).await,
+        }
+    }
+    async fn marker(&mut self) -> Result<String, sqlx::Error> {
+        let sql = "SELECT id FROM stoneql_fixture_marker";
+        match self {
+            Self::MySql(c) => sqlx::query_scalar(sql).fetch_one(c).await,
+            Self::Postgres(c) => sqlx::query_scalar(sql).fetch_one(c).await,
+        }
+    }
+    /// The bounded page query must use the primary-key index.
+    async fn primary_plan(&mut self) -> Result<bool, sqlx::Error> {
+        let sql =
+            "EXPLAIN SELECT id,payload FROM resource_rows WHERE id >= 1 AND id < 201 ORDER BY id";
+        Ok(match self {
+            Self::MySql(c) => {
+                let key: Option<String> = sqlx::query(sql).fetch_one(c).await?.try_get("key")?;
+                key.as_deref() == Some("PRIMARY")
+            }
+            Self::Postgres(c) => {
+                let lines: Vec<String> = sqlx::query_scalar(sql).fetch_all(c).await?;
+                lines
+                    .iter()
+                    .any(|line| line.contains("Index Scan using resource_rows_pkey"))
+            }
+        })
+    }
+    async fn reader_sessions(&mut self) -> Result<i64, sqlx::Error> {
+        match self {
+            Self::MySql(_) => {
+                self.scalar_i64("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='stoneql_reader'")
+                    .await
+            }
+            Self::Postgres(_) => {
+                self.scalar_i64("SELECT COUNT(*) FROM pg_stat_activity WHERE usename='stoneql_reader'")
+                    .await
+            }
+        }
+    }
+    async fn close(self) -> Result<(), sqlx::Error> {
+        match self {
+            Self::MySql(c) => c.close().await,
+            Self::Postgres(c) => c.close().await,
+        }
+    }
+}
 async fn profile() -> Result<(), Box<dyn std::error::Error>> {
     let engine = match env::var("STONEQL_LIFECYCLE_ENGINE")?.as_str() {
         "mysql" => Engine::MySql,
         "mariadb" => Engine::MariaDb,
+        "postgresql" => Engine::PostgreSql,
         _ => return Err("owning fixture engine required".into()),
     };
     let port: u16 = env::var("STONEQL_LIFECYCLE_PORT")?.parse()?;
@@ -42,40 +99,54 @@ async fn profile() -> Result<(), Box<dyn std::error::Error>> {
     let marker = env::var("STONEQL_SPIKE_FIXTURE_ID")?;
     uuid::Uuid::parse_str(&marker).map_err(|_| "owning marker required")?;
     let ca = std::fs::read(env::var("STONEQL_LIFECYCLE_CA")?)?;
-    let options = MySqlConnectOptions::new()
-        .host("127.0.0.1")
-        .port(port)
-        .username("stoneql_reader")
-        .password(&password)
-        .database("stoneql_m001_fixture")
-        .ssl_mode(MySqlSslMode::VerifyIdentity)
-        .ssl_ca_from_pem(ca.clone())
-        .disable_statement_logging();
-    let mut observer = MySqlConnection::connect_with(&options)
-        .await
-        .map_err(|_| "fixture TLS observer failed")?;
-    let actual: String = sqlx::query_scalar("SELECT id FROM stoneql_fixture_marker")
-        .fetch_one(&mut observer)
+    let mut observer = if engine == Engine::PostgreSql {
+        let options = PgConnectOptions::new_without_pgpass()
+            .host("127.0.0.1")
+            .port(port)
+            .username("stoneql_reader")
+            .password(&password)
+            .database("stoneql_m001_fixture")
+            .ssl_mode(PgSslMode::VerifyFull)
+            .ssl_root_cert_from_pem(ca.clone())
+            .disable_statement_logging();
+        Observer::Postgres(
+            PgConnection::connect_with(&options)
+                .await
+                .map_err(|_| "fixture TLS observer failed")?,
+        )
+    } else {
+        let options = MySqlConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port)
+            .username("stoneql_reader")
+            .password(&password)
+            .database("stoneql_m001_fixture")
+            .ssl_mode(MySqlSslMode::VerifyIdentity)
+            .ssl_ca_from_pem(ca.clone())
+            .disable_statement_logging();
+        Observer::MySql(
+            MySqlConnection::connect_with(&options)
+                .await
+                .map_err(|_| "fixture TLS observer failed")?,
+        )
+    };
+    let actual = observer
+        .marker()
         .await
         .map_err(|_| "fixture marker unavailable")?;
     if marker != actual {
         return Err("fixture ownership mismatch".into());
     }
-    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM resource_rows")
-        .fetch_one(&mut observer)
+    let rows = observer
+        .scalar_i64("SELECT COUNT(*) FROM resource_rows")
         .await
         .map_err(|_| "resource fixture unavailable")?;
     assert_eq!(rows, 100000);
-    let plan = sqlx::query(
-        "EXPLAIN SELECT id,payload FROM resource_rows WHERE id >= 1 AND id < 201 ORDER BY id",
-    )
-    .fetch_one(&mut observer)
-    .await
-    .map_err(|_| "fixture index inspection failed")?;
-    let key: Option<String> = plan
-        .try_get("key")
-        .map_err(|_| "fixture index metadata unavailable")?;
-    assert_eq!(key.as_deref(), Some("PRIMARY"));
+    let indexed = observer
+        .primary_plan()
+        .await
+        .map_err(|_| "fixture index inspection failed")?;
+    assert!(indexed, "bounded page query must use the primary-key index");
 
     let registry = Connections::new(8, Duration::from_secs(3), Duration::from_secs(120))?;
     let owner = OwnerId::new();
@@ -122,7 +193,12 @@ async fn profile() -> Result<(), Box<dyn std::error::Error>> {
         samples.push(start.elapsed().as_micros() as u64);
     }
     let mut metadata = Vec::new();
-    for count in [16, 128, 512, 2048] {
+    let widths: &[usize] = if engine == Engine::PostgreSql {
+        &[16, 128, 512, 1600] // PostgreSQL target lists hold at most 1664 entries.
+    } else {
+        &[16, 128, 512, 2048]
+    };
+    for &count in widths {
         let projection = (0..count)
             .map(|n| format!("id AS c{n}"))
             .collect::<Vec<_>>()
@@ -198,12 +274,10 @@ async fn profile() -> Result<(), Box<dyn std::error::Error>> {
     registry.shutdown().await;
     let start = Instant::now();
     loop {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='stoneql_reader'",
-        )
-        .fetch_one(&mut observer)
-        .await
-        .map_err(|_| "owned cleanup observation failed")?;
+        let count = observer
+            .reader_sessions()
+            .await
+            .map_err(|_| "owned cleanup observation failed")?;
         if count == 1 {
             break;
         }

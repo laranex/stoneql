@@ -1,0 +1,18 @@
+[package]
+name = "stoneql-pg-message-limit-evaluation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.1"
+license = "MIT"
+publish = false
+
+# Disposable evaluation harness. driver/ is regenerated from the registry sqlx-postgres 0.9.0
+# source plus message-limit.patch by prepare.mjs and is never committed.
+[workspace]
+
+[dependencies]
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres"] }
+tokio = { version = "=1.54.1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+
+[patch.crates-io]
+sqlx-postgres = { path = "driver" }
