@@ -76,6 +76,7 @@ import RawTextarea from './components/RawTextarea.vue';
 import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import LiveExport from './components/LiveExport.vue';
+import { liveCsvImportPlan, MAX_IMPORT_BYTES } from './services/liveImport';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
 import { liveCatalogSupported, ddlStatements } from './services/liveSchema';
@@ -565,7 +566,7 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
-  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(view) || (view==='Insert' && !isReadOnly.value))))) return;
+  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(view) || (['Insert','Import'].includes(view) && !isReadOnly.value))))) return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -590,7 +591,7 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (tab.name==='Insert' && !isReadOnly.value))));
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -1144,10 +1145,46 @@ async function progress() {
   transferBusy.value = false;
 }
 const importNotice = ref(''), importError = ref('');
+/** Live CSV import: all batches in one transaction; any failure rolls the whole import back. */
+async function importLiveCsv(file: File, target: NonNullable<typeof table.value>) {
+  if (file.size > MAX_IMPORT_BYTES) { importError.value = `Choose a file up to ${MAX_IMPORT_BYTES / 1048576} MiB.`; return; }
+  const profile = store.activeId, engine = store.connection.engine;
+  if (store.liveSessions[profile]?.lease) { importError.value = 'Commit or roll back the open transaction first; an import runs in its own transaction.'; return; }
+  let plan;
+  try { plan = liveCsvImportPlan(engine, target.name, target.columns, await file.text()); }
+  catch (error) { importError.value = (error as Error).message; return; }
+  if (!plan.records) { importNotice.value = 'The file has no records; nothing was imported.'; return; }
+  try { await store.beginLiveTransaction(profile); }
+  catch (error) { importError.value = (error as Error).message; return; }
+  let failure = '';
+  for (const batch of plan.batches) {
+    try {
+      const job = await store.runLiveJob(profile, batch.sql);
+      if (job.outcome !== 'succeeded') { failure = `Records ${batch.first}–${batch.last}: ${describeJob(job, true).text}`; break; }
+    } catch (error) { failure = `Records ${batch.first}–${batch.last}: ${(error as Error).message}`; break; }
+  }
+  try {
+    if (failure) {
+      const end = await store.endLiveTransaction(profile, 'rollback');
+      importError.value = `${failure} Import rolled back: ${describeTransactionEnd(end, 'rollback').text}`;
+      return;
+    }
+    const notice = describeTransactionEnd(await store.endLiveTransaction(profile, 'commit'), 'commit');
+    if (notice.kind === 'success') importNotice.value = `${plan.records} records imported into ${target.name} in one transaction.`;
+    else importError.value = notice.text;
+  } catch (error) {
+    importError.value = `${failure ? `${failure} ` : ''}${(error as Error).message}`;
+  } finally { void loadLiveBrowse(); }
+}
 async function importData() {
   importNotice.value = ''; importError.value = '';
   const file = importFile.value, target = table.value, database = store.database, engine = store.connection.engine;
   if (!file || !target || !database) { importError.value = 'Choose a file and target table first.'; return; }
+  if (isLive.value) {
+    if (importFormat.value === 'SQL') { importError.value = 'Live SQL import is not available yet; run the statements from the SQL tab.'; return; }
+    await importLiveCsv(file, target);
+    return;
+  }
   if (file.size > 2_000_000) { importError.value = 'Choose a file smaller than 2 MB.'; return; }
   const format = importFormat.value;
   await progress();

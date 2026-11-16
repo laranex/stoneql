@@ -58,7 +58,7 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
     const tree = page.locator('.table-tree button');
     await expect(tree).toHaveText([/accounts/, /active_accounts\s*view/]);
     await tree.filter({ hasText: /^accounts/ }).click();
-    await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['Browse', 'Structure', 'SQL']);
+    await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['Browse', 'Structure', 'SQL', 'Export']);
     await expect(page.getByText('9007199254740993', { exact: true })).toBeVisible();
     await expect(page.locator('.browse-content')).toContainText('(40 total · live, read-only)');
     await expect(page.locator('.browse-content .row-actions, .browse-content .check-cell')).toHaveCount(0);

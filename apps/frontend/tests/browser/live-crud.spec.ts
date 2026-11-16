@@ -20,8 +20,14 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
       else if (command === 'connect_direct') payload = { handle: '00000000-0000-0000-0000-000000000009', engineVersion: 'MySQL fixture 8.4.6', database: p.database, expiresAfterSeconds: 3600, access: p.access ?? 'read_only' };
       else if (command === 'database_status') payload = { connected: true };
       else if (command === 'disconnect_database') payload = { connected: false };
-      else if (command === 'submit_job') { w.jobs.push(p.sql); if (/^CREATE TABLE audit_log/.test(p.sql)) tables.push(['audit_log', 'BASE TABLE']); payload = { jobId: `job_${w.jobs.length}`, statementCount: 1 }; }
-      else if (command === 'fetch_job') payload = { jobId: p.jobId, state: 'finished', outcome: 'succeeded', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [{ index: 0, status: 'succeeded', inTransaction: false, affectedRows: w.affected, resultSets: 0, failure: null, resultsWithheld: false }], batch: null, lease: null, done: true };
+      else if (command === 'begin_transaction') { w.leases = (w.leases ?? 0) + 1; payload = { leaseId: `lease_${w.leases}`, idleSeconds: 300 }; }
+      else if (command === 'end_transaction') { w.ends = [...(w.ends ?? []), p.action]; payload = { outcome: p.action === 'commit' ? 'committed' : 'rolled_back', reason: 'requested', commitSent: p.action === 'commit', rollbackSent: p.action === 'rollback' }; }
+      else if (command === 'submit_job') { w.jobs.push(p.sql); w.leased = [...(w.leased ?? []), p.leaseId ?? null]; if (/^CREATE TABLE audit_log/.test(p.sql)) tables.push(['audit_log', 'BASE TABLE']); payload = { jobId: `job_${w.jobs.length}`, statementCount: 1 }; }
+      else if (command === 'fetch_job') {
+        const failed = w.failNext; w.failNext = false;
+        const inLease = w.leased.at(-1) !== null;
+        payload = { jobId: p.jobId, state: 'finished', outcome: failed ? 'failed' : 'succeeded', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [{ index: 0, status: failed ? 'failed' : 'succeeded', inTransaction: inLease, affectedRows: w.affected, resultSets: 0, failure: failed ? { constraint: 'unique', sqlState: '23000' } : null, resultsWithheld: false }], batch: null, lease: inLease ? { leaseId: w.leased.at(-1), state: failed ? 'rollback_only' : 'active' } : null, done: true };
+      }
       else if (command === 'read_only_query') {
         const sql: string = p.sql;
         if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], tables);
@@ -43,7 +49,7 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await expect(page.getByTestId('live-access')).toHaveText('Read-write');
   await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
   await expect(page.getByTestId('live-read-only')).toHaveCount(0);
-  await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['Browse', 'Structure', 'SQL', 'Insert']);
+  await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['Browse', 'Structure', 'SQL', 'Insert', 'Export', 'Import']);
   const jobs = () => page.evaluate(() => (window as any).jobs as string[]);
 
   // Cell edit: one UPDATE addressed by the exact BIGINT UNSIGNED key, non-ASCII text exact.
@@ -86,6 +92,20 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await expect(page.getByText('1 row inserted.')).toBeVisible();
   expect((await jobs()).at(-1)).toBe('INSERT INTO `accounts` () VALUES ();');
   expect((await jobs()).length).toBe(6);
+
+  // CSV import: one transaction; the batch runs inside the lease and is committed.
+  await page.getByRole('tab', { name: 'Import', exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles({ name: 'accounts.csv', mimeType: 'text/csv', buffer: Buffer.from('"name"\n"Lin"\nNULL\n""\n') });
+  await page.getByRole('button', { name: /^Import/ }).last().click();
+  await expect(page.getByText('3 records imported into accounts in one transaction.')).toBeVisible();
+  expect((await jobs()).at(-1)).toBe("INSERT INTO `accounts` (`name`) VALUES\n(_utf8mb4 X'4c696e'),\n(NULL),\n(_utf8mb4 X'');");
+  expect(await page.evaluate(() => [(window as any).leased.at(-1), (window as any).ends.at(-1)])).toEqual(['lease_1', 'commit']);
+  // A rejected batch rolls the whole import back and names the records.
+  await page.evaluate(() => { (window as any).failNext = true; });
+  await page.locator('input[type="file"]').setInputFiles({ name: 'more.csv', mimeType: 'text/csv', buffer: Buffer.from('"name"\n"dup"\n') });
+  await page.getByRole('button', { name: /^Import/ }).last().click();
+  await expect(page.getByText(/Records 2–2: The database rejected statement 1 of 1.*Import rolled back/)).toBeVisible();
+  expect(await page.evaluate(() => (window as any).ends.at(-1))).toBe('rollback');
 
   // Metadata invalidation: a schema statement run from the SQL tab re-reads the catalog.
   await page.getByRole('tab', { name: 'SQL', exact: true }).click();
