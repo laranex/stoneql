@@ -48,7 +48,8 @@ export async function openLive(connection: Connection, attemptId?: string, acces
     return nativeDatabase<LiveConnection>('connect_sqlite', { grant: connection.sqliteGrant, ...mode });
   }
   const ssh = sshTunnel(connection);
-  return nativeDatabase<LiveConnection>('connect_direct', {
+  try {
+    return await nativeDatabase<LiveConnection>('connect_direct', {
     engine: networkEngines[connection.engine], host: connection.host, port: connection.port,
     username: connection.user, password: connection.password || '', database: connection.database,
     rootCertificatePem: connection.rootCertificatePem || null,
@@ -56,7 +57,12 @@ export async function openLive(connection: Connection, attemptId?: string, acces
     ...(ssh ? { ssh } : {}),
     ...(attemptId ? { attemptId } : {}),
     ...mode,
-  });
+    });
+  } catch (error) {
+    // F-02: the renderer gave up; ask the host to stop the attempt too (best effort, once).
+    if (attemptId && error instanceof NativeOperationError && error.code === 'DEADLINE_EXCEEDED') await cancelConnect(attemptId).catch(() => undefined);
+    throw error;
+  }
 }
 export const closeLive = (handle: string) => nativeDatabase<LiveConnectionStatus>('disconnect_database',{handle});
 export const liveStatus = (handle: string) => nativeDatabase<LiveConnectionStatus>('database_status',{handle});

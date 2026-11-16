@@ -8,13 +8,16 @@ function invokerFrom(global: unknown): NativeInvoker | undefined {
   const native = (global as { __TAURI__?: { core?: NativeInvoker } }).__TAURI__?.core;
   return typeof native?.invoke === 'function' ? native : undefined;
 }
-async function call<T, P>(invoker: NativeInvoker, command: string, payload: P, timeoutMs = 2000): Promise<T> {
+/** `onLate` receives a reply that arrives after the timeout already failed the call. */
+async function call<T, P>(invoker: NativeInvoker, command: string, payload: P, timeoutMs = 2000, onLate?: (payload: T) => void): Promise<T> {
   const request: Envelope<P> = { version: 1, requestId: `desktop_${++sequence}`, payload };
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined, timedOut = false;
+  const invoked = invoker.invoke<Envelope<T>>(command, { message: JSON.stringify(request) });
+  if (onLate) invoked.then((late) => { if (timedOut && late?.version === 1 && late.requestId === request.requestId) onLate(late.payload); }, () => undefined);
   try {
     const reply = await Promise.race([
-      invoker.invoke<Envelope<T>>(command, { message: JSON.stringify(request) }),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Native host timeout')), timeoutMs); }),
+      invoked,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => { timedOut = true; reject(new Error('Native host timeout')); }, timeoutMs); }),
     ]);
     if (reply.version !== 1 || reply.requestId !== request.requestId) throw new Error('Native protocol mismatch');
     return reply.payload;
@@ -91,12 +94,31 @@ const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOME
  */
 export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000 };
 export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome';
+/** Proposed (M005 T2): above the native 60 s secret deadline, so the host answers first. */
+export const SECRET_CONNECT_WAIT_MS = 75_000;
+/** True when connecting resolves a saved reference natively (a Keychain prompt may appear). */
+function usesSavedSecret(payload: Record<string, unknown>): boolean {
+  const auth = (payload.ssh as { auth?: Record<string, unknown> } | undefined)?.auth;
+  return !!(payload.passwordRef || auth?.passwordRef || auth?.passphraseRef);
+}
+export function nativeWaitFor(command: NativeDatabaseCommand, payload: Record<string, unknown>): number {
+  // Native pickers and the OS credential store may wait for the user; database work is bounded.
+  if (['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret'].includes(command)) return 120_000;
+  if (command === 'connect_direct' && usesSavedSecret(payload)) return SECRET_CONNECT_WAIT_MS;
+  return nativeWaitMs[command] ?? 8000;
+}
 export async function nativeDatabase<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
+  const invoker = activeInvoker, sessionId = current.info.sessionId;
+  // F-02: a connect that succeeds after the renderer stopped waiting is closed at once.
+  const closeLate = command === 'connect_direct' || command === 'connect_sqlite'
+    ? (late: T) => {
+      const handle = (late as { handle?: unknown })?.handle;
+      if (typeof handle === 'string') void call(invoker, 'disconnect_database', { handle, sessionId }, 20_000).catch(() => undefined);
+    }
+    : undefined;
   try {
-    // Native pickers and the OS credential store may wait for the user; database work is bounded.
-    const interactive = ['pick_sqlite_file','pick_ssh_key_file','store_secret','delete_secret'].includes(command);
-    return await call<T,Record<string,unknown>>(activeInvoker, command, {...payload,sessionId:current.info.sessionId}, interactive ? 120_000 : nativeWaitMs[command] ?? 8000);
+    return await call<T,Record<string,unknown>>(invoker, command, {...payload,sessionId}, nativeWaitFor(command, payload), closeLate);
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : error instanceof Error && error.message === 'Native host timeout' ? 'DEADLINE_EXCEEDED' : 'INTERNAL';
     const hostMessage = hostMessages.has(code) && error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : undefined;
