@@ -44,3 +44,12 @@ test('success is claimed only for exactly one affected row; conflicts and unknow
   assert.match(liveMutationOutcome(job('unknown', '0', 'unknown'), 'updated').text, /Outcome unknown/);
   assert.match(liveMutationOutcome(job('succeeded', '2'), 'deleted').text, /expected exactly one/);
 });
+test('renderer literals match the vectors shared with the native exporter', async () => {
+  const { readFileSync } = await import('node:fs');
+  const vectors = JSON.parse(readFileSync(new URL('../../../crates/stoneql-runtime/tests/fixtures/sql-literals.json', import.meta.url), 'utf8'));
+  assert.ok(vectors.length >= 10);
+  for (const vector of vectors) {
+    assert.equal(liveLiteral('MySQL', vector.value), vector.mysql, vector.value);
+    assert.equal(liveLiteral('PostgreSQL', vector.value), vector.postgresql, vector.value);
+  }
+});

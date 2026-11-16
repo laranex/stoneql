@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, TransferAccepted, TransferStatus, TransferFormatDto, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -280,3 +280,10 @@ export function writeKeywords(sql: string): string[] {
   const code = sql.replace(/'(?:[^'\\]|\\.|'')*'|"(?:[^"\\]|\\.)*"|`[^`]*`|--[^\n]*|#[^\n]*|\/\*(?!!)[\s\S]*?\*\//g, ' ');
   return [...new Set((code.match(/\b(DELETE|UPDATE|DROP|TRUNCATE|ALTER|REPLACE|RENAME|GRANT|REVOKE)\b/gi) || []).map(word => word.toUpperCase()))];
 }
+
+/** M007: native save dialog; the renderer receives a one-shot grant, never a path. */
+export const pickExportFile = (suggestedName: string, format: TransferFormatDto) => nativeDatabase<ExportFileGrant>('pick_export_file', { suggestedName, format });
+export const startExport = (handle: string, grant: string, table: string, format: TransferFormatDto, structure: boolean) =>
+  nativeDatabase<TransferAccepted>('start_export', { handle, grant, table, format, structure, data: true });
+export const exportStatus = (transferId: string) => nativeDatabase<TransferStatus>('export_status', { transferId });
+export const cancelExport = (transferId: string) => nativeDatabase<TransferStatus>('cancel_export', { transferId });

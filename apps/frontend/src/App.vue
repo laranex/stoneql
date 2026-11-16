@@ -75,6 +75,7 @@ import { hasLineBreak } from './services/lineEndings';
 import RawTextarea from './components/RawTextarea.vue';
 import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
+import LiveExport from './components/LiveExport.vue';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
 import { liveCatalogSupported, ddlStatements } from './services/liveSchema';
@@ -564,7 +565,7 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
-  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure'].includes(view) || (view==='Insert' && !isReadOnly.value))))) return;
+  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(view) || (view==='Insert' && !isReadOnly.value))))) return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -589,7 +590,7 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure'].includes(tab.name) || (tab.name==='Insert' && !isReadOnly.value))));
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (tab.name==='Insert' && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -2379,7 +2380,7 @@ onBeforeUnmount(() => {
               </div>
             </form></template
           >
-          <ExportWorkflow
+          <LiveExport v-else-if="w.view === 'Export' && isLive" :key="store.activeId + w.table" /><ExportWorkflow
             v-else-if="w.view === 'Export'"
             :key="store.activeId + w.database + w.scope"
           /><template v-else-if="table && w.view === 'Import'">
