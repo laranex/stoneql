@@ -22,14 +22,14 @@ jobs:
       DOCS_BASE: ${{ inputs.custom_domain != '' && '/' || format('/{0}/', github.event.repository.name) }}
       DOCS_CUSTOM_DOMAIN: ${{ inputs.custom_domain }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '26'
           cache: npm
       - run: npm ci
       - run: npm run docs:build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: .website/dist
   deploy:
@@ -45,4 +45,4 @@ jobs:
     steps:
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
