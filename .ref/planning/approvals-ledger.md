@@ -9,15 +9,17 @@ User decisions recorded in this run:
   code and regressions but receives no new work; its criteria are out of scope. Platform stays
   macOS only (D021). No OS change was stated.
 - 2026-11-16 — Constraints carried over: no keyboard/window focus use, minimal storage, short tests.
+- 2026-11-16 — A2 and A4 approved. The SQLite advisory must stay visible in the full audit and
+  must not be added to an ignore list.
 - 2026-11-16 — A1 and A5 approved. Real windows, keyboard and window focus allowed for the GUI
   tests only; the other constraints stay.
 
 | # | Milestone | Decision or sign-off needed | Unblocks | Status |
 |---|---|---|---|---|
 | A1 | M002–M006 | Permission to open real StoneQL windows (takes focus) | M002 G3 native E2E, OS fallback close dialog, 30-launch startup profile; M006 physical Cmd+R/context-menu/inspector reload; M005 Keychain prompts and native key-file picker | **Approved 2026-11-16** (user: "You may open real app windows and use keyboard and window focus as needed for those tests"). **Run 2026-11-16**: smoke, 30-launch profile, fallback dialog, reload paths and key picker passed; Keychain prompts and signed-app E2E still need A2 (see Results) |
-| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | Pending |
+| A2 | M002 | Signing identity / signed release `.app` (M009 custody) | M002 G3 "E2E on the signed release .app"; M005 Keychain ACL/data-protection checks | **Approved 2026-11-16** (user: "Sign the macOS app and run the signed-build checks"). **Blocked**: no code-signing identity on this Mac, no `.app` bundling step yet, bundle identifier open (A14) — see Results |
 | A3 | M002–M005 | Approve the Proposed numerical budgets and version matrix: M002 startup/IPC, M003 lifecycle/basic-SQL (MySQL 8.4.6, MariaDB 11.4.8 on macOS arm64), M004 PostgreSQL 17.6 lifecycle/query, M005 SSH transport budget and auth-method matrix | G4/G5 and G3 sign-off for M002–M005 | Pending |
-| A4 | M002/M005 | russh RUSTSEC-2026-0495 (agent *server* flaw; StoneQL uses only the agent client, not reachable): approve upgrade `=0.64.1` → 0.65.x (breaking 0.x bump, "russh upgrade policy" from M005 review) or record risk acceptance | Clean macOS dependency audit (M002 alpha blocker) | Pending |
+| A4 | M002/M005 | russh RUSTSEC-2026-0495 (agent *server* flaw; StoneQL uses only the agent client, not reachable): approve upgrade `=0.64.1` → 0.65.x (breaking 0.x bump, "russh upgrade policy" from M005 review) or record risk acceptance | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Upgrade `russh`, rerun the SSH tests, and audit the release dependency graph separately"). **Done 2026-11-16**: russh 0.65.1; release-graph audit clean (see Results) |
 | A5 | M002/M004 | libsqlite3-sys 0.37 RUSTSEC-2026-0459 (bundled SQLite < 3.54, local crafted DB+WAL pair leaks stale memory). sqlx 0.9.0 (latest) requires `=0.37`; no upgrade path. Decide: risk acceptance while SQLite is out of scope, or remove/feature-gate SQLite from the desktop build (conflicts with D022 "keep SQLite regressions") | Clean macOS dependency audit (M002 alpha blocker) | **Approved 2026-11-16** (user: "Exclude SQLite from the release build and verify it is no longer bundled"). **Done 2026-11-16**: not in the release graph or binary; `cargo audit` still reports it from the dev/test lockfile (see Results) |
 | A6 | M003/M006/M007 | Adopt the metadata-limit vendor patch (D002 extension, alpha plan e1): 4,096 columns / 4 MiB descriptor budget per result, `experiments/sqlx-metadata-limit/metadata-limit.patch` (re-verified to apply 2026-11-16). Note: the hostile huge-column-count abort was reasoned, not executed. | M003 G4/G5 aggregate memory bound; same driver path for M006 browse/CRUD and M007 export | Pending |
 | A7 | M003 | Accept residual read-only trust limits (hostile UDF/plugin/external effects not certifiable; advisory locks possible via definitions) as documented in `docs/development/read-only-safety.md` | M003 G1 sign-off | Pending |
@@ -74,3 +76,32 @@ menu); System Events cannot see the WKWebView menu or the CFUserNotification ale
 harness uses the keyboard for the menu and AXPress in UserNotificationCenter for the alert. Early
 harness runs left three orphaned alerts on screen; they were dismissed and the harness now answers
 its alert on failure.
+
+### A4 — russh upgrade and release-graph audit (done 2026-11-16)
+
+- `russh` `=0.64.1` → `=0.65.1` (`crates/stoneql-runtime/Cargo.toml`); `cargo update -p russh`
+  changed only russh (and dropped one unused `generic-array` edge). No source change was needed.
+- SSH reruns: `npm run test:ssh` (Docker OpenSSH + private agent, per-run Keychain service) —
+  MySQL 190 forwarded channels (full matrix), MariaDB 41 and PostgreSQL 41 (parity), all passed;
+  `desktop:test` 55 passed (includes `live_ssh` negatives and `ssh_read_write`); `rust:test` 158
+  passed; `rust:lint`, `rust:fmt`, `rust:vendor` clean.
+- Release-graph audit: new `npm run audit:release` (`tools/audit-release.mjs`) prunes a temporary
+  copy of `Cargo.lock` to the normal+build graph of `stoneql-desktop --features custom-protocol`
+  for `aarch64-apple-darwin` and `x86_64-apple-darwin` (366 of 575 packages) and runs
+  `cargo audit --file` on it: **0 vulnerabilities, 0 warnings**. Positive control (same script
+  with `custom-protocol,sqlite`, 372 packages): reports RUSTSEC-2026-0459, exit 1.
+- Full audit (`cargo audit`, 575 packages): **1 vulnerability, RUSTSEC-2026-0459 (libsqlite3-sys,
+  test-only graph)** — left visible; no `audit.toml`/ignore list exists. RUSTSEC-2026-0495 (russh)
+  no longer reported. Linux-only warnings RUSTSEC-2024-0370 and RUSTSEC-2024-0429 still listed.
+
+### A2 — signed macOS app (approved 2026-11-16; blocked)
+
+Not run. Blockers found:
+1. `security find-identity -v -p codesigning` → 0 valid identities: no Developer ID Application
+   certificate (or any signing certificate) is installed on this Mac. Installing one needs the
+   user's Apple Developer account; notarization also needs the user's credentials.
+2. The repository has no `.app` bundling step (no Tauri CLI); `desktop:release` produces a bare
+   executable.
+3. The bundle identifier (A14, `app.dbadmin.desktop` today) fixes the Keychain service and the
+   signing identity's app ID, so Keychain ACL results recorded before A14 would need repeating.
+

@@ -6,7 +6,7 @@
 
 | Area | Behaviour |
 | --- | --- |
-| SSH library | `russh` 0.64.1, pure Rust, `ring` backend, default features off (no RSA, no `aws-lc-rs`) |
+| SSH library | `russh` 0.65.1 (upgraded from 0.64.1 for RUSTSEC-2026-0495, A4), pure Rust, `ring` backend, default features off (no RSA, no `aws-lc-rs`) |
 | Host keys | A connection requires a host key enrolled in the **native trust store** (`<app data dir>/ssh-host-keys.json`, directory 0700, file 0600, atomic writes; a corrupt file is quarantined and every host becomes unknown). Trust is keyed by SSH host and port and shared by every profile that uses that endpoint, like `known_hosts`. The renderer never supplies or stores a key. Missing = refused before any secret is read, key file is read or network access (`SSH_HOST_KEY_UNKNOWN`); a different key = hard failure (`SSH_HOST_KEY_CHANGED`). Host certificates are refused. No trust-on-first-use |
 | Enrollment | `ssh_host_key` reads the presented key, disconnects before authentication and remembers that scan natively (16 entries, 5 minutes, cleared on reload). **Trust this host key** sends only the fingerprint; the host enrolls the key *it* scanned for exactly that host and port, after a **native confirmation dialog** showing host, port, algorithm and fingerprint. A different enrolled key is refused (`SSH_HOST_KEY_CHANGED`): **Forget host key** (in-app confirmation) is the only rotation path. Editing the SSH host or port clears the shown trust and any pending scan |
 | Authentication | Agent (socket from `SSH_AUTH_SOCK` captured by the host at startup), password, or a private-key file chosen in the native picker, with optional passphrase. Ed25519 and ECDSA (Ed25519 and P-256 exercised); RSA keys are refused as unsupported |

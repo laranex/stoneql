@@ -17,7 +17,7 @@ sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-toki
 tokio = { workspace = true, features = ["net", "io-util"] }
 uuid.workspace = true
 # SSH transport (D016): pure-Rust client, ring backend, no RSA (RUSTSEC-2023-0071 is unpatched).
-russh = { version = "=0.64.1", default-features = false, features = ["ring"] }
+russh = { version = "=0.65.1", default-features = false, features = ["ring"] }
 
 [target.'cfg(unix)'.dependencies]
 # Durable outcome journal: descriptor-relative, no-follow file operations without `unsafe`.
