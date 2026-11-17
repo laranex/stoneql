@@ -6,8 +6,8 @@ export const secretStoreStatus = () => nativeDatabase<SecretStoreStatus>('secret
 export const unlockSecretStore = (password: string, create: boolean) => nativeDatabase<SecretStoreStatus>('unlock_secret_store', { password, create });
 /** Deletes the encrypted file and every password saved in it (forgotten master password). */
 export const resetSecretStore = () => nativeDatabase<SecretStoreStatus>('reset_secret_store', {});
-/** Proposed minimum master-password length; the host enforces the same bound. */
-export const MIN_MASTER_PASSWORD = 12;
+/** Minimum master-password length; the host enforces the same bound. */
+export const MIN_MASTER_PASSWORD = 8;
 const notes: Record<SecretStoreKindDto, string> = {
   keychain: 'Saved in the macOS Keychain.',
   secret_service: 'Saved in the desktop keyring (Secret Service).',

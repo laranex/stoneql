@@ -47,7 +47,7 @@ for(const theme of ['light','dark'])test(`${theme}: master password create, unlo
  await expect(page.getByRole('checkbox',{name:'Remember database password'})).toBeChecked();
  await expect(page.getByTestId('secret-store')).toHaveText('Saved in StoneQL’s encrypted file (master password): no desktop keyring is running.');
 
- // First save: no vault yet, so the user sets a master password (twice, at least 12 characters).
+ // First save: no vault yet, so the user sets a master password (twice, at least 8 characters).
  await page.getByRole('button',{name:'Save',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'Set a master password'});
  await expect(dialog).toBeVisible();
@@ -55,7 +55,7 @@ for(const theme of ['light','dark'])test(`${theme}: master password create, unlo
  await dialog.getByLabel('Master password',{exact:true}).fill('short');
  await dialog.getByLabel('Repeat master password').fill('short');
  await dialog.getByRole('button',{name:'Create'}).click();
- await expect(dialog.getByRole('status')).toHaveText('Use at least 12 characters.');
+ await expect(dialog.getByRole('status')).toHaveText('Use at least 8 characters.');
  await dialog.getByLabel('Master password',{exact:true}).fill('synthetic-master-1');
  await dialog.getByLabel('Repeat master password').fill('synthetic-master-2');
  await dialog.getByRole('button',{name:'Create'}).click();

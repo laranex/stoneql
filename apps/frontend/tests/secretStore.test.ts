@@ -38,14 +38,14 @@ test('a cancelled master-password prompt leaves the request refused and never re
   onSecretStoreLocked(undefined); await bootstrapNativeHost({});
 });
 
-test('master password rules: entered, at least 12 characters and repeated when creating', () => {
+test('master password rules: entered, at least 8 characters and repeated when creating', () => {
   assert.equal(masterPasswordProblem('', '', false), 'Enter the master password.');
   assert.equal(masterPasswordProblem('short', '', false), '', 'unlocking checks only the host');
-  assert.equal(masterPasswordProblem('elevenchars', 'elevenchars', true), 'Use at least 12 characters.');
-  assert.equal(masterPasswordProblem('twelve chars', 'twelve charz', true), 'The two entries do not match.');
-  assert.equal(masterPasswordProblem('twelve chars', 'twelve chars', true), '');
+  assert.equal(masterPasswordProblem('sevench', 'sevench', true), 'Use at least 8 characters.');
+  assert.equal(masterPasswordProblem('eight ch', 'eight cx', true), 'The two entries do not match.');
+  assert.equal(masterPasswordProblem('eight ch', 'eight ch', true), '');
   // Counted in characters, not UTF-16 units.
-  assert.equal(masterPasswordProblem('🔑'.repeat(11), '🔑'.repeat(11), true), 'Use at least 12 characters.');
+  assert.equal(masterPasswordProblem('🔑'.repeat(7), '🔑'.repeat(7), true), 'Use at least 8 characters.');
 });
 
 test('the connection dialog names the store that saved passwords go to', () => {

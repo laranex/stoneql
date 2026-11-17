@@ -43,8 +43,8 @@ const HEADER_LEN: usize = 8 + 12 + 16 + 12 + 32 + 16;
 const MEMORY_KIB: u32 = 64 * 1024;
 const ITERATIONS: u32 = 3;
 const LANES: u32 = 1;
-/// Proposed minimum master-password length (characters).
-pub const MIN_PASSWORD_CHARS: usize = 12;
+/// Minimum master-password length (characters), approved 2026-11-17.
+pub const MIN_PASSWORD_CHARS: usize = 8;
 /// Upper bound on an item file (a 16 KiB secret plus its JSON scope and the AEAD overhead).
 const MAX_ITEM_BYTES: u64 = 64 * 1024;
 /// Fixed delay after a wrong master password; there is no lockout and nothing is wiped.
@@ -409,7 +409,7 @@ mod tests {
             Err(SecretError::Locked)
         );
         assert_eq!(vault.get(SERVICE, &reference()), Err(SecretError::NotFound));
-        assert_eq!(vault.unlock("too short", true), Err(UnlockError::Invalid));
+        assert_eq!(vault.unlock("7 chars", true), Err(UnlockError::Invalid));
         assert_eq!(vault.unlock(PASSWORD, false), Err(UnlockError::Invalid));
         vault.unlock(PASSWORD, true).unwrap();
         assert!(vault.exists().unwrap());
