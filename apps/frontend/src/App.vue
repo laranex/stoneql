@@ -3243,7 +3243,7 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <footer>
-          <span class="muted">StoneQL 0.1.0</span
+          <span class="muted">StoneQL 0.1.0-beta.2</span
           ><button class="button primary" @click="settings = false">Done</button>
         </footer>
       </section>
@@ -3515,7 +3515,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
         <footer>
-          <span class="muted">Version 0.1.0 · Original StoneQL assets</span
+          <span class="muted">Version 0.1.0-beta.2 · Original StoneQL assets</span
           ><button class="button primary" @click="help = false">Got it</button>
         </footer>
       </section>
