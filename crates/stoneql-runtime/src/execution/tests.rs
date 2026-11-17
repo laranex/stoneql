@@ -1804,6 +1804,7 @@ fn journal_entries(fixture: &Fixture) -> Vec<Entry> {
         .collect()
 }
 /// Everything listed except what a restart legitimately changes (age, `restored`).
+#[cfg(unix)]
 fn facts(outcome: &UnresolvedOutcome) -> UnresolvedOutcome {
     UnresolvedOutcome {
         seconds_ago: 0,
