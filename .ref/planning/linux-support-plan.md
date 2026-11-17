@@ -1,12 +1,12 @@
 # Linux desktop support — plan (branch `linux-support`, started 2026-11-17)
 
-**Status: in progress (decisions 1–5 Approved 2026-11-17; see below). Make no Linux claims in the docs, README or releases until the release gates below pass.** Related: `windows-support-plan.md` (branch `windows-support`), `.ref/ms/M004`, `M005`, `M009`, D005 (secrets).
+**Status: in progress (decisions 1–5 Approved 2026-11-17; see below). Make no Linux claims in the docs, README or releases until the release gates below pass.** Phase 3 (22.04 `.deb`, distro smoke, remaining fixtures, Linux audit, store-naming UI) is below. Related: `windows-support-plan.md` (branch `windows-support`), `.ref/ms/M004`, `M005`, `M009`, D005 (secrets).
 
 Evidence standard for this branch (user, 2026-11-17): the dedicated build server is the evidence, not GitHub CI (Ubuntu 26.04.1 LTS x86_64, 4 vCPU, 15 GB; Node 26.13.1, Rust 1.99.1, Docker 29.10.0, WebKitGTK 2.52.6). No Linux CI job is added on this branch.
 
 ## Current state (phase 1, 2026-11-17)
 
-Unix code paths are already shared with macOS (`cfg(unix)`). Linux builds, and every check in the phase 1 list passes after the test and harness fixes listed below. The list was `npm ci`, `build`, `rust:vendor/fmt/build/lint/test/boundaries`, `contracts:check`, `npm test`, `desktop:test`, `test:browser`, and the `test:native-database`, `test:native-postgres`, `test:execution`, `test:ssh` and `test:lifecycle` fixtures. Not yet run on Linux: `test:resources`, `test:receive-limit`, `test:journal-crash`, `docs:build`, `audit:release`.
+Unix code paths are already shared with macOS (`cfg(unix)`). Linux builds, and every check in the phase 1 list passes after the test and harness fixes listed below. The list was `npm ci`, `build`, `rust:vendor/fmt/build/lint/test/boundaries`, `contracts:check`, `npm test`, `desktop:test`, `test:browser`, and the `test:native-database`, `test:native-postgres`, `test:execution`, `test:ssh` and `test:lifecycle` fixtures. `test:resources`, `test:receive-limit`, `test:journal-crash`, `docs:build` and the Linux release audit ran in phase 3 (below).
 
 | Area | Today on Linux | Code |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ Unix code paths are already shared with macOS (`cfg(unix)`). Linux builds, and e
 4. **Oldest supported distros — Approved:** Ubuntu 22.04 / Debian 12. Verified facts (package metadata, fetched 2026-11-17):
    - Ubuntu 22.04: `libwebkit2gtk-4.1-0` 2.50.4-0ubuntu0.22.04.1 in jammy-updates (universe; arm64 is listed there too, the page gives one version for all architectures) and in jammy-security on amd64/i386; the release pocket has **2.36.0-2ubuntu1**, below wry's `v2_38` feature (WebKitGTK ≥ 2.38). glibc 2.35-0ubuntu3.15 (amd64). Sources: https://packages.ubuntu.com/jammy/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy/libc6
    - Debian 12: `libwebkit2gtk-4.1-0` 2.50.6-1~deb12u2 (mipsel 2.42.2), glibc 2.36-9+deb12u14. Sources: https://packages.debian.org/bookworm/libwebkit2gtk-4.1-0, https://packages.debian.org/bookworm/libc6
-   - Consequences: 22.04 needs its updates applied (the versioned `libwebkit2gtk-4.1-0 (>= 2.38)` Depends makes apt pull them; an un-updated 22.04 has 2.36). Only amd64 is built so far. The 26.04-built binary needs `GLIBC_2.39` (`objdump -T`), above both floors: **release gate — build the `.deb` on Ubuntu 22.04** (for example a 22.04 container on the build server) and smoke it on 22.04 and Debian 12. Not done yet.
+   - Consequences: 22.04 needs its updates applied (the versioned `libwebkit2gtk-4.1-0 (>= 2.38)` Depends makes apt pull them; an un-updated 22.04 has 2.36). Only amd64 is built so far. The 26.04-built binary needs `GLIBC_2.39` (`objdump -T`), above both floors: **release gate — build the `.deb` on Ubuntu 22.04** (for example a 22.04 container on the build server) and smoke it on 22.04 and Debian 12. Done in phase 3 (`GLIBC_2.34`, see below).
 5. **Verification standard — Approved.** The build server runs every check, real-window tests under `dbus-run-session -- xvfb-run`. **Pending (user's step, before release):** a manual check in a real GNOME session (dialogs, clipboard, HiDPI, Wayland, GNOME Keyring unlock prompt, crash recovery).
 
 ## Phase 2 results (2026-11-17)
@@ -61,11 +61,55 @@ Mac (macOS, shared code): `rust:fmt`, `rust:lint`, `contracts:check`, `rust:boun
 
 Not verified: the Secret Service unlock prompt and its dismissal (no prompter on the headless server); KWallet/KeePassXC; the master-password flow in the real app window (covered by unit, IPC-double and browser tests, not end to end in WebKitGTK).
 
+## Phase 3 results (2026-11-17)
+
+**Release `.deb` built on Ubuntu 22.04 (glibc gate closed).** `tools/linux-deb/Dockerfile` (image `stoneql-deb-builder:22.04` on the build server): `ubuntu:22.04`, Tauri build deps from 22.04's apt with WebKitGTK from jammy-updates (`libwebkit2gtk-4.1-dev` 2.50.4-0ubuntu0.22.04.1, `libc6` 2.35-0ubuntu3.18; the build fails if WebKitGTK < 2.38 or glibc ≥ 2.36), Node 26.13.1 (official tarball, SHASUMS256 checked), Rust 1.99.1 (rustup-init, SHA-256 checked). `tools/linux-deb/build.sh` clones a git bundle, checks out one full SHA, asserts a clean tree, runs `npm ci` and the phase 2 `npm run desktop:deb`, and writes `StoneQL_<version>_<sha7>_amd64.deb`. Build cache: Docker volume `stoneql-deb-cache` (cargo registry, npm cache, target dir; the old `bundle/deb` is deleted before each build).
+
+- Package: `~/artifacts/StoneQL_0.1.0_4d24a99_amd64.deb` on the server, built from `4d24a994fd8031d3a614634138c1b605fd2e10fa` (the last code commit; a first build from `34edcd4` passed the same checks and was deleted), SHA-256 `f29410637575bf51c11b57d223b8d0943f399306c929c98f704a45e0760c4cb1`, 9,263,746 bytes (builds are not byte-reproducible: the two packages' hashes differ); package name `stone-ql`, one ELF (`/usr/bin/stoneql-desktop`). Not committed, unsigned, unpublished.
+- Highest required glibc symbol version: **`GLIBC_2.34`** (`objdump -T` and `readelf --version-info`, every ELF file in the extracted package), within 2.35 (22.04) and 2.36 (Debian 12).
+- Declared `Depends: libwebkit2gtk-4.1-0 (>= 2.38), libdbus-1-3, libwebkit2gtk-4.1-0, libgtk-3-0`: the WebKitGTK floor is 2.38 as planned (the unversioned duplicate is Tauri's own).
+- Install and launch (`tools/linux-deb/smoke.sh`, fresh `ubuntu:22.04` and `debian:12` containers, no extra privileges or security options; the package mounted read-only and its SHA-256 re-checked inside; `apt-get install ./…deb` resolved the Depends; run as an unprivileged user under `dbus-run-session -- xvfb-run`, fixed 30 s wait):
+
+| Distro | Resolved | Result |
+| --- | --- | --- |
+| Ubuntu 22.04.5 | libc6 2.35-0ubuntu3.15, libwebkit2gtk-4.1-0 2.50.4-0ubuntu0.22.04.1, libgtk-3-0 3.24.33-1ubuntu2.2 | alive after 30 s; `xdotool`/`xwininfo` find one 1280×860 window titled "StoneQL"; screenshot inspected: the welcome screen (Connections bar, "Welcome to StoneQL", Manage connections, status bar) rendered |
+| Debian 12 | libc6 2.36-9+deb12u14, libwebkit2gtk-4.1-0 2.50.6-1~deb12u2, libgtk-3-0 3.24.38-2~deb12u3 | same: alive, one "StoneQL" 1280×860 window, the same welcome screen rendered |
+
+  Results are the same for both packages. Output on both: one `dbind-WARNING` (no AT-SPI accessibility bus in the container); no panic or other error. Not verified: interaction in the window, WebKit's bubblewrap sandbox state inside the container (bubblewrap was installed as a WebKitGTK dependency; not inspected), arm64.
+
+**UI gaps closed.** A failed credential removal now names the store holding each reference (`the Keychain (service …)` on macOS; `the desktop keyring (Secret Service, service …)` or `StoneQL’s encrypted file` on Linux, from the reference's UUID version; `the system credential store` when unknown, e.g. Windows), with a matching hint (encrypted file: "until you reset saved passwords"). Password placeholders name the store of that reference (`Saved in Keychain`/`keyring`/`encrypted file`, `Saved password` when unknown), and the note now reads "New passwords are saved in …" for where a new password goes. `test:secret-service` and its prerequisites are documented in `docs/development/ssh-credentials.md` and `contributor-setup.md`.
+
+**Release dependency audit.** `npm run audit:release:linux` (`tools/audit-release.mjs --linux`) audits the shipped `x86_64-unknown-linux-gnu` graph of `stoneql-desktop --features custom-protocol` (normal+build) the same way as the macOS mode. Server run at `4d24a99`: 399 of 575 locked packages, **0 vulnerabilities**, 2 informational warnings (RUSTSEC-2024-0370, RUSTSEC-2024-0429; see below), exit 0, nothing ignored. The macOS mode on the server: 364 packages, 0 vulnerabilities, 0 warnings. (The Mac resolves 404 Linux packages because build and proc-macro dependencies resolve for the host; the server figure is the Linux-host one.)
+
+Build server checks (Ubuntu 26.04.1, `34edcd4`; `npm test`, `test:resources` and the audits again at `4d24a99`, whose only change is the resource harness):
+
+| Check | Result |
+| --- | --- |
+| `rust:fmt`, `rust:lint`, `rust:boundaries`, `contracts:check`, `docs:build` | pass |
+| `rust:test` | 181 passed, 0 failed, 11 ignored |
+| `npm test` | 245 + 22 passed (both SHAs) |
+| `test:browser` | 75 passed (includes the new `secret-store-location` spec in both themes) |
+| `desktop:test` (no session bus) | 71 passed, 0 failed, 7 ignored |
+| `test:ssh` | pass: MySQL 195, MariaDB 46, PostgreSQL 41 forwarded channels |
+| `test:secret-service` | pass; 0 items left; user keyrings absent |
+| `test:resources` | **failed first** (MySQL fixture OOM-killed: docker `oom` event; the server has no swap, Docker Desktop's swap hid the 1 GiB limit on tmpfs data) and needed GNU `time` (`/usr/bin/time`, now installed on the server). Fixed in `4d24a99` (2 GiB, no swap, resource profile only), then pass: MySQL p50/p95/max 110.8/112.1/113.2 ms, peak RSS 27.6 MiB, idle 14.5 MiB; MariaDB 109.7/111.1/111.5 ms, 28.1 MiB; PostgreSQL p95 164.3 ms, 27.6 MiB. p95 is about 7.7× the macOS record (14.6 ms); the uniform ~110 ms looks like a fixed per-query delay and is **not attributed** (compare the phase 1 slow-statement note) |
+| `test:receive-limit` | pass (2 + 1 tests); `test:receive-limit:live`: MySQL and MariaDB TLS packet-bound and certificate checks pass |
+| `test:journal-crash` | pass: 40 SIGKILL restarts, 845 unknown outcomes, 885 acknowledged, 22 open transactions at kill, 0 lost/resurrected/missing; second process refused (`in_use`) |
+
+Mac (shared code, `7324b40`+): `npm test` 245 + 22, `test:browser` 75 passed, `desktop:test` 62 passed, `npm run build`, `docs:build` pass.
+
+Server changes this phase: installed `time` (GNU time) and `cargo-audit` 0.22.1 (`~/.cargo/bin`); image `stoneql-deb-builder:22.04`, volume `stoneql-deb-cache`, pulled `ubuntu:22.04` and `debian:12` kept as build cache. No containers left; SSH, firewall and AppArmor unchanged.
+
+## Linux release audit exceptions: awaiting direct user confirmation
+
+The coordinator relayed (2026-11-17) a user decision to make a **documented exception** for exactly the two informational advisories below, re-checked at every Tauri upgrade. The implementation is prepared but **not committed**: committing a change that lets the audit pass with advisories was refused by the session's permission check because the approval did not come from the user directly. It is kept as an uncommitted patch, `.ref/planning/linux-audit-exceptions.patch` (untracked; apply with `git apply`): `tools/audit-exceptions.mjs` (the two IDs with reason and dependency path), `audit:release:linux` failing on any other advisory or warning and on a stale exception, `tests/audit-exceptions.test.mjs` (4 tests, passed on the Mac), and the `verification.md` note. Until the user confirms directly, the committed `audit:release:linux` reports both warnings and exits 0 (cargo audit's default), with nothing ignored.
+
+- RUSTSEC-2024-0429, `glib` 0.18.5, unsound `VariantStrIter` iterators. Path: stoneql-desktop → tauri 2.12.5 → muda / tao / wry → gtk 0.18.2 → glib 0.18.5 (in the runtime graph). Relayed source search: no use of `VariantStrIter` in tauri, wry, tao, muda, gtk, webkit2gtk, gio, soup3, atk, gdk or StoneQL.
+- RUSTSEC-2024-0370, `proc-macro-error` 1.0.4, unmaintained. Path: … glib 0.18.5 → glib-macros 0.18.5 (proc-macro) → proc-macro-error. Verified compile-time only: `cargo tree --target x86_64-unknown-linux-gnu -e normal,no-proc-macro` lists glib but neither glib-macros nor proc-macro-error, while `-e normal,build` lists proc-macro-error.
+
 ## Remaining before any Linux release
 
-- Build the `.deb` on Ubuntu 22.04 and smoke it on 22.04 and Debian 12 (glibc gate above).
 - AppImage (approved for later).
-- The manual GNOME session check (user).
-- Not yet run on Linux: `test:resources`, `test:receive-limit`, `test:journal-crash`, `audit:release`.
+- Direct user confirmation of the audit exceptions above, then commit the patch.
+- **Pending manual QA (user, real GNOME session; not simulated):** the real GNOME Keyring unlock prompt (and its dismissal), and the master-password flow in the real app window; plus the rest of decision 5's list (dialogs, clipboard, HiDPI, Wayland, crash recovery).
 - Docs, README and release notes stay free of Linux claims until then; `docs/development/ssh-credentials.md` describes the Linux stores as in development and unreleased.
-- Known UI gaps: removal-failure messages still name the Keychain; the "Saved in…" placeholder shows the store for new saves, not the store of that reference. `test:secret-service` and its prerequisites (`dbus-daemon`, `gnome-keyring`, `libsecret-tools`) are not yet in the contributor/verification docs.
