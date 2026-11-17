@@ -11,7 +11,7 @@ In the desktop app, import and export are live: they read and write real files a
 - **Export type** (Custom): structure and data, structure only, or data only. PostgreSQL exports data only (table structure needs `pg_dump`); CSV and JSON are always data only.
 - **Compression:** none or GZIP (`.gz`), in both modes.
 
-Choose **Choose file and export**. The desktop app shows its own save dialog; the window never sees the path. Rows are read in one read-only snapshot (MySQL/MariaDB consistent snapshot, PostgreSQL repeatable read) and streamed into a temporary file beside the destination, which is renamed into place only when complete. **Cancel export**, a failure, a reload or quitting removes the temporary file, so the destination is either complete or untouched.
+Choose **Export**. The desktop app shows its own save dialog; the window never sees the path. Rows are read in one read-only snapshot (MySQL/MariaDB consistent snapshot, PostgreSQL repeatable read) and streamed into a temporary file beside the destination, which is renamed into place only when complete. **Cancel export**, a failure, a reload or quitting removes the temporary file, so the destination is either complete or untouched.
 
 **Formats:**
 

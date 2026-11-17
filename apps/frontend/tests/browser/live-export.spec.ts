@@ -18,7 +18,7 @@ test('live export streams through a native grant and reports refusals without cr
       else if (command === 'list_unresolved_outcomes') payload = { outcomes: [], limit: 16 };
       else if (command === 'connect_direct') payload = { handle: '00000000-0000-0000-0000-00000000000e', engineVersion: 'MySQL fixture 8.4.6', database: p.database, expiresAfterSeconds: 3600 };
       else if (command === 'database_status') payload = { connected: true };
-      else if (command === 'pick_export_file') payload = { grant: `grant_${p.format}`, fileName: p.suggestedName };
+      else if (command === 'pick_export_file') payload = w.cancelPick ? (w.cancelPick = false, { grant: null, fileName: null }) : { grant: `grant_${p.format}`, fileName: p.suggestedName };
       else if (command === 'start_export') { polls = 0; payload = { transferId: `transfer_${p.format}` }; }
       else if (command === 'export_status') {
         polls++;
@@ -47,7 +47,14 @@ test('live export streams through a native grant and reports refusals without cr
   const panel = page.getByTestId('live-export');
   await expect(panel).toContainText('every table of acme_store');
   await expect(panel.getByRole('combobox', { name: 'Export format' }).locator('option[value="csv"]')).toBeDisabled();
-  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  // Cancelling the save dialog starts nothing and leaves the form ready to try again.
+  await page.evaluate(() => { (window as any).cancelPick = true; });
+  await panel.getByRole('button', { name: 'Export', exact: true }).click();
+  await expect(panel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
+  expect((await page.evaluate(() => (window as any).calls)).filter((c: any) => c.command === 'start_export')).toHaveLength(0);
+  await expect(panel.getByRole('alert')).toHaveCount(0);
+  await expect(panel.getByText('Choose where to save the file…')).toHaveCount(0);
+  await panel.getByRole('button', { name: 'Export', exact: true }).click();
   await expect(panel).toContainText('Exported 40 rows');
   const calls = () => page.evaluate(() => (window as any).calls as { command: string; payload: any }[]);
   const last = async (command: string) => (await calls()).filter((c) => c.command === command).at(-1)!.payload;
@@ -59,14 +66,14 @@ test('live export streams through a native grant and reports refusals without cr
   await panel.getByRole('combobox', { name: 'Export content' }).selectOption('data');
   await expect(panel.getByLabel('Add DROP TABLE statement')).toBeDisabled();
   await panel.getByRole('button', { name: 'Deselect all' }).click();
-  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  await panel.getByRole('button', { name: 'Export', exact: true }).click();
   await expect(panel.getByRole('alert')).toContainText('Select at least one table.');
   await panel.getByLabel('Tables to export').getByLabel('accounts').check();
   await panel.getByRole('combobox', { name: 'INSERT statement style' }).selectOption('replace');
   await panel.getByLabel('Enclose data in a transaction').check();
   await panel.getByLabel('GZIP').check();
   const starts = async () => (await calls()).filter((c) => c.command === 'start_export').length;
-  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  await panel.getByRole('button', { name: 'Export', exact: true }).click();
   await expect.poll(starts).toBe(2);
   await expect(panel.getByRole('status')).toContainText('Exported 40 rows');
   expect(await last('pick_export_file')).toEqual({ suggestedName: 'acme_store.sql.gz', format: 'sql', compressed: true, sessionId: 's' });
@@ -74,7 +81,7 @@ test('live export streams through a native grant and reports refusals without cr
   await page.screenshot({ path: 'test-results/live-export-custom.png', fullPage: true });
   // Back to Quick: the Custom content choice no longer applies (structure and data).
   await panel.getByLabel(/^Quick/).check();
-  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  await panel.getByRole('button', { name: 'Export', exact: true }).click();
   await expect.poll(starts).toBe(3);
   expect(await last('start_export')).toMatchObject({ tables: null, structure: true, data: true, options: { insertVerb: 'insert', transaction: false } });
 
@@ -88,7 +95,7 @@ test('live export streams through a native grant and reports refusals without cr
   await table.getByLabel('CSV delimiter').fill(';');
   await table.getByRole('combobox', { name: 'CSV enclosure' }).selectOption('');
   await table.getByLabel('CSV null value').fill('\\N');
-  await table.getByRole('button', { name: 'Choose file and export' }).click();
+  await table.getByRole('button', { name: 'Export', exact: true }).click();
   await expect(table.getByRole('alert')).toContainText('Export failed: column b holds binary data, which CSV cannot represent exactly; export as SQL. No file was created or replaced.');
   expect(await last('start_export')).toMatchObject({ tables: ['accounts'], format: 'csv', structure: false, options: { csvDelimiter: ';', csvEnclosure: null, csvNull: '\\N', csvHeader: true } });
 });

@@ -904,7 +904,7 @@ const columnDraftInitial = ref('');
 const manager = ref(false);
 const {
   connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-  testing, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, attemptId,
+  testing, picking, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, attemptId,
   newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
   fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
   testConnection, saveConnection, removeConnection, closeConnection,
@@ -2972,7 +2972,7 @@ onBeforeUnmount(() => {
                 ><label v-if="connectionDraft.transport.auth === 'password'" class="checkbox-label"
                   ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassword" /> Remember SSH password in the system keychain</label
                 ><template v-if="connectionDraft.transport.auth === 'private-key'"
-                  ><div class="form-label">Private key file<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSshKeyFile">Choose key file…</button><span :class="{ muted: !connectionDraft.transport.keyGrant }">{{ connectionDraft.transport.keyGrant ? connectionDraft.transport.keyFileName : connectionDraft.transport.keyFileName ? `${connectionDraft.transport.keyFileName} · choose again this session` : 'No key file chosen for this app session' }}</span></div><span class="muted">The key is read natively at connect time and never enters this window. Ed25519/ECDSA keys; RSA is not supported yet.</span></div
+                  ><div class="form-label">Private key file<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSshKeyFile">{{ picking ? 'Opening…' : 'Choose key file…' }}</button><span :class="{ muted: !connectionDraft.transport.keyGrant }">{{ connectionDraft.transport.keyGrant ? connectionDraft.transport.keyFileName : connectionDraft.transport.keyFileName ? `${connectionDraft.transport.keyFileName} · choose again this session` : 'No key file chosen for this app session' }}</span></div><span class="muted">The key is read natively at connect time and never enters this window. Ed25519/ECDSA keys; RSA is not supported yet.</span></div
                   ><label class="form-label"
                     >Key passphrase<input :disabled="testing"
                       v-model="connectionDraft.transport.passphrase"

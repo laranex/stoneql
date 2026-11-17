@@ -19,12 +19,16 @@ const readWrite = computed(() => session.value?.status === 'connected' && sessio
 const production = computed(() => store.connection.environment === 'Production');
 watch(() => store.activeId, () => { if (!running.value) { grant.value = ''; fileName.value = ''; status.value = null; error.value = ''; } });
 
+/** The native open panel takes about a second to appear (macOS panel service): show it at once. */
+const choosing = ref(false);
 async function choose() {
-  error.value = ''; status.value = null;
+  if (choosing.value) return;
+  error.value = ''; status.value = null; choosing.value = true;
   try {
     const picked = await pickImportFile();
     if (picked.grant) { grant.value = picked.grant; fileName.value = picked.fileName ?? ''; }
   } catch (e) { error.value = (e as Error).message; }
+  finally { choosing.value = false; }
 }
 async function run() {
   const handle = session.value?.info?.handle;
@@ -65,12 +69,12 @@ const result = computed(() => {
 <template>
   <div class="export-workflow" data-testid="live-sql-import">
     <div v-if="!mysqlFamily" class="notice info" role="status">Live SQL import is available for MySQL and MariaDB connections.</div>
-    <div v-else-if="!readWrite" class="notice info" role="status">Live SQL import needs a read-write session. Reconnect with read-write access (pending safety approval in current builds).</div>
+    <div v-else-if="!readWrite" class="notice info" role="status">Live SQL import needs a read-write connection. Edit this connection, untick Read-only connection and connect again.</div>
     <template v-else>
       <div class="notice info"><Upload :size="15" /><span><strong>Live SQL import</strong> into <code>{{ session?.info?.database }}</code>: the whole file is checked first and nothing runs if any statement is refused. Statements then run one by one with autocommit and the import stops at the first failure; earlier statements stay committed. Files up to 1024 MiB, statements up to 16 MiB.</span></div>
       <div v-if="production" class="notice error" role="alert"><AlertCircle :size="14" /> PROD: this import changes data on <strong>{{ store.connection.name }}</strong>.</div>
       <div class="export-actions">
-        <button class="button" type="button" :disabled="running" @click="choose"><FileText :size="13" /> Choose SQL file…</button>
+        <button class="button" type="button" :disabled="running || choosing" @click="choose"><FileText :size="13" /> {{ choosing ? 'Opening…' : 'Choose SQL file…' }}</button>
         <span v-if="grant" class="muted" data-testid="sql-import-file">{{ fileName }}</span>
         <button class="button primary" type="button" :disabled="running || !grant" @click="run"><Upload :size="13" /> Import</button>
         <button v-if="running" class="button" type="button" @click="cancel"><X :size="13" /> Cancel import</button>

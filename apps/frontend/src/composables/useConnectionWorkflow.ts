@@ -62,6 +62,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     connectionDraft = ref<Connection>(),
     connectionError = ref(''),
     testing = ref(false),
+    /** A native file panel is opening or open (it takes about a second to appear). */
+    picking = ref(false),
     testMessage = ref(''),
     /** Databases listed by the last successful live test, offered for Default database. */
     databaseOptions = ref<string[]>([]),
@@ -229,12 +231,12 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const draft = connectionDraft.value, ssh = sshOf(draft);
     if (!draft || !ssh || testing.value) return;
     connectionError.value = '';
-    testing.value = true;
+    testing.value = true; picking.value = true;
     try {
       const selected = await pickSshKeyFile();
       if (selected.grant && connectionDraft.value === draft) { ssh.keyGrant = selected.grant; ssh.keyFileName = selected.fileName || ''; }
     } catch (error) { connectionError.value = (error as Error).message; }
-    finally { testing.value = false; }
+    finally { testing.value = false; picking.value = false; }
   }
   async function cancelAttempt() {
     if (!attemptId.value) return;
@@ -291,12 +293,12 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const draft=connectionDraft.value;
     if(!draft||testing.value)return;
     connectionError.value='';
-    testing.value=true;
+    testing.value=true;picking.value=true;
     try {
       const selected=await pickSqliteFile();
       if(selected.grant&&connectionDraft.value===draft){draft.sqliteGrant=selected.grant;draft.database=selected.fileName||'';testMessage.value='';}
     }catch(error){connectionError.value=(error as Error).message;}
-    finally{testing.value=false;}
+    finally{testing.value=false;picking.value=false;}
   }
   /** The first required live field left empty, named for the user; '' when complete. */
   function liveMissing(draft: Connection, test = false): string {
@@ -452,7 +454,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-    testing, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, refreshHostKeyTrust, attemptId,
+    testing, picking, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, refreshHostKeyTrust, attemptId,
     newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
     fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
     testConnection, saveConnection, removeConnection, closeConnection,

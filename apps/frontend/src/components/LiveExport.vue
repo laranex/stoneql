@@ -28,6 +28,8 @@ const c = reactive({
   gzip: false,
 });
 const status = ref<TransferStatus | null>(null), error = ref(''), running = ref(false);
+/** The native save dialog is open: the export starts only after a destination is confirmed. */
+const choosing = ref(false);
 let transferId = '', stopped = false;
 watch(() => [store.activeId, store.workspace.database, props.whole] as const, () => {
   c.scope = props.whole ? 'database' : 'table';
@@ -76,15 +78,23 @@ function options(): ExportOptionsDto {
 const extension = computed(() => `${c.format}${c.gzip ? '.gz' : ''}`);
 async function run() {
   const handle = store.liveSessions[store.activeId]?.info?.handle;
+  if (choosing.value || running.value) return;
   if (problem.value || !handle) { error.value = problem.value || 'Connect this live profile first.'; return; }
   error.value = ''; status.value = null;
+  // Ask for the destination first and do nothing else until the dialog closes.
+  choosing.value = true;
+  let grant: string | null | undefined;
   try {
-    const picked = await pickExportFile(`${subject.value || 'export'}.${extension.value}`, c.format, c.gzip);
-    if (!picked.grant) return;
+    grant = (await pickExportFile(`${subject.value || 'export'}.${extension.value}`, c.format, c.gzip)).grant;
+  } catch (e) { error.value = (e as Error).message; return; }
+  finally { choosing.value = false; }
+  // Cancelled: the form stays as it was, ready to try again.
+  if (!grant) return;
+  try {
     running.value = true; stopped = false;
     const structure = c.format === 'sql' && content.value !== 'data' && (!custom.value || c.create);
     const data = content.value !== 'structure';
-    transferId = (await startExport(handle, picked.grant, selected.value, c.format, structure, data, options())).transferId;
+    transferId = (await startExport(handle, grant, selected.value, c.format, structure, data, options())).transferId;
     while (!stopped) {
       status.value = await exportStatus(transferId);
       if (status.value.state !== 'running') break;
@@ -103,7 +113,7 @@ onBeforeUnmount(() => { stopped = true; });
   <div class="export-workflow" data-testid="live-export">
     <div class="notice info"><Download :size="15" /><span><strong>Live export</strong> of {{ c.scope === 'database' ? (custom ? 'chosen tables of ' : 'every table of ') : '' }}<code>{{ subject }}</code>: rows are read in one read-only snapshot and written to the file you choose. The file appears only when the export is complete.<template v-if="c.scope === 'database'"> Views, routines, triggers and events are not included yet.</template></span></div>
     <form @submit.prevent="run">
-      <fieldset class="export-fieldset" :disabled="running">
+      <fieldset class="export-fieldset" :disabled="running || choosing">
         <section class="export-section">
           <h3>Export method</h3>
           <div class="export-body">
@@ -206,7 +216,8 @@ onBeforeUnmount(() => { stopped = true; });
         </section>
       </fieldset>
       <div class="export-actions">
-        <button class="button primary" type="submit" :disabled="running"><Download :size="13" /> Choose file and export</button>
+        <button class="button primary" type="submit" :disabled="running || choosing"><Download :size="13" /> Export</button>
+        <span v-if="choosing" class="muted" role="status">Choose where to save the file…</span>
         <button v-if="running" class="button" type="button" @click="cancel"><X :size="13" /> Cancel export</button>
       </div>
     </form>
