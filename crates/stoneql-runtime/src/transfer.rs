@@ -293,17 +293,22 @@ impl Connections {
                         sink.write("SET FOREIGN_KEY_CHECKS = 0;\n").await?;
                     }
                 }
-                let mut columns = 0;
-                for table in &tables {
-                    sink.cancelled()?;
-                    columns +=
-                        mysql_table(&mut connection, table, whole, request, &mut sink).await?;
+                let outcome: Result<usize, TransferError> = async {
+                    let mut columns = 0;
+                    for table in &tables {
+                        sink.cancelled()?;
+                        columns += mysql_table(&mut connection, table, whole, request, &mut sink)
+                            .await
+                            .map_err(|error| in_table(error, whole, true, table))?;
+                    }
+                    if whole {
+                        sink.write("SET FOREIGN_KEY_CHECKS = 1;\n").await?;
+                    }
+                    Ok(columns)
                 }
-                if whole {
-                    sink.write("SET FOREIGN_KEY_CHECKS = 1;\n").await?;
-                }
-                let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
-                columns
+                .await;
+                end_snapshot(connection, outcome.is_err()).await;
+                outcome?
             }
             EnginePool::Postgres(pool) => {
                 if request.structure {
@@ -336,27 +341,32 @@ impl Connections {
                     ))
                     .await?;
                 }
-                let mut columns = 0;
-                for table in &tables {
-                    sink.cancelled()?;
-                    if whole {
-                        sink.write(&format!("\n-- Table {}\n", quote_identifier(false, table)))
-                            .await?;
+                let outcome: Result<usize, TransferError> = async {
+                    let mut columns = 0;
+                    for table in &tables {
+                        sink.cancelled()?;
+                        if whole {
+                            sink.write(&format!("\n-- Table {}\n", quote_identifier(false, table)))
+                                .await?;
+                        }
+                        columns += stream::<sqlx::Postgres, _>(
+                            &mut connection,
+                            &format!("SELECT * FROM {}", quote_identifier(false, table)),
+                            postgres::decode_cell,
+                            false,
+                            &[],
+                            table,
+                            request.format,
+                            &mut sink,
+                        )
+                        .await
+                        .map_err(|error| in_table(error, whole, false, table))?;
                     }
-                    columns += stream::<sqlx::Postgres, _>(
-                        &mut connection,
-                        &format!("SELECT * FROM {}", quote_identifier(false, table)),
-                        postgres::decode_cell,
-                        false,
-                        &[],
-                        table,
-                        request.format,
-                        &mut sink,
-                    )
-                    .await?;
+                    Ok(columns)
                 }
-                let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
-                columns
+                .await;
+                end_snapshot(connection, outcome.is_err()).await;
+                outcome?
             }
             #[cfg(feature = "sqlite")]
             EnginePool::Sqlite(_) => {
@@ -374,6 +384,31 @@ impl Connections {
     }
 }
 
+/// Ends the read-only snapshot. After a failure the connection is closed before the error is
+/// returned, so no snapshot transaction outlives the export on the server.
+async fn end_snapshot<DB: sqlx::Database>(
+    mut connection: sqlx::pool::PoolConnection<DB>,
+    failed: bool,
+) where
+    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
+{
+    let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
+    if failed {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), connection.close()).await;
+    }
+}
+/// In a whole-database export, a row over the packet limit names its table (the export stops).
+fn in_table(error: TransferError, whole: bool, mysql_family: bool, table: &str) -> TransferError {
+    match error {
+        TransferError::Read(ReadError::PacketTooLarge) if whole => {
+            TransferError::Unsupported(format!(
+                "table {} has a row larger than the 2 MiB limit, so this database cannot be exported whole",
+                quote_identifier(mysql_family, table)
+            ))
+        }
+        other => other,
+    }
+}
 /// One MySQL/MariaDB table of an export: `CREATE TABLE` (when requested) and its rows.
 async fn mysql_table<W: AsyncWrite + Unpin + Send>(
     connection: &mut sqlx::MySqlConnection,

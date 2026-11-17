@@ -187,7 +187,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_reader;
     } else {
       database = { volumes: [`${exposed}:/stoneql-tls:ro`], command: ['--ssl-ca=/stoneql-tls/ca.pem', '--ssl-cert=/stoneql-tls/server.pem', '--ssl-key=/stoneql-tls/server-key.pem', '--require-secure-transport=ON'], ...aliases };
       writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE stoneql_fixture_marker(id VARCHAR(64) PRIMARY KEY); INSERT INTO stoneql_fixture_marker VALUES ('${marker}');
-CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';`);
+CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';
+CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';`);
     }
     writeFileSync(override, JSON.stringify({ services: { [engine]: database, ssh: sshService(sshA), 'ssh-rotated': sshService(sshB), 'ssh-dead': sshService(sshA) } }));
     started = true;

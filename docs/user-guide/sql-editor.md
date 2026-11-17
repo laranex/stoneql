@@ -24,7 +24,7 @@ Results retain ordered columns, including duplicate labels, exact integer/decima
 
 ## Native read-write execution
 
-Direct desktop Live connections are **read-write** by default (approved 2026-11-17, A15). Tick **Read-only connection** in the connection dialog to open that connection read-only instead; the choice is saved with the connection. SSH Tunnel connections are always read-only for now (SSH read-write awaits a separate approval). PROD-tagged profiles ask for the "PROD — I understand" acknowledgement each time they connect read-write. The badge next to the connection shows **Read-only** or **Read-write**.
+Desktop Live connections are **read-write** by default (approved 2026-11-17, A15): MySQL and MariaDB over Direct or SSH Tunnel, PostgreSQL over Direct. Tick **Read-only connection** in the connection dialog to open that connection read-only instead; the choice is saved with the connection. PostgreSQL over an SSH tunnel is always read-only for now. PROD-tagged profiles ask for the "PROD — I understand" acknowledgement each time they connect read-write. The badge next to the connection shows **Read-only** or **Read-write**.
 
 In read-write mode **Run query** executes the editor content as a script, one statement at a time, stopping at the first statement that does not succeed. Scripts containing `DELETE`, `UPDATE`, `DROP`, `TRUNCATE`, `ALTER`, `REPLACE`, `RENAME`, `GRANT` or `REVOKE` ask for confirmation first. These confirmations are safeguards, not permissions: the database account decides what is allowed. If the connection is already running something, the request is refused (nothing is queued or sent).
 

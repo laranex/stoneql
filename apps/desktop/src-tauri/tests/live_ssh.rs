@@ -56,7 +56,8 @@ fn ssh_commands_use_owned_fixture() {
         HostServices {
             secrets: keychain.clone(),
             agent_socket: Some(var("STONEQL_SSH_AGENT").into()),
-            read_write_sql: false,
+            // The shipped gate (A15): MySQL/MariaDB read-write over SSH is exercised below.
+            read_write_sql: stoneql_desktop::READ_WRITE_SQL_ENABLED,
             outcome_journal: Some(journal.dir()),
             secret_deadline: std::time::Duration::from_secs(60),
             host_keys: Some(host_keys.clone()),
@@ -236,6 +237,66 @@ fn ssh_commands_use_owned_fixture() {
         json!(false)
     );
     report["secretReferences"] = json!(db_ref.is_some());
+
+    // A15: MySQL/MariaDB read-write through the SSH tunnel with a write-capable account: DDL and
+    // DML jobs commit, a transaction rolls back, and the reader account stays read-only.
+    if engine != "postgresql" {
+        let mut writer = database(
+            "db.stoneql.test",
+            tunnel(password_auth.clone()),
+            json!({"password": db_password, "access": "read_write"}),
+        );
+        writer["username"] = json!("stoneql_writer");
+        let handle = connected(writer, "SSH read-write");
+        let run = |sql: &str, lease: Option<&Value>| -> Value {
+            let mut payload = json!({"handle": handle, "sql": sql});
+            if let Some(lease) = lease {
+                payload["leaseId"] = lease.clone();
+            }
+            let job = call("submit_job", payload).unwrap()["payload"]["jobId"].clone();
+            loop {
+                let update =
+                    call("fetch_job", json!({"jobId": job, "waitMs": 1000})).unwrap()["payload"]
+                        .clone();
+                if update["done"] == json!(true) {
+                    return update;
+                }
+            }
+        };
+        let count = || {
+            call(
+                "read_only_query",
+                json!({"handle":handle,"sql":"SELECT COUNT(*) AS n FROM ssh_rw"}),
+            )
+            .unwrap()["payload"]["rows"][0][0]["text"]
+                .clone()
+        };
+        let done = run(
+            "CREATE TABLE ssh_rw (id INT PRIMARY KEY, v VARCHAR(10)); INSERT INTO ssh_rw VALUES (1, 'a'), (2, 'b'); UPDATE ssh_rw SET v = 'c' WHERE id = 2; DELETE FROM ssh_rw WHERE id = 1",
+            None,
+        );
+        assert_eq!(done["outcome"], "succeeded", "SSH write job: {done}");
+        assert_eq!(count(), json!("1"));
+        let lease =
+            call("begin_transaction", json!({"handle": handle})).unwrap()["payload"]["leaseId"]
+                .clone();
+        let inside = run("INSERT INTO ssh_rw VALUES (3, 'x')", Some(&lease));
+        assert_eq!(
+            inside["outcome"], "succeeded",
+            "SSH job in transaction: {inside}"
+        );
+        let ended = call(
+            "end_transaction",
+            json!({"leaseId": lease, "action": "rollback"}),
+        )
+        .unwrap()["payload"]
+            .clone();
+        assert_eq!(ended["outcome"], "rolled_back", "{ended}");
+        assert_eq!(count(), json!("1"));
+        assert_eq!(run("DROP TABLE ssh_rw", None)["outcome"], "succeeded");
+        call("disconnect_database", json!({"handle": handle})).unwrap();
+        report["sshReadWrite"] = json!({"jobs": true, "transactionRollback": true});
+    }
 
     // A stored DB password cannot be replayed against another target/route.
     if let Some(reference) = &db_ref {

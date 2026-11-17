@@ -552,6 +552,97 @@ async fn import_done(
     }
     Err("import did not finish".into())
 }
+/// Whole-database SQL export (MySQL/MariaDB): in a dedicated database, two tables whose name
+/// order is the reverse of their foreign-key order (with NULL, empty and binary values) are
+/// exported in one snapshot, dropped, and re-imported from the file; the rows come back exactly.
+/// In the fixture database, a 3 MiB row stops the export with an error naming its table, and a
+/// whole-database CSV export is refused.
+async fn whole_database_export(
+    connections: &Connections,
+    owner: OwnerId,
+    fixture: ConnectionId,
+    handle: ConnectionId,
+    observer: &mut Observer,
+    report: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), Failure> {
+    let export = |handle, format| async move {
+        let mut out = Vec::new();
+        connections
+            .export_table(
+                owner,
+                handle,
+                &ExportRequest {
+                    table: None,
+                    format,
+                    structure: format == ExportFormat::Sql,
+                    data: true,
+                },
+                &mut out,
+                &ExportProgress::default(),
+            )
+            .await
+            .map(|_| out)
+    };
+    let script = |sql: &'static str| async move {
+        let (id, _) = connections
+            .start_sql_import(owner, handle, sql.as_bytes().to_vec())
+            .map_err(|error| format!("{error:?}"))?;
+        let status = import_done(connections, owner, id).await?;
+        ensure(
+            status.outcome == Some(ExecutionOutcomeDto::Succeeded),
+            "whole-database setup script",
+        )
+    };
+    match export(fixture, ExportFormat::Sql).await {
+        Err(stoneql_runtime::TransferError::Unsupported(message))
+            if message.contains("`raw_large`") => {}
+        other => return Err(format!("oversized row: {:?}", other.map(|_| "exported")).into()),
+    }
+    ensure(
+        export(handle, ExportFormat::Csv).await
+            == Err(stoneql_runtime::TransferError::InvalidRequest),
+        "whole-database CSV export is refused",
+    )?;
+    script("CREATE TABLE z_parent (id INT PRIMARY KEY) ENGINE=InnoDB; CREATE TABLE a_child (id INT PRIMARY KEY, parent INT NOT NULL, note VARCHAR(10) NULL, b VARBINARY(4) NULL, FOREIGN KEY (parent) REFERENCES z_parent(id)) ENGINE=InnoDB; INSERT INTO z_parent VALUES (1), (2); INSERT INTO a_child VALUES (1, 1, NULL, X'00ff'), (2, 2, '', NULL);").await?;
+    let text = String::from_utf8(
+        export(handle, ExportFormat::Sql)
+            .await
+            .map_err(|error| format!("whole-database export: {error:?}"))?,
+    )?;
+    ensure(
+        text.contains("SET FOREIGN_KEY_CHECKS = 0;")
+            && text.find("CREATE TABLE `a_child`") < text.find("CREATE TABLE `z_parent`")
+            && text.contains("INSERT INTO `a_child`")
+            && text.contains("INSERT INTO `z_parent`")
+            && text.trim_end().ends_with("SET FOREIGN_KEY_CHECKS = 1;"),
+        "whole-database export carries every table",
+    )?;
+    script("DROP TABLE a_child; DROP TABLE z_parent;").await?;
+    let (id, count) = connections
+        .start_sql_import(owner, handle, text.into_bytes())
+        .map_err(|error| format!("{error:?}"))?;
+    let status = import_done(connections, owner, id).await?;
+    ensure(
+        status.outcome == Some(ExecutionOutcomeDto::Succeeded) && status.completed == count,
+        "whole-database export re-imports",
+    )?;
+    ensure(
+        observer
+            .scalar("SELECT COUNT(*) FROM stoneql_export_whole.a_child WHERE (id = 1 AND parent = 1 AND note IS NULL AND b = X'00ff') OR (id = 2 AND parent = 2 AND note = '' AND b IS NULL)".into())
+            .await?
+            == 2
+            && observer
+                .scalar("SELECT COUNT(*) FROM stoneql_export_whole.z_parent".into())
+                .await?
+                == 2,
+        "re-imported rows equal the source exactly",
+    )?;
+    report.insert(
+        "wholeDatabaseExport".into(),
+        json!({"roundTrip": true, "oversizedRowNamesTable": true, "csvRefused": true}),
+    );
+    Ok(())
+}
 /// M007 d5 SQL import on the real server (MySQL/MariaDB, A20): a StoneQL SQL export of
 /// `export_values` (CREATE TABLE and data, edge values) is renamed in the text, imported from one
 /// validated snapshot and compared NULL-safely and byte-exactly; a failing statement stops the
@@ -581,52 +672,6 @@ async fn sql_import(
         .await
         .map_err(|error| format!("export: {error:?}"))?;
     let text = String::from_utf8(exported)?.replace("`export_values`", "`import_values`");
-    // Whole database (table: None): every base table's CREATE TABLE and rows in one snapshot,
-    // foreign-key checks off while importing; CSV is refused for a whole database.
-    let mut whole = Vec::new();
-    connections
-        .export_table(
-            owner,
-            handle,
-            &ExportRequest {
-                table: None,
-                format: ExportFormat::Sql,
-                structure: true,
-                data: true,
-            },
-            &mut whole,
-            &ExportProgress::default(),
-        )
-        .await
-        .map_err(|error| format!("whole-database export: {error:?}"))?;
-    let whole = String::from_utf8(whole)?;
-    ensure(
-        whole.contains("CREATE TABLE `export_values`")
-            && whole.contains("CREATE TABLE `exec_text`")
-            && whole.contains("INSERT INTO `export_values`")
-            && whole.contains("SET FOREIGN_KEY_CHECKS = 0;")
-            && whole.find("SET FOREIGN_KEY_CHECKS = 0;") < whole.find("CREATE TABLE")
-            && whole.trim_end().ends_with("SET FOREIGN_KEY_CHECKS = 1;"),
-        "whole-database export carries every table",
-    )?;
-    ensure(
-        connections
-            .export_table(
-                owner,
-                handle,
-                &ExportRequest {
-                    table: None,
-                    format: ExportFormat::Csv,
-                    structure: false,
-                    data: true,
-                },
-                &mut Vec::new(),
-                &ExportProgress::default(),
-            )
-            .await
-            == Err(stoneql_runtime::TransferError::InvalidRequest),
-        "whole-database CSV export is refused",
-    )?;
     ensure(
         text.contains("CREATE TABLE `import_values`"),
         "export carries structure",
@@ -1981,6 +2026,22 @@ async fn harness() -> Result<(), Failure> {
     if mysql {
         step("sql import");
         sql_import(&connections, owner, handle, &mut observer, &mut report).await?;
+        step("whole-database export");
+        let mut whole = config();
+        whole.database = "stoneql_export_whole".into();
+        let whole = connections
+            .connect_with_access(owner, whole, None, None, Access::ReadWrite)
+            .await?;
+        whole_database_export(
+            &connections,
+            owner,
+            handle,
+            whole,
+            &mut observer,
+            &mut report,
+        )
+        .await?;
+        connections.disconnect(owner, whole).await?;
     }
 
     step("expiry lease start");

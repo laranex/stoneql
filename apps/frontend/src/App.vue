@@ -2269,7 +2269,7 @@ onBeforeUnmount(() => {
             <div v-else-if="!sqlError" class="sql-empty">
               <Terminal :size="28" /><strong>Your next query starts here.</strong
               ><span>Write SQL above and press ⌘ / Ctrl + Enter to run.</span
-              ><button @click="query.sql = isLive ? 'SELECT 1;' : `SELECT * FROM ${w.table} LIMIT 25;`">
+              ><button v-if="!isLive" @click="query.sql = `SELECT * FROM ${w.table} LIMIT 25;`">
                 Load a sample query <ArrowRight :size="12" />
               </button></div
           ></template>

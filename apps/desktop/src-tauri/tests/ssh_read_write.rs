@@ -85,7 +85,8 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
     };
     let code = |reply: Result<Value, Value>| reply.unwrap_err()["code"].clone();
 
-    for engine in ["postgresql"] {
+    {
+        let engine = "postgresql";
         let started = Instant::now();
         assert_eq!(
             code(raw("connect_direct", request(engine, "read_write", true))),

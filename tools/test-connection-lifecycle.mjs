@@ -167,6 +167,7 @@ CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT 
 CREATE USER 'stoneql_plain'@'%' IDENTIFIED BY '${password}'; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_plain'@'%';`);
     if(executionEvaluation||importBench){
       writeFileSync(join(init,'003-execution.sql'),`GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, EXECUTE, CREATE ROUTINE, ALTER ROUTINE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
+CREATE DATABASE stoneql_export_whole; GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, DELETE ON stoneql_export_whole.* TO 'stoneql_writer'@'%';
 CREATE TABLE exec_parent(id INT PRIMARY KEY) ENGINE=InnoDB; INSERT INTO exec_parent VALUES (1);
 CREATE TABLE exec_item(id INT PRIMARY KEY, parent INT, FOREIGN KEY (parent) REFERENCES exec_parent(id)) ENGINE=InnoDB;
 CREATE TABLE exec_cycle(n INT PRIMARY KEY) ENGINE=InnoDB;
