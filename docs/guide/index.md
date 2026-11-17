@@ -1,11 +1,11 @@
 # User guide
 
-StoneQL is a compact, phpMyAdmin-inspired database client for macOS. The desktop app connects live to your MySQL, MariaDB and PostgreSQL servers, directly or through an SSH tunnel. It is in **public beta**.
+StoneQL is a compact, phpMyAdmin-inspired database client for macOS, Windows and Linux. The desktop app connects live to your MySQL, MariaDB and PostgreSQL servers, directly or through an SSH tunnel (SSH tunnels on macOS and Linux only for now). It is in **public beta**.
 
 Follow these pages in order to get from a download to a working connection:
 
 1. [Download](./download.md) the beta and check that the file is intact.
-2. [Install](./install.md) it and approve the first launch.
+2. [Install](./install.md) it and get past the first-launch warning.
 3. [Connect to a database](./connect.md).
 
 Then, when you are connected:

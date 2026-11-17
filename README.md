@@ -4,19 +4,26 @@
 
 **StoneAge SQL Admin** · Formerly dbAdmin.
 
-A compact, phpMyAdmin-inspired database client. The **desktop app (macOS, public beta)** connects live to MySQL, MariaDB and PostgreSQL servers; the same Vue interface also runs in a browser as a **demo** with sample data and simulated operations.
+A compact, phpMyAdmin-inspired database client. The **desktop app (macOS, Windows and Linux; public beta)** connects live to MySQL, MariaDB and PostgreSQL servers; the same Vue interface also runs in a browser as a **demo** with sample data and simulated operations.
 
 ## Download
 
-**[StoneQL v0.1.0-beta.1](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1)** (pre-release) · [all releases](https://github.com/stoneAce/stoneql/releases)
+**[StoneQL v0.1.0-beta.2](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.2)** (pre-release) · [all releases](https://github.com/stoneAce/stoneql/releases)
 
-- `StoneQL-0.1.0-beta-970ade2.dmg` for **macOS on Apple Silicon (arm64) only**, plus `StoneQL-0.1.0-beta-970ade2.dmg.sha256`. Intel Macs, Windows and Linux builds are not released.
-- Verified on macOS 27.0.1 only.
-- The app is ad-hoc signed and **not notarized** (no Developer ID yet), so macOS Gatekeeper blocks the first launch of the downloaded copy. Verify the download with `shasum -a 256 -c StoneQL-0.1.0-beta-970ade2.dmg.sha256`, then follow the [install guide](docs/guide/install.md) for installing, the first launch, updating and uninstalling. [Connect to a database](docs/guide/connect.md) walks through the first connection; [Troubleshooting](docs/guide/troubleshooting.md) covers the Keychain prompt and connection errors.
+All assets are built from one release commit; `SHA256SUMS` covers them all. See the [download guide](docs/guide/download.md) to choose a file and check it.
+
+| Platform | Asset | Status |
+| --- | --- | --- |
+| macOS Apple Silicon (arm64) | `.dmg` | Beta. Ad-hoc signed, **not notarized** (first launch: Privacy & Security → Open Anyway). Verified on macOS 27.0.1 |
+| macOS Intel (x86_64) | `.dmg` | Beta. Signed like the arm64 build. Not yet tested on an Intel Mac |
+| Windows x64 | NSIS installer `.exe` | Beta. **Unsigned** (SmartScreen: More info → Run anyway); per-user install, WebView2 downloaded if missing. Direct connections only: **no SSH tunnels on Windows yet**. Tested on GitHub's Windows Server 2025 runners, not yet on a real Windows 10/11 PC |
+| Linux x86_64 | `.deb` (Ubuntu 22.04+, Debian 12+) | Beta. Install with `sudo apt install ./<file>.deb`. Tested on Ubuntu 26.04 under Xvfb and installed on Ubuntu 22.04 and Debian 12 containers; GNOME Keyring prompt, master-password flow and Wayland not yet checked by hand |
+
+Verify on macOS with `shasum -a 256 -c --ignore-missing SHA256SUMS`, on Linux with `sha256sum -c --ignore-missing SHA256SUMS`, and on Windows by comparing `Get-FileHash` output with `SHA256SUMS`. Then follow the [install guide](docs/guide/install.md) for installing, the first launch, updating and uninstalling. [Connect to a database](docs/guide/connect.md) walks through the first connection; [Troubleshooting](docs/guide/troubleshooting.md) covers first-launch warnings, saved-password prompts and connection errors. Report problems as [GitHub issues](https://github.com/stoneAce/stoneql/issues) with your OS version and the asset you used.
 
 ## What the beta does
 
-- Live MySQL, MariaDB and PostgreSQL over Direct or SSH tunnel, with verified TLS (TLS is optional for MySQL/MariaDB on this computer); passwords can be remembered in the macOS Keychain.
+- Live MySQL, MariaDB and PostgreSQL over Direct or SSH tunnel (SSH on macOS and Linux), with verified TLS (TLS is optional for MySQL/MariaDB on this computer). Passwords can be saved: macOS login Keychain; Windows DPAPI-encrypted files for the user account; Linux Secret Service, or without one StoneQL's master-password encrypted file.
 - Read-write by default (MySQL/MariaDB Direct and SSH, PostgreSQL Direct), with a saved **Read-only connection** option; PostgreSQL over SSH is read-only. PROD-tagged connections ask for confirmation.
 - Browse with server-side paging, sort and filter; insert, edit and delete rows of tables with a primary key; SQL scripts and transactions.
 - MySQL/MariaDB: the Explorer lists every database the account can see, switches between them and creates databases.
@@ -27,7 +34,7 @@ Not yet available for live connections: Search, table Operations (rename, copy, 
 
 ## Status
 
-StoneQL is beta software: keep backups and verify important changes on the server. Milestones M002–M007 and M009 remain open with recorded engineering gaps; Developer ID signing and notarization are deferred. Browser-demo operations are simulations and never touch a real database. No Axum server exists yet.
+StoneQL is beta software: keep backups and verify important changes on the server. Milestones M002–M007 and M009 remain open with recorded engineering gaps; Developer ID signing and notarization (macOS) and code signing (Windows) are deferred. Browser-demo operations are simulations and never touch a real database. No Axum server exists yet.
 
 ## Run
 
@@ -55,7 +62,7 @@ npm run docs:preview
 - `.ref/planning/`, `.ref/ms/`: internal audit, decisions and milestone specifications.
 - `.ref/workprogress.md`: ignored local continuity notes; never commit.
 - `.github/workflows/docs.yml`: manually gated GitHub Pages workflow for the [documentation site](https://stoneace.github.io/stoneql/).
-- `.github/workflows/rust.yml`: Rust foundation checks on a macOS 15 runner, run when a release is published or started manually.
+- `.github/workflows/rust.yml`: Rust foundation checks on macOS 15 and Windows Server 2025 runners (the Windows job also builds and smoke-tests the NSIS installer on release branches), run when a release is published or started manually.
 
 Building the desktop app from source is documented in [Desktop development](docs/development/desktop-host.md); the server path remains reserved. Shared Rust crates (core, contracts, runtime) and an isolated driver lab exist; see [Rust development](docs/development/rust-foundation.md) and [driver evaluation](docs/architecture/driver-evaluation.md). Read [AGENTS.md](AGENTS.md) before changes. The frontend remains browser-runnable without native APIs.
 

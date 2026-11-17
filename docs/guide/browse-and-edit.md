@@ -83,7 +83,7 @@ Your account needs the privileges to change the table (for example `ALTER` and `
 
 ## Preferences
 
-- The footer switches between the **Light** and **Dark** theme. StoneQL starts in Light whatever your macOS appearance; your choice is remembered.
+- The footer switches between the **Light** and **Dark** theme. StoneQL starts in Light whatever your system appearance; your choice is remembered.
 - **Settings** sets the rows per page and shows keyboard shortcuts.
 
 ## Not available yet

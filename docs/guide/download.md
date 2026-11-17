@@ -1,44 +1,79 @@
 # Download
 
-## Requirements
+StoneQL **v0.1.0-beta.2** is a public beta for macOS, Windows and Linux. Every file in it was built from the same release commit.
 
-- A Mac with **Apple Silicon** (M-series). There are no builds for Intel Macs, Windows or Linux yet.
-- The beta was tested on **macOS 27.0.1**. Older macOS versions have not been tested.
+## Choose your file
 
-## Get the beta
+Open the release page for **[StoneQL v0.1.0-beta.2](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.2)**. Later builds appear on the [releases page](https://github.com/stoneAce/stoneql/releases). Under **Assets**, download the file for your computer, plus `SHA256SUMS`. The release notes list each file name with its platform.
 
-1. Open the release page for **[StoneQL v0.1.0-beta.1](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1)**. Later builds appear on the [releases page](https://github.com/stoneAce/stoneql/releases).
-2. Under **Assets**, download both files into the same folder (for example Downloads):
-   - `StoneQL-0.1.0-beta-970ade2.dmg`: the app.
-   - `StoneQL-0.1.0-beta-970ade2.dmg.sha256`: its checksum.
+| Your computer | File | Tested on |
+| --- | --- | --- |
+| Mac with Apple Silicon (M-series) | macOS Apple Silicon (arm64) `.dmg` | macOS 27.0.1 |
+| Mac with an Intel processor | macOS Intel (x86_64) `.dmg` | Built for Intel; not yet tested on an Intel Mac |
+| Windows 10 or 11, 64-bit (x64) | Windows x64 installer (`.exe`) | GitHub's Windows Server 2025 machines; not yet tested on a real Windows 10 or 11 PC |
+| Ubuntu 22.04 or later, Debian 12 or later, 64-bit (x86_64) | Linux x64 `.deb` | Ubuntu 26.04, plus install and launch on Ubuntu 22.04 and Debian 12 |
+
+Not sure which Mac you have? Open the Apple menu → **About This Mac**: **Chip** with an *Apple M…* name means Apple Silicon; **Processor** with an *Intel* name means Intel.
+
+There are no builds yet for Windows on ARM, for Linux on ARM, or for Linux distributions that do not use `.deb` packages.
+
+### Requirements
+
+- **macOS:** the beta was tested on macOS 27.0.1 only. Older versions have not been tested.
+- **Windows:** the installer needs Microsoft Edge WebView2. Windows 11 includes it and Windows 10 usually has it; if it is missing, the installer downloads it, so stay online while installing. No administrator rights are needed.
+- **Linux:** WebKitGTK 4.1 version 2.38 or later (`libwebkit2gtk-4.1-0`) and glibc 2.34 or later. Ubuntu 22.04 gets that WebKitGTK version from its `jammy-updates` package source, which apt uses when updates are enabled. See [Install on Linux](./install.md#linux).
 
 ## Check the download
 
-The checksum proves the file you downloaded is exactly the file that was published.
+The checksum proves the file you downloaded is exactly the file that was published. `SHA256SUMS` lists one line per file: its SHA-256 checksum and its name. Keep `SHA256SUMS` in the same folder as the file you downloaded (for example Downloads).
+
+### macOS
 
 1. Open **Terminal** (in Applications → Utilities).
-2. Go to the folder with both files, for example:
+2. Run:
 
    ```sh
    cd ~/Downloads
+   shasum -a 256 -c --ignore-missing SHA256SUMS
    ```
 
-3. Run:
+3. It must print your file name followed by `: OK`. `--ignore-missing` skips the files for other platforms that you did not download.
 
-   ```sh
-   shasum -a 256 -c StoneQL-0.1.0-beta-970ade2.dmg.sha256
+### Linux
+
+In a terminal, run:
+
+```sh
+cd ~/Downloads
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+It must print your file name followed by `: OK`.
+
+### Windows
+
+Windows has no built-in command that reads `SHA256SUMS`, so compare by hand.
+
+1. Open **PowerShell** (Start menu → type *PowerShell*).
+2. Run, with the name of the installer you downloaded:
+
+   ```powershell
+   cd $HOME\Downloads
+   Get-FileHash .\<installer>.exe
    ```
 
-4. It must print:
+3. Open `SHA256SUMS` in Notepad and find the line that ends with the installer's name. The long value under **Hash** must match the checksum at the start of that line, character for character. Upper or lower case does not matter.
 
-   ```
-   StoneQL-0.1.0-beta-970ade2.dmg: OK
-   ```
+If the check fails, **do not open the file**: delete it and download it again.
 
-The expected SHA-256 is `3da858b6cd3c5819bd7d44ae5674cf257a28dfef58bdb6f0b7731c0ea9467a1a`. If the check fails, **do not open the file**: delete it and download it again.
+## About signing
 
-## About the signature
+None of the beta files is signed with a publisher certificate yet, so each system warns you the first time:
 
-The beta is signed ad hoc and is **not notarized by Apple** (it has no Developer ID signature yet). macOS therefore blocks its first launch until you approve it. [Install](./install.md) shows how.
+- **macOS:** the app is signed ad hoc and **not notarized by Apple** (it has no Developer ID signature). macOS blocks its first launch until you approve it.
+- **Windows:** the installer is **unsigned**. Microsoft Defender SmartScreen shows “Windows protected your PC” until you choose to run it.
+- **Linux:** the `.deb` package is not signed; `SHA256SUMS` is the way to check it.
+
+[Install](./install.md) shows how to get past each warning. Only do this for a file whose checksum matched.
 
 Next: [Install StoneQL](./install.md).

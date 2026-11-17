@@ -3,14 +3,14 @@ layout: home
 hero:
   name: StoneQL
   text: Old habits. New engine.
-  tagline: StoneAge SQL Admin — formerly dbAdmin. A compact, familiar database client for MySQL, MariaDB and PostgreSQL on macOS, now in public beta.
+  tagline: StoneAge SQL Admin — formerly dbAdmin. A compact, familiar database client for MySQL, MariaDB and PostgreSQL on macOS, Windows and Linux, now in public beta.
   image:
     src: /icon.png
     alt: StoneQL faceted-stone database icon
   actions:
     - theme: brand
-      text: Download v0.1.0-beta.1
-      link: https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1
+      text: Download v0.1.0-beta.2
+      link: /guide/download
     - theme: alt
       text: Install
       link: /guide/install
@@ -19,7 +19,7 @@ hero:
       link: /guide/connect
 features:
   - title: Connect to your servers
-    details: Live MySQL, MariaDB and PostgreSQL, directly or through an SSH tunnel, with verified TLS and explicitly trusted SSH host keys. Remember passwords in the macOS Keychain.
+    details: Live MySQL, MariaDB and PostgreSQL, directly or through an SSH tunnel, with verified TLS and explicitly trusted SSH host keys (SSH tunnels on macOS and Linux). Remember passwords in the system's password store.
     link: /guide/connect
     linkText: Connect to a database
   - title: Browse and edit tables
@@ -35,11 +35,11 @@ features:
     link: /guide/import-export
     linkText: Import and export
   - title: Help when something goes wrong
-    details: First-launch approval, Keychain prompts and connection errors, with what each message means and what to do.
+    details: First-launch warnings, saved-password prompts and connection errors, with what each message means and what to do.
     link: /guide/troubleshooting
     linkText: Troubleshooting
   - title: What's in the beta
-    details: macOS on Apple Silicon only, ad-hoc signed and not notarized. Search, table Operations and managing views, routines, triggers and events are not available yet.
+    details: macOS (Apple Silicon and Intel), Windows x64 and Linux x86_64 betas, not yet signed or notarized; Intel Macs and real Windows PCs are not yet tested. Search, table Operations and managing views, routines, triggers and events are not available yet.
     link: /guide/beta
     linkText: Beta scope
 ---

@@ -1,6 +1,6 @@
 # Connect to a database
 
-StoneQL connects to **MySQL**, **MariaDB** and **PostgreSQL** servers, either directly or through an SSH tunnel. You need the server's host name and port and a database account (user name and password).
+StoneQL connects to **MySQL**, **MariaDB** and **PostgreSQL** servers, either directly or through an SSH tunnel (SSH tunnels are not available on Windows yet). You need the server's host name and port and a database account (user name and password).
 
 ::: tip Start safely
 New connections are **read-write**: SQL scripts, row edits and structure changes can change data. When you explore a server that matters, use an account with only the privileges you need, or tick **Read-only connection** (step 6).
@@ -14,8 +14,8 @@ New connections are **read-write**: SQL scripts, row edits and structure changes
 4. **Optional: label it.** Choose an **Environment** (Local, Development, Staging, Production or Custom), a **Group** and a **Connection color**. Connections tagged **Production** show a **PROD** badge and ask for extra confirmation; see [Production connections](#production-connections).
 5. **Enter the server and account.** Keep **Direct** selected (or see [Connect through an SSH tunnel](#connect-through-an-ssh-tunnel)), then fill in **Host**, **Port**, **Username** and **Password**. These fields are used exactly as typed.
 6. **Choose read-write or read-only.** Leave **Read-only connection** unticked for full access, or tick it to allow only reading. The choice is saved with the connection. See [Read-only or read-write](#read-only-or-read-write).
-7. **Check encryption.** For a server on another computer, StoneQL always uses verified TLS, so there is nothing to choose. For MySQL or MariaDB on this Mac, see [TLS and certificates](#tls-and-certificates).
-8. **Decide whether to remember the password.** **Remember database password in the system keychain** is ticked by default; see [Saved passwords](#saved-passwords). Untick it to type the password each time you connect.
+7. **Check encryption.** For a server on another computer, StoneQL always uses verified TLS, so there is nothing to choose. For MySQL or MariaDB on this computer, see [TLS and certificates](#tls-and-certificates).
+8. **Decide whether to remember the password.** **Remember database password** is ticked by default; the note under it says where the password will be saved. See [Saved passwords](#saved-passwords). Untick it to type the password each time you connect.
 9. **Test and choose a database.** Choose **Test connection**. A successful test shows the databases your account can see in **Databases on this server**: pick one. You can instead type a name in **Default database**. A default database is required to save.
 10. **Connect.** Choose **Save & connect**. (**Save** stores the connection without connecting.)
 
@@ -44,29 +44,51 @@ Set **Environment** to **Production** for servers that matter. These connections
 ## TLS and certificates
 
 - **Another computer:** StoneQL always uses TLS and verifies the server's certificate and host name. It never falls back to an unencrypted connection.
-- **MySQL or MariaDB on this Mac** (host `localhost`, `127.0.0.1` or `::1`, Direct): the dialog shows **Use TLS**, off for new connections. Off sends traffic unencrypted and needs no certificate. On verifies the certificate and host name like any other connection. If a local TLS connection fails because the certificate does not match, turn **Use TLS** off and try again.
+- **MySQL or MariaDB on this computer** (host `localhost`, `127.0.0.1` or `::1`, Direct): the dialog shows **Use TLS**, off for new connections. Off sends traffic unencrypted and needs no certificate. On verifies the certificate and host name like any other connection. If a local TLS connection fails because the certificate does not match, turn **Use TLS** off and try again.
 - **PostgreSQL** and SSH-tunnelled connections always use verified TLS.
 - **Your own certificate authority:** if the server's certificate is issued by a private CA, choose its PEM file under **Trusted CA certificate (optional, session only)**. It is kept only until StoneQL quits (16 KiB maximum; private keys are rejected). **Use system trust roots** removes it.
 
 ## Saved passwords
 
-With **Remember database password in the system keychain** ticked, StoneQL stores the password in your macOS login Keychain, never in its own files. The saved password works only for the same server, account and route; if you change those, type it again.
+With **Remember database password** ticked, StoneQL saves the password in your system's password store, never in its connection settings. The note under the password field says where a new password goes, and the field of a saved password names the store that holds it (for example *Saved in Keychain*). The saved password works only for the same server, account and route; if you change those, type it again.
 
-The first time a new StoneQL build reads a password saved by an earlier build (for example after an update), macOS asks for your login password, usually twice. Choose **Always Allow**. See [Keychain prompts](./troubleshooting.md#keychain-prompts).
+Unticking the option, or removing the connection, deletes the saved password. If the store refuses (for example because it is locked), StoneQL tells you and saves nothing; removing a connection then offers **Remove anyway**.
 
-Unticking the option, or removing the connection, deletes the saved password. If the Keychain refuses (for example because it is locked), StoneQL tells you, and removing a connection offers **Remove anyway**.
+The same applies to **Remember SSH password** and **Remember key passphrase** for SSH tunnels.
+
+### macOS: the Keychain
+
+Passwords are saved in your login Keychain. The first time a new StoneQL build reads a password saved by an earlier build (for example after an update), macOS asks for your login password, usually twice. Choose **Always Allow**. See [Keychain prompts](./troubleshooting.md#keychain-prompts).
+
+### Windows: encrypted for your Windows account
+
+Passwords are saved as encrypted files in `%APPDATA%\me.thixpin.stoneql.credentials\`, using Windows' own encryption for your user account (DPAPI). Only your Windows account can decrypt them, but **any program running as your Windows user can**, the same as with Windows Credential Manager. The field of a saved password shows *Saved (Windows encrypted)*.
+
+### Linux: the desktop keyring, or StoneQL's encrypted file
+
+- **With a desktop keyring** (Secret Service, such as GNOME Keyring; only GNOME Keyring was tested), passwords are saved there. If the keyring is locked, it asks you to unlock it. If you dismiss that prompt, or the keyring refuses for another reason, the password is **not saved**: StoneQL never falls back to its own file while a keyring is running.
+- **Without a desktop keyring**, StoneQL saves passwords in its own encrypted file, protected by a **master password**:
+  - The first time you save a password, StoneQL asks you to choose a master password of at least 8 characters.
+  - You enter it once each time StoneQL starts, when a saved password is first needed.
+  - **It cannot be recovered.** If you forget it, choose **Reset saved passwords…** in the unlock dialog: this deletes every password saved in the file. Your connections keep their other settings and ask for their passwords again.
+
+A password saved in one store stays there: if a keyring starts running later, new passwords go to the keyring and passwords already in the file still work from the file.
 
 ## Connect through an SSH tunnel
 
 Use this when the database is reachable only from a server you can SSH into.
+
+::: warning Not available on Windows yet
+SSH tunnels work on macOS and Linux. On Windows the **SSH Tunnel** option still appears, but it cannot connect; use **Direct**.
+:::
 
 1. In the connection dialog choose **SSH Tunnel**.
 2. Enter **Host** and **Port** of the database **as the SSH server sees it**, plus the database **Username** and **Password**. Connections through a tunnel always use verified TLS, checked against this **Host**, so use a host name that the database server's certificate covers.
 3. Under **SSH tunnel configuration**, enter the **SSH host**, **SSH port** and **SSH username**.
 4. Choose an **Authentication** method:
    - **SSH agent:** uses the SSH agent available to StoneQL. Agent forwarding is never requested.
-   - **Password:** enter the **SSH password**; optionally tick **Remember SSH password in the system keychain**.
-   - **Private key:** use **Choose key file…** and, if the key is encrypted, enter the **Key passphrase** (optionally remembered in the Keychain). Ed25519 and ECDSA keys work; RSA keys are not supported yet. Choose the file again after restarting StoneQL.
+   - **Password:** enter the **SSH password**; optionally tick **Remember SSH password**.
+   - **Private key:** use **Choose key file…** and, if the key is encrypted, enter the **Key passphrase** (optionally saved with **Remember key passphrase**). Ed25519 and ECDSA keys work; RSA keys are not supported yet. Choose the file again after restarting StoneQL.
 5. **Trust the host key.** Choose **Fetch host key** (or **Test connection**). StoneQL shows the key type and its SHA256 fingerprint. Compare it with the fingerprint from the server's administrator (for example from `ssh-keygen -lf` on the server). Only if they match, choose **Trust this host key** and confirm. Otherwise choose **Do not trust**.
 6. Continue from step 8 of [Create your first connection](#create-your-first-connection).
 
@@ -80,9 +102,9 @@ While a test or connection is in progress, **Cancel connecting** stops it and di
 - **Edit or remove** a connection from the connection manager.
 - **Several connections at once:** each open connection has its own tab with its own Explorer, SQL tabs and results.
 - **Disconnect** from the SQL tab, or close the connection's tab. Sessions end after one hour, and StoneQL never reconnects by itself: choose **Connect** again.
-- After restarting StoneQL, connect again; you are asked for the password unless it is saved in the Keychain.
+- After restarting StoneQL, connect again; you are asked for the password unless it is saved.
 
-StoneQL stores connection names, groups, colors, tags and other non-secret settings on your Mac. Passwords, key passphrases and CA certificates are never stored in its own files.
+StoneQL stores connection names, groups, colors, tags and other non-secret settings on your computer. Passwords and key passphrases are kept only in the password store described in [Saved passwords](#saved-passwords), and CA certificates are never stored.
 
 ## For developers
 

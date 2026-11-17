@@ -64,7 +64,7 @@ Sometimes StoneQL cannot know whether the server applied a statement, for exampl
 2. Check the server yourself (for example, query the rows you changed).
 3. Choose **Acknowledge** to hide the entry. Acknowledging does not mark the work as done or undone.
 
-The list survives reloading, quitting and crashes. While 16 unknown outcomes are unacknowledged, StoneQL starts no new read-write work (an open transaction can still be committed or rolled back). If StoneQL cannot save this list on your Mac, it says so and refuses new read-write work until it can.
+The list survives reloading, quitting and crashes. While 16 unknown outcomes are unacknowledged, StoneQL starts no new read-write work (an open transaction can still be committed or rolled back). If StoneQL cannot save this list on your computer, it says so and refuses new read-write work until it can.
 
 ## For developers
 
