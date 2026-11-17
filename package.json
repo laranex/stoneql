@@ -33,6 +33,7 @@
     "desktop:run": "npm run desktop:build && cargo run --locked -p stoneql-desktop --features custom-protocol",
     "desktop:test": "cargo test --locked -p stoneql-desktop --features custom-protocol,sqlite && cargo test --locked -p stoneql-desktop --features custom-protocol --test ipc",
     "desktop:bundle:adhoc": "npm run build && cd apps/desktop/src-tauri && tauri build --bundles app --features custom-protocol --config tauri.macos-adhoc.conf.json -- --locked",
+    "desktop:dmg:adhoc": "npm run build && cd apps/desktop/src-tauri && tauri build --bundles app,dmg --features custom-protocol --config tauri.macos-adhoc.conf.json -- --locked",
     "desktop:profile": "npm run build && node tools/profile-startup.mjs",
     "desktop:smoke": "npm run desktop:build && cargo run --locked -p stoneql-desktop --features custom-protocol -- --smoke-test",
     "test:lifecycle": "node tools/test-connection-lifecycle.mjs",
