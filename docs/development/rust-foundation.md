@@ -1,6 +1,6 @@
 # Rust foundation development
 
-M001 implements shared vocabulary/DTOs and a disposable SQLx lab. The Vue client still uses mocks. No native/server app, SSH, vault or production database adapter exists.
+M001 implements shared vocabulary/DTOs and a disposable SQLx lab. This page records that foundation; the desktop host, runtime, SSH and live adapters were added by later milestones (see [desktop host](./desktop-host.md)). No server app or vault exists.
 
 ## Tooling and commands
 

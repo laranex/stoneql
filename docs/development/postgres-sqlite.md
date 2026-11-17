@@ -1,6 +1,6 @@
 # PostgreSQL and SQLite adapters
 
-**Status: M004 local implementation and evidence recorded; acceptance gates remain open.** Explicit desktop **Live read-only** profiles now support Direct PostgreSQL and natively chosen SQLite files alongside MySQL/MariaDB. They reuse the M003 registry, limits, error mapping and per-query connection discard. Browser/default profiles remain mocks. Schema discovery, mutations, routines, transactions, cancellation APIs, SSH and transfers are not exposed.
+**Status: M004 local implementation and evidence recorded; acceptance gates remain open.** Desktop live profiles support Direct PostgreSQL and natively chosen SQLite files (development builds only; release builds exclude SQLite) alongside MySQL/MariaDB. Read-only queries reuse the M003 registry, limits, error mapping and per-query connection discard. This page records the M004 read-only adapters; later milestones added PostgreSQL schema discovery and Browse, SSH tunnels ([M005](./ssh-credentials.md)), read-write jobs, transactions and cancellation over Direct ([M006](./sql-execution.md)) and data-only export ([M007](../user-guide/import-export.md)). SQLite live profiles remain SQL-only.
 
 ## PostgreSQL
 

@@ -14,7 +14,7 @@ export default defineConfig({
     logo: '/icon.png', nav: [{ text: 'Guide', link: '/getting-started/' }, { text: 'Architecture', link: '/architecture/overview' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
     sidebar, search: { provider: 'local' }, outline: [2, 3],
     socialLinks: repository ? [{ icon: 'github', link: repository }] : [],
-    footer: { message: 'Mock-first prototype · Desktop live read-only development slice.' }
+    footer: { message: 'Public beta · macOS desktop app with live connections · Browser demo uses sample data.' }
   },
   markdown: {
     config(md) {

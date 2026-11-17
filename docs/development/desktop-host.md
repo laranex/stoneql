@@ -2,7 +2,7 @@
 
 ## Implementation status
 
-M002 adds a Tauri 2 development host around the shared Vue frontend. Browser/default profiles remain session mocks. M003 adds explicit Direct MySQL/MariaDB live read-only profiles; M004 adds Direct PostgreSQL and natively chosen SQLite files; M005 adds SSH tunnels and macOS Keychain secret references. Server vault, updater and HTTP server are not exposed. Browser development remains available through `npm run dev` without native imports.
+M002 adds a Tauri 2 host around the shared Vue frontend. M003 adds Direct MySQL/MariaDB live read-only profiles; M004 adds Direct PostgreSQL and natively chosen SQLite files (development builds only); M005 adds SSH tunnels and macOS Keychain secret references; M006 adds [read-write SQL execution](./sql-execution.md) (on by default since A15) and live CRUD; M007 adds live SQL/CSV/JSON export and SQL/CSV import. The desktop app is live-only: it has no sample connections or Mock mode, which remain in the browser build. Server vault, updater and HTTP server are not exposed. Browser development remains available through `npm run dev` without native imports.
 
 Use Node 26 and the pinned Rust toolchain. Install the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/) first.
 
@@ -14,7 +14,7 @@ npm run desktop:test
 npm run desktop:smoke
 ```
 
-The smoke command opens the actual native window, checks that Vue rendered, round-trips lossless synthetic values, and exits. Its 15-second deadline prevents a stalled WebView being reported as a pass. This debug-only smoke is not a signed distribution test. Build embeds `apps/frontend/dist`; rebuild after frontend changes. Standard OS window decorations retain native dragging. Packaging/signing remains disabled pending M009.
+The smoke command opens the actual native window, checks that Vue rendered, round-trips lossless synthetic values, and exits. Its 15-second deadline prevents a stalled WebView being reported as a pass. This debug-only smoke is not a signed distribution test. Build embeds `apps/frontend/dist`; rebuild after frontend changes. Standard OS window decorations retain native dragging. The public beta is bundled with an ad-hoc signature (`desktop:bundle:adhoc`, below) and is not notarized; Developer ID signing, notarization and the DMG remain pending (M009).
 
 ## IPC boundary
 
@@ -22,7 +22,7 @@ The native adapter lives in `apps/desktop/src-tauri`. Shared core/contracts cont
 
 The application manifest explicitly registers protected commands. Only the main local window receives host-info, synthetic contract-probe, close-resolution and the database command permissions described below. No renderer filesystem, shell, dialog or remote-origin permissions are granted. The dialog plugin is used only by trusted Rust code: the shutdown fallback and the native SQLite and SSH key file pickers. CSP excludes remote scripts, frames and connections.
 
-Native close/quit requests reuse the existing unsaved-change confirmation. Cancel preserves edits; an unresponsive renderer receives a native warning before forced close. The fallback dialog's manual interaction remains unverified. Failed IPC disables the bridge while preserving mock mode; it never implies a real connection.
+Native close/quit requests reuse the existing unsaved-change confirmation. Cancel preserves edits; an unresponsive renderer receives a native warning before forced close. The fallback dialog's manual interaction remains unverified. Failed IPC bootstrap disables the bridge (host state `unavailable`); it never implies a real connection.
 
 ## Local verification and remaining gates
 

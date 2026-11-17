@@ -14,7 +14,11 @@ Tauri 2 packages the shared frontend and IPC adapter. The architecture stays cro
 
 ### Current host configuration — Implemented and verified
 
-Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `StoneQL`, version `0.1.0`, identifier `me.thixpin.stoneql`, `bundle.active: false` and an empty `bundle.icon` list (only a PNG source icon exists); `tauri.macos-adhoc.conf.json` turns bundling on for an ad-hoc signed `.app` (`npm run desktop:bundle:adhoc`). No Developer ID identity, entitlements file, minimum macOS version or updater plugin is configured. The CSP limits renderer connections to IPC; all database and SSH networking happens in the Rust host. `security-framework` is a macOS-only target dependency of the desktop host, not of shared crates. Only debug development builds and a startup smoke have run.
+Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `StoneQL`, version `0.1.0`, identifier `me.thixpin.stoneql`, `bundle.active: false` and an empty `bundle.icon` list (only a PNG source icon exists); `tauri.macos-adhoc.conf.json` turns bundling on for an ad-hoc signed `.app` (`npm run desktop:bundle:adhoc`). No Developer ID identity, entitlements file, minimum macOS version or updater plugin is configured. The CSP limits renderer connections to IPC; all database and SSH networking happens in the Rust host. `security-framework` is a macOS-only target dependency of the desktop host, not of shared crates. Only debug development builds, a startup smoke and the ad-hoc signed bundle have run.
+
+### Current public beta build
+
+The public beta is the ad-hoc signed `.app` above: it is **not notarized**, so Gatekeeper warns on first launch and users open it with Control-click → **Open** (or **Open Anyway** in System Settings → Privacy & Security). A DMG installer is being prepared. SQLite is excluded from release builds (A5). This beta does not meet the signed-and-notarized release gates below, which remain open.
 
 ### v0.1.0 Alpha (macOS) packaging and lifecycle requirements
 

@@ -2,7 +2,7 @@
 
 ## Current scope
 
-M003 is in progress. `stoneql-runtime` implements a host-independent lifecycle and restricted read-only query adapter. Explicit desktop Direct MySQL/MariaDB profiles use it through native commands and the existing SQL workspace; M004 extends the same registry to Direct PostgreSQL and natively granted SQLite files (see [PostgreSQL and SQLite adapters](./postgres-sqlite.md)). Browser/default profiles and other operations remain mocks. M005 adds owned SSH tunnels to the same registry entries and OS secret references resolved by the desktop host; see [SSH transport and secret references](./ssh-credentials.md).
+M003 is in progress. `stoneql-runtime` implements a host-independent lifecycle and restricted read-only query adapter. Explicit desktop Direct MySQL/MariaDB profiles use it through native commands and the existing SQL workspace; M004 extends the same registry to Direct PostgreSQL and natively granted SQLite files (see [PostgreSQL and SQLite adapters](./postgres-sqlite.md)). The browser demo remains mock-only; the desktop app has no mock profiles. M005 adds owned SSH tunnels to the same registry entries and OS secret references resolved by the desktop host; see [SSH transport and secret references](./ssh-credentials.md).
 
 ```sh
 cargo test --locked -p stoneql-runtime

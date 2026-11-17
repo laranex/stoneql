@@ -71,11 +71,11 @@ The approved decision lists nine release requirements. Their current state:
 
 | Requirement | Current state | Label |
 | --- | --- | --- |
-| Native Tauri packaging (.app, distributable image) | `bundle.active` is `false`, `bundle.icon` is empty; only debug development builds exist | Unresolved release blocker |
+| Native Tauri packaging (.app, distributable image) | `bundle.active` is `false` in the base config; `desktop:bundle:adhoc` builds an ad-hoc signed `.app` (the public beta); the DMG is being prepared | Unresolved release blocker |
 | macOS Keychain integration | Login-Keychain secret references through actual command handlers (MockRuntime) with fixture cleanup | Implemented and verified (fixtures only); real Keychain prompts, prompt-vs-8 s renderer timeout and behavior after signing are Unresolved release blockers |
 | SSH authentication and tunnel reliability | Agent/password/key-file tunnels, enrolled host keys, 100 mixed cycles with zero orphans on macOS ARM fixtures | Implemented and verified (fixtures); graphical end-to-end and approved transport budget are Unresolved release blockers |
-| Real MySQL/MariaDB workflows | Bounded read-only SQL against MySQL 8.4.6 / MariaDB 11.4.8 fixtures through command handlers | Implemented and verified (fixtures) for read-only SQL only; browsing, CRUD, safe read-write SQL and SQL/CSV transfers are Unresolved release blockers (see feature scope below) |
-| Application signing and notarization | No signing identity, entitlements or notarization configured | Unresolved release blocker; credentials need human approval |
+| Real MySQL/MariaDB workflows | Bounded read-only SQL against MySQL 8.4.6 / MariaDB 11.4.8 fixtures through command handlers; live browsing, CRUD, read-write SQL and transfers implemented locally (see feature scope below) | Implemented and verified (fixtures) for read-only SQL; the other workflows are implemented but not accepted and remain Unresolved release blockers |
+| Application signing and notarization | Ad-hoc signature only; no Developer ID identity, entitlements or notarization configured | Unresolved release blocker; credentials need human approval |
 | Install/upgrade/uninstall behavior | Never executed; no upgrade/data-migration or uninstall cleanup policy | Unresolved release blocker |
 | Native end-to-end testing | Never executed: tests use MockRuntime handlers, browser shims and a startup-only WebView smoke | Unresolved release blocker |
 | Resource usage and startup performance | Debug WebView smoke (453–609 ms) and runtime-only RSS profiles; no release-build, whole-app profile | Unresolved release blocker; budgets are Proposed technical decisions |
@@ -85,12 +85,12 @@ The approved decision lists nine release requirements. Their current state:
 
 | Capability | Alpha treatment | Current state |
 | --- | --- | --- |
-| Live browsing: database/table tree, paged browse with server-side sort and filter | Approved product decision (required) | Unresolved release blocker; live UI shows only the SQL workspace today |
-| CRUD: single-row insert/update/delete with primary-key-based optimistic checks and authoritative constraint errors; tables without a primary key browse-only | Approved (required); slice details are Proposed | Unresolved release blocker; CRUD is mock-only |
-| Safe SQL execution: background jobs, `BUSY` instead of queuing, best-effort cancellation, no automatic retry of uncertain writes, outcomes reported as confirmed success, failure, cancellation or unknown, owned and expiring transactions | Approved principles; numeric limits and contract details Proposed | Read-only SQL implemented and verified; execution jobs and writes are in progress, not verified. Unrestricted read-write SQL stays disabled until MySQL write cancellation and SSH cancellation-slot exhaustion are resolved |
+| Live browsing: database/table tree, paged browse with server-side sort and filter | Approved product decision (required) | Unresolved release blocker; implemented locally for MySQL/MariaDB/PostgreSQL (tables and views of the default database, server-side paging, sort, filter, exact count); not accepted |
+| CRUD: single-row insert/update/delete with primary-key-based optimistic checks and authoritative constraint errors; tables without a primary key browse-only | Approved (required); slice details are Proposed | Unresolved release blocker; implemented locally for tables with a primary key on read-write connections, statements fixture-verified (`test:execution`); not accepted |
+| Safe SQL execution: background jobs, `BUSY` instead of queuing, best-effort cancellation, no automatic retry of uncertain writes, outcomes reported as confirmed success, failure, cancellation or unknown, owned and expiring transactions | Approved principles; numeric limits and contract details Proposed | Read-only SQL implemented and verified; execution jobs, transactions and writes implemented with fixture evidence, not accepted. Read-write is enabled since A15 (2026-11-17) for MySQL/MariaDB over Direct and SSH and PostgreSQL over Direct; PostgreSQL over SSH stays read-only ([details](../development/sql-execution.md)) |
 | SSH and saved credentials | Approved (required); native host-key trust ownership approved; four review findings plus secret-deletion error handling are alpha blockers | Implemented and verified on fixtures; blockers open |
-| SQL and CSV import/export (MySQL/MariaDB) | Approved (required); GZIP export proposed, GZIP import proposed deferred | Unresolved release blocker; transfers are simulated |
-| PostgreSQL | Optional; admitted only if its alpha gates pass | Read-only adapter implemented and verified on fixtures |
+| SQL and CSV import/export (MySQL/MariaDB) | Approved (required); GZIP export proposed, GZIP import proposed deferred | Unresolved release blocker; implemented locally: export (SQL/CSV/JSON, optional GZIP) and CSV and MySQL/MariaDB SQL import; not accepted |
+| PostgreSQL | Optional; admitted only if its alpha gates pass | Read-only adapter implemented and verified on fixtures; Browse, read-write over Direct and data-only export implemented locally, not accepted |
 | SQLite | **Deferred** (code kept, outside support claims) | Read-only adapter implemented and verified on fixtures |
 | Advanced objects (routines, triggers, events, materialized views, object DDL editing), XLSX import | **Deferred** | Mock screens only |
 | Windows, Linux | **Deferred** | — |

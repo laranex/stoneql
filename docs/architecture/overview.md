@@ -1,10 +1,10 @@
 # Architecture overview
 
-**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes explicit native Direct MySQL/MariaDB read-only profiles; M004 adds Direct PostgreSQL and natively granted SQLite files, and M005 adds desktop SSH tunnels and macOS Keychain secret references; broader acceptance gates remain open. Axum and production connectivity remain unimplemented; Vue mocks remain the product baseline.
+**Status: production architecture remains proposed.** M001 foundation is committed; the M002 Tauri development host is verified on macOS, with cross-OS/security gates open. M003 exposes native Direct MySQL/MariaDB read-only profiles; M004 adds Direct PostgreSQL and natively granted SQLite files, M005 adds desktop SSH tunnels and macOS Keychain secret references, M006 adds read-write SQL execution and live CRUD, and M007 adds live import/export; acceptance gates remain open. The desktop app (public beta) is live-only; the browser build keeps the Vue mocks as a demo. Axum and the server remain unimplemented.
 
 ## Current system
 
-Vue components call Pinia state and session-only mock services. Connection dialog test/save/connect/close/remove orchestration for mock and live profiles lives in `composables/useConnectionWorkflow.ts`, not in `App.vue`. Pure schema validation, engine capabilities and export configuration are separate from UI components. Non-secret profile/preferences persistence is browser-local. See [object coverage](../database-objects.md) and [SQL completion status](../user-guide/sql-editor.md) for verified boundaries.
+Vue components call Pinia state, which uses session-only mock services in the browser demo and the native bridge (`services/nativeHost.ts`, `services/liveConnections.ts`) in the desktop app. Connection dialog test/save/connect/close/remove orchestration for mock and live profiles lives in `composables/useConnectionWorkflow.ts`, not in `App.vue`. Pure schema validation, engine capabilities and export configuration are separate from UI components. Non-secret profile/preferences persistence is browser-local. See [object coverage](../database-objects.md) and [SQL completion status](../user-guide/sql-editor.md) for verified boundaries.
 
 ## Proposed components
 

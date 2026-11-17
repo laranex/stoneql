@@ -1,10 +1,10 @@
 # Streaming import and export
 
-**Status: Proposed / awaiting approval.** Current jobs simulate progress and summaries only; no real dump or compression is performed.
+**Status: partially implemented; the rest is Proposed / awaiting approval.** The desktop app implements live export (table, chosen tables or whole database; SQL, CSV and JSON; optional GZIP; one read-only snapshot; temporary file renamed when complete), CSV import into a table and MySQL/MariaDB SQL import; see the [user guide](../user-guide/import-export.md) for current behavior. Browser-demo jobs still simulate progress and summaries only. Limits and mechanisms not described in the user guide remain proposals.
 
 ## v0.1.0 Alpha scope
 
-Basic **SQL and CSV import/export for MySQL/MariaDB** is part of the approved alpha feature scope (D022, 2026-10-26). Nothing below is implemented; mechanisms and limits are **Proposed**.
+Basic **SQL and CSV import/export for MySQL/MariaDB** is part of the approved alpha feature scope (D022, 2026-10-26). The table below records that scope decision; for what is implemented, see the status above. Unimplemented mechanisms and limits remain **Proposed**.
 
 | Format / feature | Alpha treatment |
 | --- | --- |
@@ -12,9 +12,9 @@ Basic **SQL and CSV import/export for MySQL/MariaDB** is part of the approved al
 | SQL export | Required; logical exporter (table structure plus batched inserts), no dependency on a native dump tool; InnoDB exported from a consistent read-only snapshot, non-transactional tables labelled as not snapshot-consistent; views, routines, triggers and events listed as omitted |
 | CSV import into an existing table | Required; validated against live metadata, parameterized batches inside an owned transaction, stop on first error, truthful committed/rejected/unknown counts |
 | SQL import | Required; statements run one at a time through the safe execution path, no whole-file rollback promise, implicit DDL commits stated; waits for the gate that enables unrestricted read-write SQL |
-| GZIP | Proposed: export kept (no expansion risk); import deferred unless quotas apply to decompressed bytes with a tested expansion-ratio cap |
+| GZIP | Proposed: export kept (no expansion risk; GZIP export is implemented); import deferred unless quotas apply to decompressed bytes with a tested expansion-ratio cap |
 | XLSX import | **Deferred** (approved deferral) |
-| XLSX and JSON export, ZIP | Proposed deferral |
+| XLSX and JSON export, ZIP | Proposed deferral; JSON export has since been implemented in the desktop app |
 | PostgreSQL and SQLite transfers | Deferred with those engines' alpha status |
 
 Files are reached only through native save/open dialogs that issue owner-scoped, one-shot grants; exports write to a temporary file beside the target and rename atomically, removing it on cancel or failure. File, record, batch and disk quotas are proposed for approval and are not yet set.
