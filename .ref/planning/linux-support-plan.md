@@ -100,9 +100,9 @@ Mac (shared code, `7324b40`+): `npm test` 245 + 22, `test:browser` 75 passed, `d
 
 Server changes this phase: installed `time` (GNU time) and `cargo-audit` 0.22.1 (`~/.cargo/bin`); image `stoneql-deb-builder:22.04`, volume `stoneql-deb-cache`, pulled `ubuntu:22.04` and `debian:12` kept as build cache. No containers left; SSH, firewall and AppArmor unchanged.
 
-## Linux release audit exceptions: awaiting direct user confirmation
+## Linux release audit exceptions: Approved (user, 2026-11-17; confirmed directly 2026-11-18)
 
-The coordinator relayed (2026-11-17) a user decision to make a **documented exception** for exactly the two informational advisories below, re-checked at every Tauri upgrade. The implementation is prepared but **not committed**: committing a change that lets the audit pass with advisories was refused by the session's permission check because the approval did not come from the user directly. It is kept as an uncommitted patch, `.ref/planning/linux-audit-exceptions.patch` (untracked; apply with `git apply`): `tools/audit-exceptions.mjs` (the two IDs with reason and dependency path), `audit:release:linux` failing on any other advisory or warning and on a stale exception, `tests/audit-exceptions.test.mjs` (4 tests, passed on the Mac), and the `verification.md` note. Until the user confirms directly, the committed `audit:release:linux` reports both warnings and exits 0 (cargo audit's default), with nothing ignored.
+A **documented exception** for exactly the two informational advisories below, re-checked at every Tauri upgrade. `tools/audit-exceptions.mjs` holds the two IDs with reason and dependency path; `audit:release:linux` fails on any other advisory or warning and on a stale exception; `tests/audit-exceptions.test.mjs` (4 tests); `verification.md` documents it. The macOS release audit has no exceptions.
 
 - RUSTSEC-2024-0429, `glib` 0.18.5, unsound `VariantStrIter` iterators. Path: stoneql-desktop → tauri 2.12.5 → muda / tao / wry → gtk 0.18.2 → glib 0.18.5 (in the runtime graph). Relayed source search: no use of `VariantStrIter` in tauri, wry, tao, muda, gtk, webkit2gtk, gio, soup3, atk, gdk or StoneQL.
 - RUSTSEC-2024-0370, `proc-macro-error` 1.0.4, unmaintained. Path: … glib 0.18.5 → glib-macros 0.18.5 (proc-macro) → proc-macro-error. Verified compile-time only: `cargo tree --target x86_64-unknown-linux-gnu -e normal,no-proc-macro` lists glib but neither glib-macros nor proc-macro-error, while `-e normal,build` lists proc-macro-error.
@@ -110,6 +110,5 @@ The coordinator relayed (2026-11-17) a user decision to make a **documented exce
 ## Remaining before any Linux release
 
 - AppImage (approved for later).
-- Direct user confirmation of the audit exceptions above, then commit the patch.
 - **Pending manual QA (user, real GNOME session; not simulated):** the real GNOME Keyring unlock prompt (and its dismissal), and the master-password flow in the real app window; plus the rest of decision 5's list (dialogs, clipboard, HiDPI, Wayland, crash recovery).
 - Docs, README and release notes stay free of Linux claims until then; `docs/development/ssh-credentials.md` describes the Linux stores as in development and unreleased.
