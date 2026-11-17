@@ -4,7 +4,7 @@
 
 ## Current system
 
-Vue components call Pinia state, which uses session-only mock services in the browser demo and the native bridge (`services/nativeHost.ts`, `services/liveConnections.ts`) in the desktop app. Connection dialog test/save/connect/close/remove orchestration for mock and live profiles lives in `composables/useConnectionWorkflow.ts`, not in `App.vue`. Pure schema validation, engine capabilities and export configuration are separate from UI components. Non-secret profile/preferences persistence is browser-local. See [object coverage](../database-objects.md) and [SQL completion status](../user-guide/sql-editor.md) for verified boundaries.
+Vue components call Pinia state, which uses session-only mock services in the browser demo and the native bridge (`services/nativeHost.ts`, `services/liveConnections.ts`) in the desktop app. Connection dialog test/save/connect/close/remove orchestration for mock and live profiles lives in `composables/useConnectionWorkflow.ts`, not in `App.vue`. Pure schema validation, engine capabilities and export configuration are separate from UI components. Non-secret profile/preferences persistence is browser-local. See [object coverage](../database-objects.md) and [SQL completion status](../development/browser-demo.md#sql-completion-status) for verified boundaries.
 
 ## Components
 

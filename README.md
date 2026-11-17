@@ -12,7 +12,7 @@ A compact, phpMyAdmin-inspired database client. The **desktop app (macOS, public
 
 - `StoneQL-0.1.0-beta-970ade2.dmg` for **macOS on Apple Silicon (arm64) only**, plus `StoneQL-0.1.0-beta-970ade2.dmg.sha256`. Intel Macs, Windows and Linux builds are not released.
 - Verified on macOS 27.0.1 only.
-- The app is ad-hoc signed and **not notarized** (no Developer ID yet), so macOS Gatekeeper blocks the first launch of the downloaded copy. Verify the download with `shasum -a 256 -c StoneQL-0.1.0-beta-970ade2.dmg.sha256`, then follow the [install guide](docs/getting-started/index.md) for installing, the first launch, the Keychain prompt, updating and uninstalling.
+- The app is ad-hoc signed and **not notarized** (no Developer ID yet), so macOS Gatekeeper blocks the first launch of the downloaded copy. Verify the download with `shasum -a 256 -c StoneQL-0.1.0-beta-970ade2.dmg.sha256`, then follow the [install guide](docs/guide/install.md) for installing, the first launch, updating and uninstalling. [Connect to a database](docs/guide/connect.md) walks through the first connection; [Troubleshooting](docs/guide/troubleshooting.md) covers the Keychain prompt and connection errors.
 
 ## What the beta does
 
@@ -23,7 +23,7 @@ A compact, phpMyAdmin-inspired database client. The **desktop app (macOS, public
 - Structure: add, change, rename and drop columns, and add or drop secondary indexes (MySQL, MariaDB, PostgreSQL), with an SQL preview and confirmation.
 - Export a table, chosen tables or a whole database as SQL, CSV (one table) or JSON, optionally GZIP; import CSV into a table and SQL files (MySQL/MariaDB).
 
-Not yet available for live connections: Search, table Operations (rename, copy, truncate, drop), bulk Copy, managing views/routines/triggers/events, the database Structure overview, CSV import at database level, PostgreSQL SQL import, switching databases on PostgreSQL and exporting views/routines/triggers/events. See the [workspace guide](docs/user-guide/index.md#not-yet-available-in-the-desktop-app).
+Not yet available for live connections: Search, table Operations (rename, copy, truncate, drop), bulk Copy, managing views/routines/triggers/events, the database Structure overview, CSV import at database level, PostgreSQL SQL import, switching databases on PostgreSQL and exporting views/routines/triggers/events. See [What's in the beta](docs/guide/beta.md#not-available-yet).
 
 ## Status
 
@@ -45,7 +45,7 @@ npm run docs:build
 npm run docs:preview
 ```
 
-`npm run preview` serves the frontend production bundle. See [setup](docs/getting-started/index.md) for details and [verification](docs/development/verification.md) for executed checks and environment blockers.
+`npm run preview` serves the frontend production bundle. See [contributor setup](docs/development/contributor-setup.md) for details and [verification](docs/development/verification.md) for executed checks and environment blockers.
 
 ## Repository
 
@@ -55,13 +55,16 @@ npm run docs:preview
 - `.ref/planning/`, `.ref/ms/`: internal audit, decisions and milestone specifications.
 - `.ref/workprogress.md`: ignored local continuity notes; never commit.
 - `.github/workflows/docs.yml`: manually gated GitHub Pages workflow for the [documentation site](https://stoneace.github.io/stoneql/).
+- `.github/workflows/rust.yml`: Rust foundation checks on every push and pull request, on a macOS 15 runner only.
 
 Building the desktop app from source is documented in [Desktop development](docs/development/desktop-host.md); the server path remains reserved. Shared Rust crates (core, contracts, runtime) and an isolated driver lab exist; see [Rust development](docs/development/rust-foundation.md) and [driver evaluation](docs/architecture/driver-evaluation.md). Read [AGENTS.md](AGENTS.md) before changes. The frontend remains browser-runnable without native APIs.
 
 ## Documentation
 
-[Workspace guide](docs/user-guide/index.md) · [Connections](docs/user-guide/connections.md) · [SQL editor](docs/user-guide/sql-editor.md) · [Import/export](docs/user-guide/import-export.md) · [Database objects](docs/database-objects.md) · [Architecture](docs/architecture/overview.md) · [Roadmap](docs/architecture/roadmap.md) · [Development](docs/development/index.md)
+**User guide:** [Download](docs/guide/download.md) · [Install](docs/guide/install.md) · [Connect to a database](docs/guide/connect.md) · [Browse and edit tables](docs/guide/browse-and-edit.md) · [Run SQL](docs/guide/run-sql.md) · [Import and export](docs/guide/import-export.md) · [Troubleshooting](docs/guide/troubleshooting.md) · [What's in the beta](docs/guide/beta.md)
 
-The [preserved prototype reference](docs/development/prototype-reference.md) retains the previous detailed workflow documentation. Advanced autocomplete helpers are not all integrated; see the SQL guide rather than assuming helper existence proves support.
+**Developer Docs:** [Overview](docs/development/index.md) · [Contributor setup](docs/development/contributor-setup.md) · [Browser demo](docs/development/browser-demo.md) · [Architecture](docs/architecture/overview.md) · [Roadmap](docs/architecture/roadmap.md) · [Verification](docs/development/verification.md) · [Demo database objects](docs/database-objects.md)
+
+The [preserved prototype reference](docs/development/prototype-reference.md) retains the previous detailed workflow documentation. Advanced autocomplete helpers are not all integrated; see the [SQL completion status](docs/development/browser-demo.md#sql-completion-status) rather than assuming helper existence proves support.
 
 Production signing, notarization and server decisions remain gated; no commit certifies unverified capabilities. The documentation site is published manually from `docs/`.

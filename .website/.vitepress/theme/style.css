@@ -6,5 +6,9 @@
 .dark { --vp-c-brand-1: #91b8df; --vp-c-brand-2: #a6c7e8; --vp-c-brand-3: #416f9b; }
 .diagram { margin: 20px 0; overflow: auto; }
 .diagram svg { max-width: 100%; height: auto; }
+/* Mermaid measures labels without page styles; the doc theme's paragraph line height and margins
+   would otherwise push the last line of a multi-line label out of its box. */
+.vp-doc .diagram svg :is(p, span) { margin: 0; line-height: 1.5; }
 .diagram pre { padding: 12px; font-size: 14px; background: var(--vp-c-bg-soft); }
 .VPHero .image-bg { display: none; }
+.home-developer-link { margin: 48px auto 0; text-align: center; font-size: 14px; color: var(--vp-c-text-2); }

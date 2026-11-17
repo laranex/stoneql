@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { siteBase, sidebar, repositoryUrl } from '../.website/site.mjs';
+import { siteBase, sidebar, sidebarGroups, repositoryUrl } from '../.website/site.mjs';
 const json = async path => JSON.parse(await readFile(new URL(`../${path}`, import.meta.url), 'utf8'));
 
 test('root commands delegate to the owning npm workspace and lockfile agrees', async () => {
@@ -26,7 +26,8 @@ test('documentation supports repository bases and rejects unsafe or ambiguous pa
 });
 
 test('navigation resolves canonical docs and website does not mirror Markdown', async () => {
-  for (const group of sidebar) for (const item of group.items) {
+  for (const groups of Object.values(sidebar)) for (const group of groups) assert.ok(sidebarGroups.includes(group));
+  for (const group of sidebarGroups) for (const item of group.items) {
     const path = item.link.endsWith('/') ? `${item.link}index.md` : `${item.link}.md`;
     assert.ok((await stat(new URL(`../docs${path}`, import.meta.url))).isFile());
   }

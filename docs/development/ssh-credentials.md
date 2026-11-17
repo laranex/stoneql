@@ -64,6 +64,6 @@ SSH overhead was characterized against the Direct loopback baseline on Docker De
 - A failed secret deletion is reported: removing a profile keeps it and offers **Remove anyway** (naming the Keychain service); a save warns with the number of old items left. A renderer timeout during `store_secret` can still leave an unreferenced Keychain item.
 - RSA agent identities are skipped silently and RSA-only host keys surface as a connection failure rather than an explicit unsupported error.
 - 2026-10-26 security review findings, fixes and approval requests: internal `.ref/planning/m005-security-review.md` (F-01 host-key trust anchor held by the renderer; F-02 cancellation/timeout around Keychain resolution; F-03 dead-tunnel slot release; F-04 host/port edits keep the old trusted key).
-- Windows compilation/Clippy of the Unix-only endpoint gating was not executed locally; CI is prepared, not remotely run.
+- Windows compilation/Clippy of the Unix-only endpoint gating has not been executed, locally or in CI (the Rust workflow runs on macOS only).
 - The SSH fixture disables OpenSSH `PerSourcePenalties` because it deliberately aborts many handshakes; real servers may throttle a client that cancels repeatedly.
 - G4/G5 transport budgets, cross-OS agent/keyring behaviour and decisions D016–D020 need review before M005 can be accepted.

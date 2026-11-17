@@ -1,6 +1,6 @@
 # Streaming import and export
 
-**Status: partially implemented; the rest is Proposed / awaiting approval.** The desktop app implements live export (table, chosen tables or whole database; SQL, CSV and JSON; optional GZIP; one read-only snapshot; temporary file renamed when complete), CSV import into a table and MySQL/MariaDB SQL import; see the [user guide](../user-guide/import-export.md) for current behavior. Browser-demo jobs still simulate progress and summaries only. Limits and mechanisms not described in the user guide remain proposals.
+**Status: partially implemented; the rest is Proposed / awaiting approval.** The desktop app implements live export (table, chosen tables or whole database; SQL, CSV and JSON; optional GZIP; one read-only snapshot; temporary file renamed when complete), CSV import into a table and MySQL/MariaDB SQL import; see the [user guide](../guide/import-export.md) for current behavior and the [desktop host's live behaviour details](../development/desktop-host.md#live-behaviour-details) for the implemented mechanisms. Browser-demo jobs still simulate progress and summaries only. Limits and mechanisms described in neither remain proposals.
 
 ## v0.1.0 Alpha scope
 

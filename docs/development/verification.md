@@ -8,7 +8,7 @@ The macOS-only platform scope of StoneQL v0.1.0 Alpha is an **Approved product d
 
 | Check | Command or evidence | Limits |
 | --- | --- | --- |
-| Rust build/fmt/Clippy/tests, contract drift, crate boundaries, vendored SQLx provenance | `npm run rust:build`, `rust:fmt`, `rust:lint`, `rust:test`, `contracts:check`, `rust:boundaries`, `rust:vendor` | Local macOS; CI prepared, not remotely executed |
+| Rust build/fmt/Clippy/tests, contract drift, crate boundaries, vendored SQLx provenance | `npm run rust:build`, `rust:fmt`, `rust:lint`, `rust:test`, `contracts:check`, `rust:boundaries`, `rust:vendor` | Local macOS; GitHub Actions runs the same checks on a macOS 15 runner on push and pull request (`.github/workflows/rust.yml`) |
 | Frontend unit, build and browser scenarios (Light/Dark, live-bridge simulations) | `npm test`, `npm run build`, `npm run test:browser` | Browser shims, not the native WebView |
 | Native WebView startup smoke | `npm run desktop:smoke` (2,783 ms latest, debug) | Startup and mount only; unsigned debug build |
 | SQL import benchmark (MySQL/MariaDB) | `npm run bench:sql-import` (see [SQL execution](./sql-execution.md)) | Release build; Docker fixtures with 1 GiB memory caps; macOS arm64 |

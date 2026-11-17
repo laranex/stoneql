@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitepress';
 import { fileURLToPath } from 'node:url';
-import { sidebar, siteBase, repositoryUrl } from '../site.mjs';
+import { sidebar, siteBase, repositoryUrl, releaseUrl } from '../site.mjs';
 const base = siteBase();
 const repository = repositoryUrl();
 export default defineConfig({
@@ -11,10 +11,10 @@ export default defineConfig({
   head: [['link', { rel: 'icon', type: 'image/png', href: `${base}icon.png` }]],
   vite: { publicDir: fileURLToPath(new URL('../public/', import.meta.url)) },
   themeConfig: {
-    logo: '/icon.png', nav: [{ text: 'Guide', link: '/getting-started/' }, { text: 'Architecture', link: '/architecture/overview' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
+    logo: '/icon.png', nav: [{ text: 'Download', link: releaseUrl }, { text: 'Guide', link: '/guide/', activeMatch: '^/guide/' }, { text: 'Developer Docs', link: '/development/', activeMatch: '^/(development|architecture)/|^/(database-objects|ux-review-remediation)' }, ...(repository ? [{ text: 'GitHub', link: repository }] : [])],
     sidebar, search: { provider: 'local' }, outline: [2, 3],
     socialLinks: repository ? [{ icon: 'github', link: repository }] : [],
-    footer: { message: 'Public beta · macOS desktop app with live connections · Browser demo uses sample data.' }
+    footer: { message: 'StoneQL v0.1.0-beta.1 · Public beta for macOS on Apple Silicon · Keep backups and verify important changes on the server.' }
   },
   markdown: {
     config(md) {

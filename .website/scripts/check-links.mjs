@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname } from 'node:path';
-import { sidebar } from '../site.mjs';
+import { sidebar, sidebarGroups } from '../site.mjs';
 const root = fileURLToPath(new URL('../../docs/', import.meta.url));
 export async function pages(dir = root) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -14,7 +14,8 @@ async function check(link, source) {
   const path = target.startsWith('/') ? resolve(root, `.${target}`) : resolve(dirname(source), target);
   if (!(await Promise.all([path, `${path}.md`, resolve(path, 'index.md')].map(exists))).some(Boolean)) throw new Error(`Broken documentation link in ${source}: ${link}`);
 }
-for (const group of sidebar) for (const item of group.items) await check(item.link, resolve(root, 'index.md'));
+for (const [prefix, groups] of Object.entries(sidebar)) if (!groups.every(group => sidebarGroups.includes(group))) throw new Error(`Sidebar ${prefix} has a group missing from sidebarGroups`);
+for (const group of sidebarGroups) for (const item of group.items) await check(item.link, resolve(root, 'index.md'));
 for (const page of await pages()) {
   const source = (await readFile(page, 'utf8')).replace(/```[\s\S]*?```/g, '');
   for (const match of source.matchAll(/\[[^\]]*\]\(([^) ]+)(?: +[^)]*)?\)/g)) await check(match[1], page);

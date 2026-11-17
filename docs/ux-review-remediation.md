@@ -1,6 +1,6 @@
 # UI/UX review remediation
 
-Review source: `/private/tmp/claude-501/-Users-thixpin-Code-laranex-dbadmin/d967edf0-7190-4aa4-bb3a-177bcd10cd45/scratchpad/dbadmin-ux-review.md`.
+Review source: an internal UI/UX review (not published).
 
 Findings were checked against the changing source rather than accepted from historical line numbers. This ledger distinguishes implemented source changes, automated behavior verification, visual verification, and deliberate product exceptions. Browser verification is currently blocked: the sandbox refuses Vite's listening socket (`EPERM`), and Chromium cannot launch under its macOS process restrictions. No screenshot or screen-reader pass is claimed.
 
