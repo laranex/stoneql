@@ -1,7 +1,8 @@
 // Release-graph dependency audit (M002 alpha gate). `cargo audit` reads the whole Cargo.lock,
 // including development/test-only packages (for example SQLite, kept for regressions, A5). This
 // check audits only what the shipped macOS desktop build resolves: the normal+build dependency
-// graph of `stoneql-desktop --features custom-protocol` for aarch64 and x86_64 Apple targets.
+// graph of `stoneql-desktop --features custom-protocol` for aarch64 and x86_64 Apple targets, or,
+// with `--linux`, for x86_64-unknown-linux-gnu (the `.deb` built by `desktop:deb`).
 // It writes a pruned copy of Cargo.lock to a temporary directory and runs `cargo audit --file`
 // on it. The full audit (`cargo audit`) stays separate and unchanged; nothing is ignored here.
 import { spawnSync } from 'node:child_process';
@@ -10,7 +11,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const linux = process.argv.includes('--linux');
+const targets = linux ? ['x86_64-unknown-linux-gnu'] : ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const auditArgs = process.argv.slice(2).filter((arg) => arg !== '--linux');
 const run = (args) => {
   const result = spawnSync('cargo', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (result.status !== 0) throw Error(`cargo ${args[0]} failed: ${result.stderr.trim().split('\n').at(-1)}`);
@@ -47,7 +50,7 @@ try {
   const file = join(temp, 'Cargo.lock');
   writeFileSync(file, [header, ...pruned].join('\n'));
   console.log(`release graph: ${kept.length} of ${blocks.length} locked packages (${targets.join(', ')})`);
-  const audit = spawnSync('cargo', ['audit', '--file', file, ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });
+  const audit = spawnSync('cargo', ['audit', '--file', file, ...auditArgs], { cwd: root, stdio: 'inherit' });
   process.exitCode = audit.status ?? 1;
 } finally {
   rmSync(temp, { recursive: true, force: true });
