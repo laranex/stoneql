@@ -1752,14 +1752,18 @@ async fn detached_jobs_are_pending_until_their_late_unknown_is_recorded() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Durable unknown-outcome journal (J-1..J-6). Journals live in the fixture's temporary
-// directory, never in the repository.
+// Durable unknown-outcome journal (J-1..J-11). Journals live in the fixture's temporary
+// directory, never in the repository. The journal store is Unix-only until its Windows port;
+// elsewhere it fails closed (`j0`).
 
+#[cfg(unix)]
 use super::journal::Fault;
 
+#[cfg(unix)]
 fn journal_dir(fixture: &Fixture) -> PathBuf {
     fixture.0.join("journal")
 }
+#[cfg(unix)]
 async fn open_journaled(fixture: &Fixture) -> (Connections, OwnerId, ConnectionId) {
     let (connections, owner, handle) = open(fixture, Access::ReadWrite).await;
     connections.require_outcome_journal();
@@ -1769,6 +1773,7 @@ async fn open_journaled(fixture: &Fixture) -> (Connections, OwnerId, ConnectionI
     );
     (connections, owner, handle)
 }
+#[cfg(unix)]
 fn inject(connections: &Connections, fault: Option<Fault>) {
     connections
         .0
@@ -1780,12 +1785,15 @@ fn inject(connections: &Connections, fault: Option<Fault>) {
         .unwrap()
         .inject(fault);
 }
+#[cfg(unix)]
 fn full_disk() -> Option<Fault> {
     Some(Fault::Fail(std::io::ErrorKind::StorageFull))
 }
+#[cfg(unix)]
 fn sqlite_origin(fixture: &Fixture) -> Origin {
     Origin::of(Engine::Sqlite, &Target::Sqlite(fixture.file()))
 }
+#[cfg(unix)]
 fn journal_entries(fixture: &Fixture) -> Vec<Entry> {
     let bytes = std::fs::read(journal_dir(fixture).join(journal::FILE)).unwrap();
     let text = String::from_utf8(bytes).unwrap();
@@ -1807,6 +1815,28 @@ fn facts(outcome: &UnresolvedOutcome) -> UnresolvedOutcome {
 /// J-1: a crash (the registry dropped without shutdown) loses nothing: an open lease, a lease
 /// end whose COMMIT may have been sent and an unknown job are restored by the next run with the
 /// same ids and facts, marked as recorded before a restart, for the new run's owner.
+#[cfg(not(unix))]
+#[tokio::test]
+async fn j0_without_a_journal_store_read_write_work_is_refused() {
+    let fixture = Fixture::new().await;
+    let (connections, owner, handle) = open(&fixture, Access::ReadWrite).await;
+    connections.require_outcome_journal();
+    assert_eq!(
+        connections.open_outcome_journal(&fixture.0.join("journal"), owner),
+        Some(JournalProblemDto::Unavailable)
+    );
+    assert_eq!(
+        connections
+            .submit_job(
+                owner,
+                handle,
+                JobOptions::new("INSERT INTO parent VALUES (1)")
+            )
+            .unwrap_err(),
+        ExecutionError::JournalUnavailable
+    );
+}
+#[cfg(unix)]
 #[tokio::test]
 async fn j1_a_crash_and_restart_restores_every_unknown_with_unchanged_facts() {
     let fixture = Fixture::new().await;
@@ -1862,6 +1892,7 @@ async fn j1_a_crash_and_restart_restores_every_unknown_with_unchanged_facts() {
 
 /// J-2: acknowledgement is durable before it is reported. A failed one changes nothing (still
 /// listed, now and after a restart); a successful one stays acknowledged after a restart.
+#[cfg(unix)]
 #[tokio::test]
 async fn j2_acknowledgement_is_journaled_before_it_is_reported() {
     let fixture = Fixture::new().await;
@@ -1904,6 +1935,7 @@ async fn j2_acknowledgement_is_journaled_before_it_is_reported() {
 
 /// J-3: restored outcomes count toward the unresolved cap and are never evicted by the
 /// 32/256 retention bounds; once acknowledged they are bounded like any other record.
+#[cfg(unix)]
 #[tokio::test]
 async fn j3_restored_outcomes_count_toward_the_cap_and_are_never_evicted() {
     let fixture = Fixture::new().await;
@@ -2091,6 +2123,7 @@ async fn j4_an_unusable_journal_refuses_new_work_before_anything_is_sent() {
 /// J-5: COMMIT is never sent unless its potential unknown is journaled first. With the journal
 /// failing, COMMIT is refused while the lease stays open (rollback still works); if the write
 /// fails only at the COMMIT itself, the lease is rolled back instead and nothing is committed.
+#[cfg(unix)]
 #[tokio::test]
 async fn j5_commit_is_sent_only_after_its_unknown_is_journaled() {
     let fixture = Fixture::new().await;
@@ -2204,6 +2237,7 @@ async fn j5_commit_is_sent_only_after_its_unknown_is_journaled() {
 
 /// J-6: each statement of a job is journaled before it is sent; when that write fails the job
 /// stops and the next statement is never sent.
+#[cfg(unix)]
 #[tokio::test]
 async fn j6_a_statement_is_never_sent_unless_journaled() {
     let fixture = Fixture::new().await;
@@ -2248,6 +2282,7 @@ async fn j6_a_statement_is_never_sent_unless_journaled() {
 
 /// J-7: the journal never holds SQL, parameters, values, paths or credentials: real jobs and
 /// a lease with planted canaries (succeeded, unknown after cancel, in flight at a crash).
+#[cfg(unix)]
 #[tokio::test]
 async fn j7_the_journal_holds_no_sql_values_or_paths() {
     let fixture = Fixture::new().await;
@@ -2311,6 +2346,7 @@ async fn j7_the_journal_holds_no_sql_values_or_paths() {
 /// J-8: a damaged journal is preserved and reported through the registry, and new jobs and
 /// transactions stay refused until the user acknowledges the damage (the fresh journal itself
 /// is writable, so only this check refuses them). The report survives a restart until then.
+#[cfg(unix)]
 #[tokio::test]
 async fn j8_a_damaged_journal_refuses_new_work_until_acknowledged() {
     let fixture = Fixture::new().await;
@@ -2420,6 +2456,7 @@ async fn j8_a_damaged_journal_refuses_new_work_until_acknowledged() {
 /// J-9: a crash or failed rewrite right after a damaged journal was preserved keeps the damage
 /// at the journal path: every later start reports it, restores the verified record and refuses
 /// new read-write work until the damage is acknowledged.
+#[cfg(unix)]
 #[tokio::test]
 async fn j9_damage_is_not_lost_when_the_rewrite_after_quarantine_fails() {
     let fixture = Fixture::new().await;
@@ -2457,6 +2494,7 @@ async fn j9_damage_is_not_lost_when_the_rewrite_after_quarantine_fails() {
         drop(connections);
     }
 }
+#[cfg(unix)]
 async fn open_journaled_any(fixture: &Fixture) -> (Connections, OwnerId, ConnectionId) {
     let (connections, owner, handle) = open(fixture, Access::ReadWrite).await;
     connections.require_outcome_journal();
@@ -2468,6 +2506,7 @@ async fn open_journaled_any(fixture: &Fixture) -> (Connections, OwnerId, Connect
 /// directory planted at the temporary path) the acknowledgement is refused; once the plant is
 /// gone another write (admission, new work) succeeds, yet after a restart the outcome is still
 /// listed, unacknowledged. A real acknowledgement then persists.
+#[cfg(unix)]
 #[tokio::test]
 async fn j10_a_failed_acknowledgement_never_becomes_durable_later() {
     let fixture = Fixture::new().await;
@@ -2507,6 +2546,7 @@ async fn j10_a_failed_acknowledgement_never_becomes_durable_later() {
 // Journal cost measurement (not a pass/fail test). Rerun:
 //   cargo test --locked -p stoneql-runtime --lib perf_journal -- --ignored --nocapture
 
+#[cfg(unix)]
 fn summary(name: &str, samples: &mut [Duration]) {
     samples.sort();
     let at = |q: f64| samples[((samples.len() as f64 * q).ceil() as usize).saturating_sub(1)];
@@ -2520,6 +2560,7 @@ fn summary(name: &str, samples: &mut [Duration]) {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "measurement; run with --ignored --nocapture"]
 async fn perf_journal_writes_admission_and_listing() {
@@ -2667,6 +2708,7 @@ async fn perf_journal_writes_admission_and_listing() {
 /// confirmed rolled back) is not undone by a failed write: it completes with the next
 /// successful write, so a restart never restores resolved work as an unknown outcome (nor
 /// counts it toward the cap). Acknowledgements keep the stricter rule (J-10).
+#[cfg(unix)]
 #[tokio::test]
 async fn j11_a_known_outcome_removal_completes_with_the_next_successful_write() {
     let fixture = Fixture::new().await;

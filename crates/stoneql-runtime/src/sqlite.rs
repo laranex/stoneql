@@ -236,7 +236,12 @@ INSERT INTO strict_values VALUES (1,-9223372036854775808,1.5,'-0',x'',9223372036
                 LifecycleError::InvalidConfiguration,
             ),
             (
-                directory.join("../fixture.sqlite"),
+                // Built as text: on Windows, `join` resolves `..` in verbatim paths.
+                PathBuf::from(format!(
+                    "{}{sep}..{sep}fixture.sqlite",
+                    directory.display(),
+                    sep = std::path::MAIN_SEPARATOR
+                )),
                 LifecycleError::Forbidden,
             ),
             (directory.clone(), LifecycleError::Forbidden),
