@@ -716,7 +716,7 @@ fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
     let commands = registered_commands();
-    assert_eq!(commands.len(), 32, "{commands:?}");
+    assert_eq!(commands.len(), 35, "{commands:?}");
     for command in &commands {
         let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
         assert!(
