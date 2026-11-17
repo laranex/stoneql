@@ -106,7 +106,7 @@ sudo apt install ./<file>.deb
 
 Type `./` before the file name; without it, apt looks for a package of that name online instead of the file.
 
-StoneQL needs WebKitGTK 4.1 version 2.38 or later. Debian 12 has it. On Ubuntu 22.04 it comes from the `jammy-updates` package source, which apt uses when updates are enabled (the default). If apt reports unmet dependencies, see [apt cannot install the package](./troubleshooting.md#apt-cannot-install-the-package).
+StoneQL needs WebKitGTK 4.1 version 2.38 or later. Debian 12 has it. On Ubuntu 22.04 it comes from the `jammy-updates` package source, which apt uses when updates are enabled (the default). If apt reports unmet dependencies, see [apt cannot install the package](./troubleshooting.md#linux-apt-cannot-install-the-package).
 
 Open **StoneQL** from your applications menu. It opens on a **Welcome to StoneQL** screen. Continue with [Connect to a database](./connect.md).
 
