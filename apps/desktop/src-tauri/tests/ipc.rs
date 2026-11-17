@@ -382,7 +382,7 @@ fn the_master_password_vault_is_unlocked_over_ipc_without_echoing_the_password()
             &webview,
             command,
             json!({"version":1,"requestId":"vault_case","payload":payload}),
-            "tauri://localhost",
+            LOCAL,
         );
         assert!(!format!("{reply:?}").contains("synthetic-master"));
         reply
