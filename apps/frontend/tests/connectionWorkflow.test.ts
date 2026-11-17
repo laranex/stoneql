@@ -71,14 +71,14 @@ async function setup(host: unknown = {}, options: { discard?: boolean } = {}) {
 function liveDraft(flow: any) {
   flow.newConnection();
   // These fixtures use verified TLS with a session CA (a new local draft starts with TLS off).
-  Object.assign(flow.connectionDraft.value, { name: 'Live fixture', mode: 'live', password: 'synthetic-password', rootCertificatePem: 'synthetic-public-ca', tls: true });
+  Object.assign(flow.connectionDraft.value, { name: 'Live fixture', mode: 'live', user: 'root', database: 'acme_store', password: 'synthetic-password', rootCertificatePem: 'synthetic-public-ca', tls: true });
 }
 test('new local drafts start with TLS off, connect without TLS, and a verified-TLS failure on loopback says how to turn it off', async () => {
   const native = nativeFixture();
   const { flow, notices } = await setup(native.global);
   flow.newConnection();
   assert.equal(flow.connectionDraft.value.tls, false);
-  Object.assign(flow.connectionDraft.value, { name: 'Local', mode: 'live', password: 'synthetic-password', host: 'localhost' });
+  Object.assign(flow.connectionDraft.value, { name: 'Local', user: 'root', database: 'acme_store', password: 'synthetic-password', host: 'localhost' });
   await flow.testConnection();
   assert.match(flow.testMessage.value, /^Connected without TLS \(this computer only\)/);
   assert.equal(native.calls.find((c) => c.command === 'connect_direct')!.payload.tls, false);
@@ -536,4 +536,30 @@ test('F-10: no secret deletion failure is swallowed in the workflow source', asy
   const { readFileSync } = await import('node:fs');
   const source = readFileSync(new URL('../src/composables/useConnectionWorkflow.ts', import.meta.url), 'utf8');
   assert.equal(/deleteSecret\([^)]*\)\s*\.catch\(/.test(source), false);
+});
+test('the desktop app has no samples or Mock mode: saved mock profiles are dropped and new drafts are live and blank', async () => {
+  preferences.clear();
+  await bootstrapNativeHost({});
+  setActivePinia(createPinia());
+  const samples = useWorkspace().connections.map((c: any) => c.id);
+  assert.ok(samples.length > 0, 'the browser demo still starts with sample profiles');
+  // An earlier build saved the samples plus one live profile; the desktop app keeps only the live one.
+  preferences.set('stoneql-connections', JSON.stringify({ version: 1, groups: [], connections: [
+    ...useWorkspace().connections, { id: 'live-1', name: 'Real', mode: 'live', engine: 'MySQL', host: 'db.internal', port: 3306, user: 'app', database: 'shop', transport: { type: 'direct' } },
+  ] }));
+  const native = nativeFixture();
+  await bootstrapNativeHost(native.global);
+  setActivePinia(createPinia());
+  const store = useWorkspace();
+  assert.deepEqual(store.connections.map((c: any) => c.id), ['live-1']);
+  assert.deepEqual(JSON.parse(preferences.get('stoneql-connections')!).connections.map((c: any) => c.id), ['live-1']);
+  const { flow } = await setup(native.global);
+  flow.newConnection();
+  assert.equal(flow.connectionDraft.value.mode, 'live');
+  assert.equal(flow.connectionDraft.value.user, '');
+  assert.equal(flow.connectionDraft.value.database, '');
+  // Nothing saved: no connections at all, and the shell reads an empty workspace instead of failing.
+  assert.equal(useWorkspace().connections.length, 0);
+  assert.equal(useWorkspace().workspace.databases.length, 0);
+  assert.equal(useWorkspace().table, undefined);
 });

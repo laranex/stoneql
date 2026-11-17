@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import { newLiveConnection } from './desktop';
 for(const theme of ['light','dark'])test(`${theme}: explicit native live connection, exact results, errors, disconnect and persistence`,async({page})=>{
  await page.addInitScript(theme=>{
   localStorage.setItem('stoneql-theme',theme);
@@ -25,9 +26,7 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
   }}};
  },theme);
  await page.goto('/');
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Live fixture');
  await page.getByLabel('Password',{exact:true}).fill('synthetic-password');
  // A new connection to this computer starts with TLS off; this one verifies TLS with a session CA.
@@ -51,9 +50,7 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await expect(page.locator('.data-grid thead th')).toHaveText(['value','value','n']);
  await expect(page.getByText(/executed successfully \(live, read-only/)).toBeVisible();
  await page.screenshot({path:`test-results/live-${theme}-results.png`,fullPage:true});
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Live peer');
  await page.getByRole('button',{name:'Save & connect',exact:true}).click();
  await expect(page.getByText('18446744073709551615',{exact:true})).toHaveCount(0);
@@ -113,9 +110,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SQLite opens a natively
   }}};
  },theme);
  await page.goto('/');
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByLabel('Database engine',{exact:true}).selectOption('SQLite');
  await page.getByPlaceholder('e.g. Local development').fill('Live file');
  await expect(page.getByLabel('Trusted CA certificate',{exact:true})).toHaveCount(0);
@@ -170,9 +165,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
   }}};
  },theme);
  await page.goto('/');
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Live bastion');
  await page.getByLabel('Password',{exact:true}).fill('synthetic-db-password');
  await page.getByRole('button',{name:'SSH Tunnel'}).click();

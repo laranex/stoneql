@@ -1,7 +1,7 @@
 import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
 import { openLive, closeLive, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
-import { hostState } from '../services/nativeHost';
+import { hostState, mockConnectionsAvailable } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
 import type { Connection, Transport } from '../types';
@@ -55,7 +55,7 @@ export interface ConnectionWorkflowOptions {
 /** Connection dialog plus mock/live test, save, close and removal orchestration. */
 export function useConnectionWorkflow({ manager, notify, discard, askDiscard, confirm, confirmReadWrite }: ConnectionWorkflowOptions) {
   const store = useWorkspace();
-  const nativeHostState = hostState();
+  const nativeHostState = hostState(), demo = mockConnectionsAvailable();
   const connectionDraftInitial = ref(''),
     connectionDialog = ref(false),
     connectionDraft = ref<Connection>(),
@@ -108,14 +108,15 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       ? JSON.parse(JSON.stringify(existing))
       : {
           id: crypto.randomUUID(),
-          mode: 'mock',
+          // The desktop app has live connections only; the browser demo starts in Mock mode.
+          mode: demo ? 'mock' : 'live',
           name: '',
           engine: 'MySQL',
           host: '127.0.0.1',
           port: 3306,
-          user: 'root',
+          user: demo ? 'root' : '',
           password: '',
-          database: 'acme_store',
+          database: demo ? 'acme_store' : '',
           // New connections to this computer start with TLS off; other hosts always verify TLS.
           tls: false,
           color: connectionColors[0]!.value,
@@ -124,7 +125,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           groupId: '',
           transport: { type: 'direct' },
         };
-    connectionDraft.value!.mode ||= 'mock';
+    connectionDraft.value!.mode ||= demo ? 'mock' : 'live';
     // Read-write over SSH is gated off until tunnelled cancellation is fixture-tested.
     connectionDraft.value!.access = connectionDraft.value!.mode === 'live' && connectionDraft.value!.transport.type !== 'ssh' ? access : undefined;
     // Remember toggles mirror existing references; they are draft-only and never persisted.

@@ -27,7 +27,7 @@ for(const theme of ['light','dark']) test(`${theme}: unknown outcomes stay liste
     }}};
   },theme);
   await page.goto('/');
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   const panel=page.getByRole('alert',{name:'Unknown outcomes'});
   await expect(panel).toHaveCount(0);
   await page.evaluate(()=>window.dispatchEvent(new Event('stoneql-reload-requested')));
@@ -36,7 +36,7 @@ for(const theme of ['light','dark']) test(`${theme}: unknown outcomes stay liste
   const reloaded=page.waitForEvent('load');
   await dialog.getByRole('button',{name:'Reload StoneQL',exact:true}).click();
   await reloaded;
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('Outcome unknown — the server may or may not have applied this work.');
   const entries=panel.locator('.unresolved-outcome');
@@ -65,7 +65,7 @@ for(const theme of ['light','dark']) test(`${theme}: unknown outcomes stay liste
   await entries.nth(0).getByRole('button',{name:/^Acknowledge/}).click();
   await expect(panel).toHaveCount(0);
   await page.reload();
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   await expect(panel).toHaveCount(0);
   const acks=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('hostOutcomes')!).acks);
   expect(acks.map((a:any)=>Object.keys(a).sort().join(','))).toEqual(['outcomeId,sessionId','outcomeId,sessionId']);
@@ -96,13 +96,13 @@ for(const theme of ['light','dark']) test(`${theme}: an unknown outcome recorded
     }}};
   },theme);
   await page.goto('/');
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   const panel=page.getByRole('alert',{name:'Unknown outcomes'});
   await page.evaluate(()=>window.dispatchEvent(new Event('stoneql-reload-requested')));
   const reloaded=page.waitForEvent('load');
   await page.getByRole('alertdialog').getByRole('button',{name:'Reload StoneQL',exact:true}).click();
   await reloaded;
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   await expect.poll(()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('hostLate')!).lists)).toBeGreaterThanOrEqual(1);
   await expect(panel).toBeVisible({timeout:10_000});
   await expect(panel.locator('.unresolved-outcome')).toHaveCount(1);
@@ -144,7 +144,7 @@ for(const theme of ['light','dark']) test(`${theme}: outcomes from before a rest
     }}};
   },theme);
   await page.goto('/');
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   const panel=page.getByRole('alert',{name:'Unknown outcomes'});
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('Kept, also across restarts, until you acknowledge it.');
@@ -181,7 +181,7 @@ for(const theme of ['light','dark']) test(`${theme}: outcomes from before a rest
   await expect(entries).toHaveCount(3);
   await expect(problem).toHaveCount(0);
   await page.reload();
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   await expect(entries).toHaveCount(3);
   await expect(panel).not.toContainText('Unknown-outcome journal');
 });

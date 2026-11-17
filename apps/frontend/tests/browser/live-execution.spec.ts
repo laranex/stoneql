@@ -1,4 +1,5 @@
 import {test,expect} from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // Read-write live SQL against a stubbed native host: explicit opt-in, PROD acknowledgement,
 // destructive confirmation, cancel, per-statement outcomes, result sets and transactions.
 for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is explicit, confirmed and reports per-statement outcomes`,async({page})=>{
@@ -41,9 +42,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
   }}};
  },theme);
  await page.goto('/');
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Orders PROD');
  await page.getByLabel('Connection environment',{exact:true}).selectOption('Production');
  await expect(page.getByLabel('Session access',{exact:true})).toHaveValue('read_only');
@@ -142,9 +141,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write gate, failed-conn
   }}};
  },theme);
  await page.goto('/');
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  const option=page.getByLabel('Session access',{exact:true}).locator('option[value="read_write"]');
  await expect(option).toHaveJSProperty('disabled',true);
  await expect(option).toHaveText(/pending safety approval/);
@@ -152,9 +149,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write gate, failed-conn
  // Turn the stubbed host's gate on (a host report, not renderer state) and start again.
  await page.evaluate(()=>sessionStorage.setItem('gate','on'));
  await page.reload();
- await page.getByTitle('Manage connections',{exact:true}).click();
- await page.getByRole('button',{name:'New connection',exact:true}).click();
- await page.getByLabel('Connection mode',{exact:true}).selectOption('live');
+ await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Orders dev');
  await expect(page.getByLabel('Session access',{exact:true}).locator('option[value="read_write"]')).toHaveJSProperty('disabled',false);
  await page.getByLabel('Session access',{exact:true}).selectOption('read_write');

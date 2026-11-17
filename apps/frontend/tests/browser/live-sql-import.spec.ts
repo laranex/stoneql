@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // Simulated native bridge: a read-write MySQL session imports a SQL file through a native open
 // grant. The renderer sends only the handle and the one-shot grant; refusals and the first
 // failure are shown with their statement number and line, in both themes.
@@ -42,9 +43,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
       } } };
     });
     await page.goto('/');
-    await page.getByTitle('Manage connections', { exact: true }).click();
-    await page.getByRole('button', { name: 'New connection', exact: true }).click();
-    await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+    await newLiveConnection(page);
     await page.getByPlaceholder('e.g. Local development').fill('Live import');
     await page.getByLabel('Session access', { exact: true }).selectOption('read_write');
     await page.getByRole('button', { name: 'Save & connect', exact: true }).click();

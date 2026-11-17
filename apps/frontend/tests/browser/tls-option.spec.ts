@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // First launch is Light even when the OS is dark. The live connection dialog offers "Use TLS"
 // only for direct MySQL/MariaDB to this computer (default off for new connections); other hosts
 // and engines require verified TLS. The renderer sends `tls: false` only for that local choice.
@@ -26,9 +27,7 @@ test('first launch is Light with a dark OS; Use TLS is offered only for local My
   await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
   expect(await page.evaluate(() => localStorage.getItem('stoneql-theme'))).toBeNull();
 
-  await page.getByTitle('Manage connections', { exact: true }).click();
-  await page.getByRole('button', { name: 'New connection', exact: true }).click();
-  await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+  await newLiveConnection(page);
   const option = page.getByTestId('tls-option');
   const useTls = option.getByRole('checkbox', { name: 'Use TLS' });
   const ca = page.getByLabel('Trusted CA certificate');

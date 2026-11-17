@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useConnectionWorkflow, reportLeaseEnd, LEASE_DISCONNECT_WARNING } from './composables/useConnectionWorkflow';
-import { hostState, invalidateNativeSession, resolveNativeClose } from './services/nativeHost';
+import { hostState, invalidateNativeSession, mockConnectionsAvailable, resolveNativeClose } from './services/nativeHost';
 const nativeHostState = hostState();
+/** Browser demo only; the desktop app never offers Mock mode or sample data. */
+const demo = mockConnectionsAvailable();
 let liveStatusTimer: ReturnType<typeof setInterval> | undefined;
 import { insertRecords, RecordConstraintError } from './services/recordMutations';
 import { searchRows, searchOperators as availableSearchOperators, type SearchOperator } from './services/search';
@@ -1246,7 +1248,7 @@ function destructiveOperation(drop: boolean) {
   };
 }
 const columnDialog = ref(false),
-  columnDraft = ref(createColumnDraft(store.connection.engine)),
+  columnDraft = ref(createColumnDraft(store.connection?.engine ?? 'MySQL')),
   columnOriginal = ref(''),
   columnError = ref('');
 const columnCap = computed(() => getColumnCapabilities(store.connection.engine, table.value));
@@ -2526,7 +2528,7 @@ onBeforeUnmount(() => {
       <span class="footer-session"
         ><Terminal :size="12" /><strong>StoneQL</strong><span class="footer-divider">|</span
         ><span class="session-detail"
-          >{{ isLive ? `Live ${liveReadWrite ? 'read-write' : 'read-only'} · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Desktop host · Mock data · Changes are session-local' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Mock data only' : 'Mock transport · All changes are local to this session' }}</span
+          >{{ isLive ? `Live ${liveReadWrite ? 'read-write' : 'read-only'} · ${liveSession?.status || 'disconnected'}` : nativeHostState.kind === 'desktop' ? 'Not connected' : nativeHostState.kind === 'unavailable' ? 'Native host unavailable · Restart StoneQL to connect' : 'Mock transport · All changes are local to this session' }}</span
         ></span
       >
       <div class="footer-controls">
@@ -2564,7 +2566,7 @@ onBeforeUnmount(() => {
     <div
       v-if="manager"
       class="modal-overlay"
-      @mousedown.self="store.connections.length && store.opened.length && closeManager()"
+      @mousedown.self="closeManager()"
     >
       <section
         class="modal manager-modal"
@@ -2577,8 +2579,8 @@ onBeforeUnmount(() => {
           <div>
             <h2><Server :size="19" /> Connection manager</h2>
           </div>
+          <!-- Always closable: with nothing open the start screen offers the manager again. -->
           <button
-            v-if="store.connections.length && store.opened.length"
             class="icon-button"
             aria-label="Close connection manager"
             @click="closeManager()"
@@ -2587,7 +2589,7 @@ onBeforeUnmount(() => {
           </button>
         </header>
         <div class="modal-body">
-          <div class="notice info">
+          <div v-if="demo" class="notice info">
             <CircleHelp :size="15" />Prototype mode. Connections are simulated and credentials stay
             in memory.
           </div>
@@ -2773,7 +2775,7 @@ onBeforeUnmount(() => {
         </header>
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
-            <label class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
+            <label v-if="demo" class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
             <label v-if="connectionDraft.mode==='live'" class="form-label">Session access<select :disabled="testing" :value="connectionDraft.access || 'read_only'" aria-label="Session access" @change="connectionDraft.access = ($event.target as HTMLSelectElement).value === 'read_write' ? 'read_write' : undefined"><option value="read_only">Read-only (default)</option><option value="read_write" :disabled="!readWriteAvailable || connectionDraft.transport.type==='ssh'">{{ !readWriteAvailable ? 'Read-write — pending safety approval' : `Read-write — this session only${connectionDraft.transport.type==='ssh' ? ' (not available over SSH yet)' : ''}` }}</option></select><span class="muted">{{ connectionDraft.access==='read_write' ? `Scripts and transactions can change data. Not saved; the next connection starts read-only.${connectionDraft.environment==='Production' ? ' PROD requires confirmation.' : ''}` : 'Engine-enforced read-only SELECT subset.' }}</span></label>
             <div v-if="connectionDraft.mode==='live' && (connectionDraft.engine==='MySQL' || connectionDraft.engine==='MariaDB') && connectionDraft.transport.type==='direct'" class="form-label" data-testid="tls-option">
               <label v-if="tlsOptional(connectionDraft)" class="compact-choice"><input type="checkbox" :disabled="testing" :checked="connectionDraft.tls !== false" @change="connectionDraft.tls = ($event.target as HTMLInputElement).checked ? undefined : false" /> Use TLS</label>
@@ -3307,7 +3309,7 @@ onBeforeUnmount(() => {
           <h3>StoneAge SQL Admin</h3>
           <p>Old habits. New engine.</p>
           <p>
-            Formerly dbAdmin. A compact database client with session-only mock data by default.
+            {{ demo ? 'Formerly dbAdmin. A compact database client with session-only mock data by default.' : 'Formerly dbAdmin. A compact client for MySQL, MariaDB and PostgreSQL.' }}
           </p>
           <p>
             Select a table to browse records. Double-click a cell to edit, or use Edit, Copy, and

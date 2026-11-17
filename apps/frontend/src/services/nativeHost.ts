@@ -24,6 +24,11 @@ async function call<T, P>(invoker: NativeInvoker, command: string, payload: P, t
   } finally { if (timer) clearTimeout(timer); }
 }
 export function hostState(): HostState { return current; }
+/**
+ * Sample profiles and Mock mode exist only in the browser demo. The desktop app (including a
+ * failed host bootstrap) shows real connections only: no samples, no simulated sessions.
+ */
+export function mockConnectionsAvailable(): boolean { return current.kind === 'browser'; }
 export async function bootstrapNativeHost(global: unknown = globalThis): Promise<HostState> {
   const invoker = invokerFrom(global);
   if (!invoker) { activeInvoker = undefined; return (current = {kind: 'browser'}); }

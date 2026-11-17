@@ -16,11 +16,13 @@ for(const theme of ['light','dark']) test(`${theme}: native reload refusal asks 
     }}};
   },theme);
   await page.goto('/');
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   const nonces=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('hostInfoNonces')||'[]') as string[]);
   expect(await nonces()).toHaveLength(1);
-  await page.getByRole('tab',{name:'SQL',exact:true}).click();
-  await page.locator('.cm-content').fill('SELECT * FROM users LIMIT 17');
+  // The desktop app has no sample workspace; an unsaved new-connection draft is the pending edit.
+  await page.getByTitle('Manage connections',{exact:true}).click();
+  await page.getByRole('button',{name:'New connection',exact:true}).click();
+  await page.getByPlaceholder('e.g. Local development').fill('Unsaved 17');
   await page.evaluate(()=>{(window as any).pageMarker=true;});
   await page.evaluate(()=>window.dispatchEvent(new Event('stoneql-reload-requested')));
   const dialog=page.getByRole('alertdialog');
@@ -31,12 +33,12 @@ for(const theme of ['light','dark']) test(`${theme}: native reload refusal asks 
   await expect(dialog).toHaveCount(0);
   expect(await nonces()).toHaveLength(1);
   expect(await page.evaluate(()=>(window as any).pageMarker)).toBe(true);
-  await expect(page.locator('.cm-content')).toContainText('LIMIT 17');
+  await expect(page.getByPlaceholder('e.g. Local development')).toHaveValue('Unsaved 17');
   await page.evaluate(()=>window.dispatchEvent(new Event('stoneql-reload-requested')));
   const reloaded=page.waitForEvent('load');
   await dialog.getByRole('button',{name:'Reload StoneQL',exact:true}).click();
   await reloaded;
-  await expect(page.locator('.footer-session')).toContainText('Desktop host');
+  await expect(page.locator('.footer-session')).toContainText('Not connected');
   expect(await page.evaluate(()=>(window as any).pageMarker)).toBeUndefined();
   const log=await nonces();
   // Bootstrap, the confirmed rotation (before the page went away), then the new page's bootstrap.

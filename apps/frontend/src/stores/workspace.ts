@@ -1,5 +1,5 @@
 import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd, listUnresolvedOutcomes, acknowledgeOutcome } from '../services/liveConnections';
-import {NativeOperationError, hostState} from '../services/nativeHost';
+import {NativeOperationError, hostState, mockConnectionsAvailable} from '../services/nativeHost';
 import type {AccessModeDto, JournalProblemDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
 import { liveCatalogSupported, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery, liveIndexesSql, liveForeignKeysSql, toLiveIndexes, toLiveForeignKeys } from '../services/liveSchema';
@@ -30,8 +30,10 @@ import {
 } from '../services/connectionPreferences';
 export const LEASE_OUTCOME_UNREADABLE = 'The open transaction was ended by disconnecting, but its outcome could not be read. Treat it as unknown and verify on the server.';
 export const useWorkspace = defineStore('workspace', () => {
-  const loaded = loadConnectionPreferences(localStorage, samples);
-  const connections = ref<Connection[]>(loaded.connections);
+  const demo = mockConnectionsAvailable();
+  const loaded = loadConnectionPreferences(localStorage, demo ? samples : []);
+  // The desktop app drops sample and mock profiles saved by earlier builds; only live remain.
+  const connections = ref<Connection[]>(demo ? loaded.connections : loaded.connections.filter((c) => c.mode === 'live'));
   const groups = ref(loaded.groups);
   const storageError = ref(loaded.error || '');
   function persistConnections() {
@@ -341,7 +343,15 @@ export const useWorkspace = defineStore('workspace', () => {
   }
   opened.value.forEach(initialize);
   const connection = computed(() => connections.value.find((c) => c.id === activeId.value)!);
-  const workspace = computed(() => workspaces.value[activeId.value]!);
+  // With no connection open (none saved, or the last one removed) the shell reads an empty,
+  // unattached workspace instead of failing; the workbench itself is not shown then.
+  const idle = ref<Workspace>({
+    databases: [], scope: 'server', database: '', table: '', view: 'Structure', page: 1,
+    pageSize: defaultPageSize.value, treeFilter: '', expandedDatabases: [], showHistory: false,
+    filter: '', sort: '', descending: false,
+    queries: [{ id: 1, title: 'Query 1', sql: '', saved: '' }], queryId: 1, history: [],
+  });
+  const workspace = computed(() => workspaces.value[activeId.value] ?? idle.value);
   const database = computed(() =>
     workspace.value.databases.find((d) => d.name === workspace.value.database),
   );

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // Simulated native bridge: a read-only MySQL session exports the open table. The renderer only
 // sees a grant, a transfer id and status; the outcome (including refusals) is shown verbatim.
 test('live export streams through a native grant and reports refusals without creating a file', async ({ page }) => {
@@ -37,9 +38,7 @@ test('live export streams through a native grant and reports refusals without cr
     } } };
   });
   await page.goto('/');
-  await page.getByTitle('Manage connections', { exact: true }).click();
-  await page.getByRole('button', { name: 'New connection', exact: true }).click();
-  await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+  await newLiveConnection(page);
   await page.getByPlaceholder('e.g. Local development').fill('Live export');
   await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
   await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();

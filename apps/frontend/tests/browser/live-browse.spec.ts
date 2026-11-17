@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // Simulated native bridge: a MySQL catalog with one table and one view, and a 40-row table whose
 // ids exceed JavaScript's safe integer range. Only read_only_query is ever used for browsing.
 for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreSQL', 'light']])
@@ -47,9 +48,7 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
       } } };
     }, [theme, postgres] as const);
     await page.goto('/');
-    await page.getByTitle('Manage connections', { exact: true }).click();
-    await page.getByRole('button', { name: 'New connection', exact: true }).click();
-    await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+    await newLiveConnection(page);
     if (theme === 'light' && !postgres) {
       // A5: this host reports no SQLite (release build): the option is explained and disabled.
       await page.getByLabel('Database engine', { exact: true }).selectOption('SQLite');

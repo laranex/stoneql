@@ -9,7 +9,8 @@ async function start() {
   await bootstrapNativeHost();
   createApp(App).use(createPinia()).mount('#app');
   await nextTick();
-  if (document.querySelector('.bottom-status') && document.querySelector('.table-tree')) {
+  // Rendered: the shell with either a workspace tree or the no-connection start screen.
+  if (document.querySelector('.bottom-status') && document.querySelector('.table-tree, .empty-state')) {
     requestAnimationFrame(() => { void confirmNativeRendered().catch(() => {}); });
   }
 }

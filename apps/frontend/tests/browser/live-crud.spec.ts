@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { newLiveConnection } from './desktop';
 // Simulated native bridge with the read-write gate on (as only test hosts have it): a MySQL table
 // with a primary key; every change arrives as one generated statement in a read-write job.
 test('live read-write CRUD sends exact single-row statements and reports conflicts', async ({ page }) => {
@@ -40,9 +41,7 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
     } } };
   });
   await page.goto('/');
-  await page.getByTitle('Manage connections', { exact: true }).click();
-  await page.getByRole('button', { name: 'New connection', exact: true }).click();
-  await page.getByLabel('Connection mode', { exact: true }).selectOption('live');
+  await newLiveConnection(page);
   await page.getByPlaceholder('e.g. Local development').fill('Live editable');
   await page.getByLabel('Session access', { exact: true }).selectOption('read_write');
   await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
