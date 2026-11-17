@@ -44,7 +44,8 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await expect(page.locator('.database-context-link')).toContainText('acme_store');
  await expect(page.getByText('No matching tables',{exact:true})).toHaveCount(0);
  await page.locator('.cm-content').fill('SELECT value,value,n FROM known_table');
- await page.locator('.cm-content').press('Control+Enter');
+ // Ctrl/Cmd+Enter is CodeMirror's Mod-Enter on every platform; the editor must run, not add a line.
+ await page.locator('.cm-content').press('ControlOrMeta+Enter');
  await expect(page.getByText('18446744073709551615',{exact:true})).toBeVisible();
  await expect(page.getByText('12345678901234567890.4500',{exact:true})).toBeVisible();
  await expect(page.locator('.data-grid thead th')).toHaveText(['value','value','n']);
