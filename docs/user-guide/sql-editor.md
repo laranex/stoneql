@@ -24,11 +24,7 @@ Results retain ordered columns, including duplicate labels, exact integer/decima
 
 ## Native read-write execution
 
-::: warning Disabled pending safety approval
-Read-write execution is **disabled in current builds**. The desktop host refuses read-write connections, and the **Session access → Read-write** option and the **Read-write…** button are shown disabled with a "pending safety approval" note. It stays off until the execution safety tests pass and the change is approved. Read-only Live connections are unaffected. The rest of this section describes the behaviour once it is enabled.
-:::
-
-A desktop Live connection can be opened **read-write** for one session: in the connection dialog choose **Session access → Read-write — this session only**, or use **Read-write…** on a connected read-only workspace. The choice is not saved. PROD-tagged profiles ask for the "PROD — I understand" acknowledgement first. Read-write is not available over SSH yet. The badge next to the connection shows **Read-only** or **Read-write**.
+Direct desktop Live connections are **read-write** by default (approved 2026-11-17, A15). Tick **Read-only connection** in the connection dialog to open that connection read-only instead; the choice is saved with the connection. SSH Tunnel connections are always read-only for now (SSH read-write awaits a separate approval). PROD-tagged profiles ask for the "PROD — I understand" acknowledgement each time they connect read-write. The badge next to the connection shows **Read-only** or **Read-write**.
 
 In read-write mode **Run query** executes the editor content as a script, one statement at a time, stopping at the first statement that does not succeed. Scripts containing `DELETE`, `UPDATE`, `DROP`, `TRUNCATE`, `ALTER`, `REPLACE`, `RENAME`, `GRANT` or `REVOKE` ask for confirmation first. These confirmations are safeguards, not permissions: the database account decides what is allowed. If the connection is already running something, the request is refused (nothing is queued or sent).
 

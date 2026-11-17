@@ -58,7 +58,7 @@ export function tlsOptional(connection: Connection): boolean {
 export function usesTls(connection: Connection): boolean {
   return !tlsOptional(connection) || connection.tls !== false;
 }
-/** Read-only unless `access` is the explicit, per-session `read_write` opt-in. */
+/** Read-only unless `access` is `read_write` (a Direct profile not marked read-only, A15). */
 export async function openLive(connection: Connection, attemptId?: string, access: AccessModeDto = 'read_only'): Promise<LiveConnection> {
   if (!liveSupported(connection)) throw new Error('Live connections support MySQL, MariaDB and PostgreSQL over Direct or SSH, or a chosen SQLite file.');
   const mode = access === 'read_write' ? { access } : {};

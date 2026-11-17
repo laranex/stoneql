@@ -40,8 +40,13 @@ export interface Connection {
    * verified TLS, which saved profiles from before this option keep. Ignored for other hosts.
    */
   tls?: boolean;
-  /** Live connect choice for this session only, never persisted; omitted means read-only. */
+  /** Session access for one connect, derived from `readOnly` and the transport; never persisted. */
   access?: 'read_only' | 'read_write';
+  /**
+   * Live only, saved with the profile: `true` opens engine-enforced read-only sessions.
+   * Omitted means read-write (A15) for Direct connections; SSH tunnels are always read-only.
+   */
+  readOnly?: boolean;
   /** Opaque native SQLite file grant; session-only, never persisted. */
   sqliteGrant?: string;
   id: string;

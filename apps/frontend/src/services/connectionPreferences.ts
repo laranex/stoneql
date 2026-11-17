@@ -57,6 +57,7 @@ export function sanitizeConnection(value: Connection, groups: ConnectionGroup[])
     ...defined({ passwordRef: source.mode === 'live' ? reference(source.passwordRef) : undefined }),
     // Only an explicit "TLS off" is stored; anything else means verified TLS.
     ...defined({ tls: source.mode === 'live' && source.tls === false ? (false as const) : undefined }),
+    ...defined({ readOnly: source.mode === 'live' && source.readOnly === true ? (true as const) : undefined }),
     // Deliberately reconstruct transport. Never serialize credential fields, grants or unknown
     // fields; only the enrolled public host key, its fingerprint, references and a file name.
     transport:

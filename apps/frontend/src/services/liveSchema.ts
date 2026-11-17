@@ -30,6 +30,22 @@ export function liveTablesSql(engine: Engine, database: string): string {
  * hides keys from SELECT-only accounts); `indkey` is matched as text through the allowlisted
  * CONCAT because `= ANY (...)` and casts are outside the read-only subset.
  */
+/**
+ * Databases the signed-in account can see, for choosing the default database after a successful
+ * test. PostgreSQL lists databases that accept connections (templates excluded).
+ */
+export function liveDatabasesSql(engine: Engine): string {
+  return engine === 'PostgreSQL'
+    ? 'SELECT datname AS name FROM pg_catalog.pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname;'
+    : 'SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME;';
+}
+/** A database every server has, used only to sign in for a test when none is entered yet. */
+export function serverDatabase(engine: Engine): string {
+  return engine === 'PostgreSQL' ? 'postgres' : 'information_schema';
+}
+export function toDatabaseNames(result: SqlResult): string[] {
+  return catalogRows(result).map((row) => text(row.name)).filter(Boolean);
+}
 export function liveColumnsSql(engine: Engine, database: string, table: string): string {
   if (!mysqlFamily(engine)) {
     const name = literal(table, 'A table name', engine);

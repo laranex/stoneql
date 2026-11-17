@@ -11,7 +11,7 @@ Mock profiles keep the **simulated** workflow described below: no dump, compress
 - A column whose type StoneQL cannot represent exactly (for example PostgreSQL `interval`, arrays or `inet`) stops the export and is named; nothing is written.
 - GZIP, ZIP, JSON and XLSX are not offered for live tables.
 
-**Import** (read-write sessions only; the read-write gate is off in current builds): **Import** accepts CSV in the format above for a table with a primary key, up to 64 MiB. The first line must name columns of the table. All rows are inserted in one transaction in batches; if any batch is rejected, the whole import is rolled back and the message names the record range and SQLSTATE. A COMMIT whose outcome is uncertain is reported as unknown, never as imported. 
+**Import** (read-write connections only): **Import** accepts CSV in the format above for a table with a primary key, up to 64 MiB. The first line must name columns of the table. All rows are inserted in one transaction in batches; if any batch is rejected, the whole import is rolled back and the message names the record range and SQLSTATE. A COMMIT whose outcome is uncertain is reported as unknown, never as imported. 
 
 **SQL import** (MySQL and MariaDB read-write sessions): in **Import**, choose the **SQL** format, then **Choose SQL file…** and **Import**. The desktop app shows its own open dialog; the window never sees the path, and a chosen file can be used once.
 

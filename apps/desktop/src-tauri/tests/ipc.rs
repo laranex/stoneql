@@ -446,15 +446,24 @@ fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
     );
     assert_eq!(stale.unwrap_err()["code"], "FORBIDDEN");
 }
-/// Requirement: unrestricted read-write SQL stays disabled natively until approved. The
-/// production builder reports the gate off and refuses `access: read_write` for every engine
-/// and route before credential lookup or network I/O; read-only connects are unaffected.
+/// Requirement: the read-write gate is enforced natively. Production builds have it on (A15,
+/// approved 2026-11-17); a host with the gate off reports it and refuses `access: read_write`
+/// for every engine and route before credential lookup or network I/O; read-only connects are
+/// unaffected. SSH read-write with the gate on is covered by `ssh_read_write.rs`.
 #[test]
 fn read_write_is_refused_natively_while_the_gate_is_off() {
-    // Flipping the gate must be a deliberate, reviewed change to this test too.
-    const { assert!(!stoneql_desktop::READ_WRITE_SQL_ENABLED) };
-    assert!(!stoneql_desktop::HostServices::system().read_write_sql);
-    let (app, _journal) = app();
+    // Changing the shipped gate must be a deliberate, reviewed change to this test too.
+    const { assert!(stoneql_desktop::READ_WRITE_SQL_ENABLED) };
+    assert!(stoneql_desktop::HostServices::system().read_write_sql);
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            read_write_sql: false,
+            ..journal.services()
+        },
+    ));
     let webview = window(&app, "main");
     let info = bootstrap(&webview);
     assert!(!info.payload.read_write_sql);

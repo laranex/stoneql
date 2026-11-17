@@ -4,6 +4,8 @@ import { hostState, invalidateNativeSession, mockConnectionsAvailable, resolveNa
 const nativeHostState = hostState();
 /** Browser demo only; the desktop app never offers Mock mode or sample data. */
 const demo = mockConnectionsAvailable();
+/** Host, user and database names are typed exactly: no autocapitalize, autocorrect or spellcheck. */
+const exactText = { autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false', autocomplete: 'off' } as const;
 let liveStatusTimer: ReturnType<typeof setInterval> | undefined;
 import { insertRecords, RecordConstraintError } from './services/recordMutations';
 import { searchRows, searchOperators as availableSearchOperators, type SearchOperator } from './services/search';
@@ -571,7 +573,8 @@ function tabKeydown(event: KeyboardEvent) {
   event.preventDefault(); controls[next]?.focus();
 }
 async function navigate(view: View) {
-  if(isLive.value && !(view==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(view) || (['Insert','Import'].includes(view) && !isReadOnly.value))))) return;
+  // Live views are exactly the tabs offered for the current scope and access.
+  if(isLive.value && !visibleTabs.value.some((tab)=>tab.name===view)) return;
   if (isReadOnly.value && ['Insert','Operations','Import'].includes(view)) return;
   if (!(await discard())) return;
   w.value.view = view;
@@ -596,7 +599,8 @@ async function openOverviewTable(database: string, name: string, view: View) {
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
+  // A live SQL file imports into the database, so read-write MySQL/MariaDB offer Import there too.
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (w.value.scope==='database' && tab.name==='Import' && liveReadWrite.value && ['MySQL','MariaDB'].includes(store.connection.engine)) || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -889,7 +893,7 @@ const columnDraftInitial = ref('');
 const manager = ref(false);
 const {
   connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-  testing, testMessage, testOk, pendingHostKey, hostKeyTrust, attemptId,
+  testing, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, attemptId,
   newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
   fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
   testConnection, saveConnection, removeConnection, closeConnection,
@@ -2082,12 +2086,11 @@ onBeforeUnmount(() => {
           >
           <template v-else-if="w.view === 'SQL'">
             <div v-if="isLive" class="editor-toolbar">
-              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · TLS verification required` }}</span>
+              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · ${store.connection && !usesTls(store.connection) ? 'TLS off (this computer only)' : 'Verified TLS'}` }}</span>
               <span class="access-badge" :class="{ 'read-write': liveReadWrite }" data-testid="live-access">{{ liveReadWrite ? 'Read-write' : 'Read-only' }}</span>
               <span class="toolbar-end">{{ liveSession?.status || 'disconnected' }}</span>
               <button v-if="liveSession?.status!=='connected'" class="button" :disabled="liveSession?.status==='connecting'" @click="newConnection(store.connection)">Connect</button>
               <template v-else>
-                <button v-if="!liveReadWrite && store.connection?.transport.type !== 'ssh'" class="button" :disabled="!readWriteAvailable" :title="readWriteAvailable ? 'Reconnect this session with read-write access' : 'Read-write SQL is pending safety approval'" @click="newConnection(store.connection, 'read_write')">Read-write…</button>
                 <button class="button" @click="disconnectLive">Disconnect</button>
               </template>
             </div>
@@ -2425,7 +2428,10 @@ onBeforeUnmount(() => {
           <LiveExport v-else-if="w.view === 'Export' && isLive" :key="store.activeId + w.table" /><ExportWorkflow
             v-else-if="w.view === 'Export'"
             :key="store.activeId + w.database + w.scope"
-          /><template v-else-if="table && w.view === 'Import'">
+          /><div v-else-if="isLive && w.scope === 'database' && w.view === 'Import'" class="panel transfer-panel" data-testid="database-import">
+            <h3>Import a SQL file into {{ w.database }}</h3>
+            <LiveSqlImport :key="store.activeId" />
+          </div><template v-else-if="table && w.view === 'Import'">
             <div class="panel transfer-panel">
               <h3>File to import</h3>
               <label v-if="w.scope === 'database'" class="form-label">Target table<select v-model="w.table"><option v-for="target in store.database?.tables" :key="target.name" :value="target.name">{{ target.name }}</option></select></label>
@@ -2776,7 +2782,7 @@ onBeforeUnmount(() => {
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
             <label v-if="demo" class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
-            <label v-if="connectionDraft.mode==='live'" class="form-label">Session access<select :disabled="testing" :value="connectionDraft.access || 'read_only'" aria-label="Session access" @change="connectionDraft.access = ($event.target as HTMLSelectElement).value === 'read_write' ? 'read_write' : undefined"><option value="read_only">Read-only (default)</option><option value="read_write" :disabled="!readWriteAvailable || connectionDraft.transport.type==='ssh'">{{ !readWriteAvailable ? 'Read-write — pending safety approval' : `Read-write — this session only${connectionDraft.transport.type==='ssh' ? ' (not available over SSH yet)' : ''}` }}</option></select><span class="muted">{{ connectionDraft.access==='read_write' ? `Scripts and transactions can change data. Not saved; the next connection starts read-only.${connectionDraft.environment==='Production' ? ' PROD requires confirmation.' : ''}` : 'Engine-enforced read-only SELECT subset.' }}</span></label>
+            <div v-if="connectionDraft.mode==='live'" class="form-label" data-testid="access-option"><label class="compact-choice"><input type="checkbox" :disabled="testing || !readWriteAvailable || connectionDraft.transport.type==='ssh'" :checked="!readWriteAvailable || connectionDraft.transport.type==='ssh' || connectionDraft.readOnly === true" @change="connectionDraft.readOnly = ($event.target as HTMLInputElement).checked ? true : undefined" /> Read-only connection</label><span class="muted">{{ !readWriteAvailable ? 'This build runs live connections read-only.' : connectionDraft.transport.type==='ssh' ? 'SSH tunnel connections are read-only for now.' : connectionDraft.readOnly ? 'Engine-enforced read-only SELECT subset. Saved with this connection.' : `Read-write: scripts, transactions and row edits can change data.${connectionDraft.environment==='Production' ? ' PROD asks for confirmation when connecting.' : ''}` }}</span></div>
             <div v-if="connectionDraft.mode==='live' && (connectionDraft.engine==='MySQL' || connectionDraft.engine==='MariaDB') && connectionDraft.transport.type==='direct'" class="form-label" data-testid="tls-option">
               <label v-if="tlsOptional(connectionDraft)" class="compact-choice"><input type="checkbox" :disabled="testing" :checked="connectionDraft.tls !== false" @change="connectionDraft.tls = ($event.target as HTMLInputElement).checked ? undefined : false" /> Use TLS</label>
               <span class="muted">{{ !tlsOptional(connectionDraft) ? 'Verified TLS is required for connections to other computers.' : usesTls(connectionDraft) ? 'The server certificate and host name are verified.' : 'TLS off: traffic to this computer is not encrypted. Turn on to verify the certificate and host name.' }}</span>
@@ -2871,7 +2877,7 @@ onBeforeUnmount(() => {
             <template v-if="connectionDraft.engine !== 'SQLite'"
               ><div class="host-port">
                 <label class="form-label"
-                  >Host<input :disabled="testing" v-model="connectionDraft.host" required /></label
+                  >Host<input :disabled="testing" v-model="connectionDraft.host" v-bind="exactText" required /></label
                 ><label class="form-label"
                   >Port<input :disabled="testing"
                     v-model.number="connectionDraft.port"
@@ -2884,7 +2890,7 @@ onBeforeUnmount(() => {
               <div class="form-two">
                 <label class="form-label"
                   >Username<input :disabled="testing"
-                    v-model="connectionDraft.user"
+                    v-model="connectionDraft.user" v-bind="exactText"
                     autocomplete="off"
                     required /></label
                 ><label class="form-label"
@@ -2903,18 +2909,18 @@ onBeforeUnmount(() => {
                   ? 'Database file path (simulated)'
                   : 'Default database'
               }}<input :disabled="testing"
-                v-model="connectionDraft.database"
+                v-model="connectionDraft.database" v-bind="exactText"
                 :placeholder="
-                  connectionDraft.engine === 'SQLite' ? '/path/to/database.sqlite' : 'acme_store'
+                  connectionDraft.engine === 'SQLite' ? '/path/to/database.sqlite' : demo ? 'acme_store' : 'Type a name, or test the connection to choose one'
                 "
-            /></label>
-            <div v-if="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite'" class="form-label">SQLite file (opened read-only)<p v-if="!sqliteAvailable" class="notice info" data-testid="sqlite-unavailable">This build does not include SQLite (excluded from release builds). Use a mock profile or a development build.</p><div class="sqlite-file"><button type="button" class="button" :disabled="testing || !sqliteAvailable" @click="chooseSqliteFile">Choose file…</button><span :class="{ muted: !connectionDraft.sqliteGrant }">{{ connectionDraft.sqliteGrant ? connectionDraft.database : 'No file chosen for this app session' }}</span></div><span class="muted">The native picker grants this file only. Access is not saved; choose it again after restarting.</span></div>
+            /><select v-if="databaseOptions.length && connectionDraft.engine !== 'SQLite'" :disabled="testing" aria-label="Databases on this server" :value="databaseOptions.includes(connectionDraft.database) ? connectionDraft.database : ''" @change="connectionDraft.database = ($event.target as HTMLSelectElement).value"><option value="" disabled>Choose a database on this server ({{ databaseOptions.length }})</option><option v-for="name in databaseOptions" :key="name" :value="name">{{ name }}</option></select></label>
+            <div v-if="connectionDraft.mode==='live' && connectionDraft.engine==='SQLite'" class="form-label">SQLite file<p v-if="!sqliteAvailable" class="notice info" data-testid="sqlite-unavailable">This build does not include SQLite (excluded from release builds). Use a mock profile or a development build.</p><div class="sqlite-file"><button type="button" class="button" :disabled="testing || !sqliteAvailable" @click="chooseSqliteFile">Choose file…</button><span :class="{ muted: !connectionDraft.sqliteGrant }">{{ connectionDraft.sqliteGrant ? connectionDraft.database : 'No file chosen for this app session' }}</span></div><span class="muted">The native picker grants this file only. Access is not saved; choose it again after restarting.</span></div>
             <div v-if="connectionDraft.transport.type === 'ssh'" class="ssh-fields">
               <h3>SSH tunnel configuration</h3>
               <div class="host-port">
                 <label class="form-label"
                   >SSH host<input :disabled="testing"
-                    v-model="connectionDraft.transport.host"
+                    v-model="connectionDraft.transport.host" v-bind="exactText"
                     required
                     placeholder="bastion.example.com" /></label
                 ><label class="form-label"
@@ -2928,7 +2934,7 @@ onBeforeUnmount(() => {
               </div>
               <div class="form-two">
                 <label class="form-label"
-                  >SSH username<input :disabled="testing" v-model="connectionDraft.transport.user" required /></label
+                  >SSH username<input :disabled="testing" v-model="connectionDraft.transport.user" v-bind="exactText" required /></label
                 ><label class="form-label"
                   >Authentication<select :disabled="testing" v-model="connectionDraft.transport.auth" aria-label="SSH authentication">
                     <option value="agent">SSH agent</option>

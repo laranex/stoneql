@@ -33,7 +33,7 @@ User decisions recorded in this run:
 | A12 | M005 | RSA policy (stay unsupported recommended / accept RUSTSEC-2023-0071 for client signing / aws-lc-rs) and keyboard-interactive policy (detect-and-refuse recommended / implement) | M005 G3 auth-method matrix | Pending |
 | A13 | M005 | Review/approve D005, D006 and D016–D020 (desktop secret provider, trust/agent policy, SSH transport decisions) | M005 sign-off | Pending |
 | A14 | M005/M009 | Settle the bundle identifier (`app.dbadmin.desktop` today, D021 open item): it fixes the Keychain service name and the host-key store directory; changing it later de-enrolls every host and orphans saved secrets | M005 alpha blocker note; M009 packaging | **Approved 2026-11-16** (user: "Change the macOS bundle identifier from `app.dbadmin.desktop` to `me.thixpin.stoneql`"). **Done 2026-11-16**: identifier, Keychain service and test prefix changed together; verified in the bundled `.app`; impact documented (see Results) |
-| A15 | M006/M007 | Enable unrestricted read-write SQL in builds (`READ_WRITE_SQL_ENABLED`), Direct first; SSH read-write separately | Live CRUD and SQL-tab writes in shipped builds; M007 SQL/CSV import (D022 dependency) | Pending |
+| A15 | M006/M007 | Enable unrestricted read-write SQL in builds (`READ_WRITE_SQL_ENABLED`), Direct first; SSH read-write separately | Live CRUD and SQL-tab writes in shipped builds; M007 SQL/CSV import (D022 dependency) | **Approved 2026-11-17 (Direct only; SSH still pending)** — see Results |
 | A16 | M006 | Approve the remaining Proposed M006 decisions and values: D025-11, D025-12, D025-13 (durable journal), `ExecutionLimits` release values, alpha-plan Q1–Q9 | M006 G4/G5 sign-off | Pending |
 | A17 | M006 | Approve the live CRUD and metadata design implemented as Proposed: rows addressed by full primary key only (keyless tables read-only), `_utf8mb4 X'…'` / `E'…'` literals, binary columns read-only, 0 affected rows = conflict, one DELETE per selected row stopping at the first failure, catalog refresh on DDL keywords | M006 CRUD sign-off (implemented and fixture-verified) | Pending |
 | A18 | M007 | Approve transfer quotas implemented as Proposed defaults: CSV import file ≤ 64 MiB (renderer-held), INSERT batches < 60 KiB, export SQL batches of 500 rows, 8 outstanding export grants / 16 transfer records per session; and the alpha-plan quotas still unimplemented (1 GiB import, free-space floor, +256 MiB RSS for 1M rows) | M007 G4/G5 sign-off | Pending |
@@ -255,3 +255,11 @@ Findings for the sign-off:
    connection was not captured by the benchmark.
 5. Validation is fast: ~1.7 s per GiB including ~0.8 M statements; reading ~0.2 s per GiB.
 
+
+### A15 — read-write SQL for Direct connections (approved 2026-11-17)
+
+- User: "approved to safety, no need the read only connection anymore"; then chose **Direct only** (SSH stays read-only, separate approval) and **default read-write with an opt-in read-only** setting.
+- `READ_WRITE_SQL_ENABLED = true`; host still refuses SSH read-write (`ssh_read_write.rs`) and refuses read-write when a host is built with the gate off (`ipc.rs` gate test, injected services).
+- Renderer: "Session access" select and "Read-write…" button replaced by a saved per-profile **Read-only connection** checkbox (`readOnly: true` persisted only when ticked); locked on for SSH and when the host reports the gate off. PROD acknowledgement kept for every read-write connect.
+- Real servers (2026-11-17, gate on): `test:execution` MySQL 8.4.6 / MariaDB 11.4.8 / PostgreSQL 17.6 read-write execution checks passed (cancel p95 132.3 / 63.1 / 50.5 ms); `test:native-database` MySQL and MariaDB real database IPC checks passed (includes SQL import). desktop:test 60 passed; rust fmt/lint/boundaries, contracts:check pass; npm test 228+22; browser 64+.
+- Not yet: graphical row editing against a real server in the packaged app (browser specs use the stubbed host); SSH read-write.

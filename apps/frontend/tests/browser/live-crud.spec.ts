@@ -43,7 +43,6 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
   await page.goto('/');
   await newLiveConnection(page);
   await page.getByPlaceholder('e.g. Local development').fill('Live editable');
-  await page.getByLabel('Session access', { exact: true }).selectOption('read_write');
   await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
   await expect(page.getByTestId('live-access')).toHaveText('Read-write');
   await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();

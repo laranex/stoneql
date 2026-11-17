@@ -45,9 +45,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await page.goto('/');
     await newLiveConnection(page);
     await page.getByPlaceholder('e.g. Local development').fill('Live import');
-    await page.getByLabel('Session access', { exact: true }).selectOption('read_write');
     await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
     await expect(page.getByTestId('live-access')).toHaveText('Read-write');
+    // A SQL file imports into the database: Import is offered at database level as well.
+    await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['SQL', 'Import']);
+    await page.getByRole('tab', { name: 'Import', exact: true }).click();
+    await expect(page.getByTestId('database-import')).toContainText('Import a SQL file into');
+    await expect(page.getByTestId('database-import').getByRole('button', { name: /Choose/ })).toBeVisible();
     await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
     await page.getByRole('tab', { name: 'Import', exact: true }).click();
     await page.getByRole('combobox', { name: 'Format' }).selectOption('SQL');

@@ -45,8 +45,8 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
  await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Orders PROD');
  await page.getByLabel('Connection environment',{exact:true}).selectOption('Production');
- await expect(page.getByLabel('Session access',{exact:true})).toHaveValue('read_only');
- await page.getByLabel('Session access',{exact:true}).selectOption('read_write');
+ // A15: Direct connections are read-write unless marked read-only.
+ await expect(page.getByRole('checkbox',{name:'Read-only connection'})).not.toBeChecked();
  await page.getByRole('button',{name:'Save & connect',exact:true}).click();
  // PROD requires the explicit acknowledgement before opening read-write.
  const accept=page.getByRole('button',{name:'Open read-write',exact:true});
@@ -58,6 +58,7 @@ for(const theme of ['light','dark'])test(`${theme}: read-write live SQL is expli
  const connect=await page.evaluate(()=>(window as any).liveLog.find((e:any)=>e.command==='connect_direct').payload);
  expect(connect.access).toBe('read_write');
  expect(await page.evaluate(()=>localStorage.getItem('stoneql-connections'))).not.toContain('read_write');
+ expect(await page.evaluate(()=>localStorage.getItem('stoneql-connections'))).not.toContain('readOnly');
  // Destructive statements are confirmed (UX safeguard) and then run as one native job.
  await page.locator('.cm-content').fill("SELECT big FROM t; SELECT amount FROM t; UPDATE t SET note = 'x'");
  await page.getByRole('button',{name:'Run query',exact:true}).click();
@@ -142,17 +143,26 @@ for(const theme of ['light','dark'])test(`${theme}: read-write gate, failed-conn
  },theme);
  await page.goto('/');
  await newLiveConnection(page);
- const option=page.getByLabel('Session access',{exact:true}).locator('option[value="read_write"]');
- await expect(option).toHaveJSProperty('disabled',true);
- await expect(option).toHaveText(/pending safety approval/);
+ // Gate off in the host report: every live connection is read-only and the choice is locked.
+ const readOnly=page.getByRole('checkbox',{name:'Read-only connection'});
+ await expect(readOnly).toBeChecked();
+ await expect(readOnly).toBeDisabled();
+ await expect(page.getByTestId('access-option')).toContainText('This build runs live connections read-only.');
  await page.screenshot({path:`test-results/live-gate-${theme}.png`,fullPage:true});
  // Turn the stubbed host's gate on (a host report, not renderer state) and start again.
  await page.evaluate(()=>sessionStorage.setItem('gate','on'));
  await page.reload();
  await newLiveConnection(page);
  await page.getByPlaceholder('e.g. Local development').fill('Orders dev');
- await expect(page.getByLabel('Session access',{exact:true}).locator('option[value="read_write"]')).toHaveJSProperty('disabled',false);
- await page.getByLabel('Session access',{exact:true}).selectOption('read_write');
+ await expect(readOnly).toBeEnabled();
+ await expect(readOnly).not.toBeChecked();
+ // SSH tunnels stay read-only (separate approval); Direct is read-write by default.
+ await page.getByRole('button',{name:'SSH Tunnel'}).click();
+ await expect(readOnly).toBeChecked();
+ await expect(readOnly).toBeDisabled();
+ await expect(page.getByTestId('access-option')).toContainText('SSH tunnel connections are read-only for now.');
+ await page.getByRole('button',{name:'Direct',exact:true}).click();
+ await expect(readOnly).not.toBeChecked();
  await page.getByRole('button',{name:'Save & connect',exact:true}).click();
  await expect(page.getByTestId('live-access')).toHaveText('Read-write');
  // V-3: the job's connection could not be opened; nothing reads as success.

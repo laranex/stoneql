@@ -104,3 +104,12 @@ test('Use TLS: off only when chosen for this computer; remote and saved profiles
  assert.deepEqual(saved.map(c=>c.tls),[false,undefined,undefined]);
  await bootstrapNativeHost({});
 });
+test('A15: only an explicit read-only choice is saved with a live profile; read-write is the default',()=>{
+ const saved=(extra:object)=>connectionSnapshot([{...profile,...extra} as any],[]).connections[0] as any;
+ assert.equal(saved({readOnly:true}).readOnly,true);
+ assert.equal('readOnly' in saved({}),false);
+ assert.equal('readOnly' in saved({readOnly:false}),false);
+ assert.equal('readOnly' in saved({readOnly:true,mode:'mock'}),false);
+ const back=loadConnectionPreferences({getItem:()=>JSON.stringify(connectionSnapshot([{...profile,readOnly:true} as any],[]))},[]);
+ assert.equal((back.connections[0] as any).readOnly,true);
+});

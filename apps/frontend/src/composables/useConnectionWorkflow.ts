@@ -1,9 +1,10 @@
 import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
-import { openLive, closeLive, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
+import { openLive, closeLive, queryLive, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState, mockConnectionsAvailable } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
+import { liveDatabasesSql, serverDatabase, toDatabaseNames } from '../services/liveSchema';
 import type { Connection, Transport } from '../types';
 import type { SecretPurpose, SshHostKey, SshTrustedHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
 type SshTransport = Extract<Transport, { type: 'ssh' }>;
@@ -62,6 +63,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     connectionError = ref(''),
     testing = ref(false),
     testMessage = ref(''),
+    /** Databases listed by the last successful live test, offered for Default database. */
+    databaseOptions = ref<string[]>([]),
     testOk = ref(false),
     connectionEditing = ref(false),
     pendingHostKey = ref<SshHostKey>(),
@@ -102,7 +105,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       else manager.value = true;
     }
   }
-  function newConnection(existing?: Connection, access?: Connection['access']) {
+  function newConnection(existing?: Connection) {
     connectionEditing.value = !!existing;
     connectionDraft.value = existing
       ? JSON.parse(JSON.stringify(existing))
@@ -126,8 +129,8 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           transport: { type: 'direct' },
         };
     connectionDraft.value!.mode ||= demo ? 'mock' : 'live';
-    // Read-write over SSH is gated off until tunnelled cancellation is fixture-tested.
-    connectionDraft.value!.access = connectionDraft.value!.mode === 'live' && connectionDraft.value!.transport.type !== 'ssh' ? access : undefined;
+    // Access is derived when connecting (A15: from `readOnly` and the transport), never kept.
+    connectionDraft.value!.access = undefined;
     // Remember toggles mirror existing references; they are draft-only and never persisted.
     if (connectionDraft.value!.mode === 'live') {
       connectionDraft.value!.rememberPassword = !!connectionDraft.value!.passwordRef;
@@ -137,6 +140,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     pendingHostKey.value = undefined;
     hostKeyTrust.value = undefined;
     testMessage.value = '';
+    databaseOptions.value = [];
     connectionError.value = '';
     connectionDraftInitial.value = JSON.stringify(connectionDraft.value);
     connectionDialog.value = true;
@@ -292,6 +296,19 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     }catch(error){connectionError.value=(error as Error).message;}
     finally{testing.value=false;}
   }
+  /** The first required live field left empty, named for the user; '' when complete. */
+  function liveMissing(draft: Connection, test = false): string {
+    if (draft.engine === 'SQLite') return '';
+    if (!draft.host.trim()) return 'Enter the host.';
+    if (!draft.user.trim()) return 'Enter the username.';
+    if (!test && !draft.database.trim()) return 'Choose or enter the default database. Test connection lists the databases you can use.';
+    return '';
+  }
+  /** Read-write for a Direct profile not marked read-only, when this host enables read-write. */
+  function liveAccess(draft: Connection): Connection['access'] {
+    const enabled = nativeHostState.kind === 'desktop' && nativeHostState.info.readWriteSql === true;
+    return enabled && draft.transport.type !== 'ssh' && !draft.readOnly ? 'read_write' : undefined;
+  }
   /** A verified-TLS failure to this computer says how to connect without TLS; never automatic. */
   function withTlsHint(error: unknown, draft?: Connection): string {
     const message = (error as Error).message;
@@ -309,13 +326,22 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       testMessage.value = 'Verify and trust the SSH host key, then test again.'; testOk.value = false;
       return;
     }
+    // Checked here so an empty field never reaches the host as an opaque invalid request.
+    // The database may be left blank for a test: it is then chosen from the listed databases.
+    const missing = connectionDraft.value.mode === 'live' ? liveMissing(connectionDraft.value, true) : '';
+    if (missing) { testMessage.value = missing; testOk.value = false; return; }
     testing.value = true;
     try {
       if(connectionDraft.value.mode==='live') {
         attemptId.value=`attempt_${crypto.randomUUID()}`;
-        const info=await openLive(connectionDraft.value, attemptId.value);
-        await closeLive(info.handle);
-        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':usesTls(connectionDraft.value)?'Verified TLS connection successful':'Connected without TLS (this computer only)'} · ${info.engineVersion} · Test session closed.`;
+        const draft=connectionDraft.value, chosen=draft.database.trim();
+        const info=await openLive(draft.engine==='SQLite'||chosen?draft:{...draft,database:serverDatabase(draft.engine)}, attemptId.value);
+        // List the account's databases on the test session (read-only); a refusal only means no
+        // list is offered, never a failed test.
+        try{databaseOptions.value=draft.engine==='SQLite'?[]:toDatabaseNames(await queryLive(info.handle, liveDatabasesSql(draft.engine)));}
+        catch{databaseOptions.value=[];}
+        finally{await closeLive(info.handle);}
+        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':usesTls(connectionDraft.value)?'Verified TLS connection successful':'Connected without TLS (this computer only)'} · ${info.engineVersion} · Test session closed.${!chosen&&databaseOptions.value.length?' Choose the default database below.':''}`;
         testOk.value=true;
       } else {
         const result=await mockTransport.test(connectionDraft.value);
@@ -325,13 +351,16 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     finally{testing.value=false;attemptId.value='';}
   }
   async function saveLiveConnection(draft: Connection, connectNow: boolean) {
+    if(liveMissing(draft)){connectionError.value=liveMissing(draft);return;}
     if(nativeHostState.kind!=='desktop'||!liveSupported(draft)||!draft.database||(draft.engine==='SQLite'&&!draft.sqliteGrant)){connectionError.value=draft.engine==='SQLite'?'Live SQLite requires the desktop app, Direct transport and a file chosen with Choose file.':'Live connections require the desktop app, MySQL, MariaDB or PostgreSQL over Direct or SSH and a database name.';return;}
     const ssh=liveSsh(draft);
     if(ssh&&!hostKeyTrust.value){connectionError.value='Fetch, verify and trust the SSH host key before saving a live SSH profile.';return;}
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
-    if(connectNow&&draft.access==='read_write'&&draft.environment==='Production'&&!(await confirmReadWrite(draft.name)))return;
+    // A15: read-write unless the profile is read-only; SSH stays read-only until approved (D025-9).
+    const access=liveAccess(draft);
+    if(connectNow&&access==='read_write'&&draft.environment==='Production'&&!(await confirmReadWrite(draft.name)))return;
     if(old?.mode==='live'&&!(await confirmLeaseDiscard(draft.id)))return;
     testing.value=true;
     try {
@@ -346,7 +375,6 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
       const leftOver=await deleteReferences(obsolete);
       if(leftOver)notify(`Saved, but ${credentialsLeft(leftOver).replace(/^\d+ saved/, `${leftOver} old`)}`,'error');
-      const access=ssh?undefined:draft.access;
       if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value, access);}
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
@@ -422,7 +450,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
   }
   return {
     connectionDialog, connectionDraft, connectionDraftInitial, connectionError, connectionEditing,
-    testing, testMessage, testOk, pendingHostKey, hostKeyTrust, refreshHostKeyTrust, attemptId,
+    testing, testMessage, testOk, databaseOptions, pendingHostKey, hostKeyTrust, refreshHostKeyTrust, attemptId,
     newConnection, closeConnectionDialog, changeTransport, readCertificate, chooseSqliteFile,
     fetchHostKey, trustHostKey, rejectHostKey, forgetHostKey, chooseSshKeyFile, cancelAttempt,
     testConnection, saveConnection, removeConnection, closeConnection,

@@ -40,6 +40,7 @@ function nativeFixture(failConnect: boolean | string = false, pickerCancelled = 
       : command === 'contract_probe' ? { values: request.payload.values, simulated: true }
       : command === 'connect_direct' ? { handle: 'owned_handle', engineVersion: 'fixture-version', database: request.payload.database, expiresAfterSeconds: 3600 }
       : command === 'pick_sqlite_file' ? (pickerCancelled ? { grant: null, fileName: null } : { grant: 'opaque_grant', fileName: 'chosen.sqlite' })
+      : command === 'read_only_query' ? { index: 0, affectedRows: '0', truncated: false, columns: [{ name: 'name', databaseType: 'VARCHAR' }], rows: [[{ kind: 'text', text: 'moodle' }], [{ kind: 'binary', hex: '73686f70' }]] }
       : command === 'connect_sqlite' ? { handle: 'sqlite_handle', engineVersion: 'SQLite 3.51.3', database: 'chosen.sqlite', expiresAfterSeconds: 3600 }
       : { connected: false };
     return { version: 1, requestId: request.requestId, payload };
@@ -562,4 +563,25 @@ test('the desktop app has no samples or Mock mode: saved mock profiles are dropp
   assert.equal(useWorkspace().connections.length, 0);
   assert.equal(useWorkspace().workspace.databases.length, 0);
   assert.equal(useWorkspace().table, undefined);
+});
+test('a test with the database blank signs in to a server database and offers the account\'s databases', async () => {
+  const native = nativeFixture();
+  const { flow } = await setup(native.global);
+  flow.newConnection();
+  Object.assign(flow.connectionDraft.value, { name: 'Local', user: 'thixpin', password: 'synthetic-password' });
+  await flow.saveConnection(false);
+  assert.match(flow.connectionError.value, /^Choose or enter the default database/);
+  await flow.testConnection();
+  assert.equal(flow.testOk.value, true);
+  const connect = native.calls.find((c) => c.command === 'connect_direct')!.payload;
+  assert.equal(connect.database, 'information_schema');
+  assert.match(native.calls.find((c) => c.command === 'read_only_query')!.payload.sql, /information_schema\.SCHEMATA/);
+  assert.ok(native.calls.some((c) => c.command === 'disconnect_database'));
+  // MySQL 8 reports catalog text as binary; it is decoded, not shown as hex.
+  assert.deepEqual(flow.databaseOptions.value, ['moodle', 'shop']);
+  assert.match(flow.testMessage.value, /Choose the default database below\.$/);
+  // The draft keeps the user's (blank) choice; the server database was for the test only.
+  assert.equal(flow.connectionDraft.value.database, '');
+  flow.newConnection();
+  assert.deepEqual(flow.databaseOptions.value, []);
 });

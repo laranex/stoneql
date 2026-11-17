@@ -404,6 +404,9 @@ a {
   margin-bottom: 4px;
 }
 .database-row {
+  /* Expand arrow, database icon, name and count share one row. */
+  display: flex;
+  align-items: center;
   width: 100%;
   padding: 9px 16px;
   gap: 7px;
