@@ -226,6 +226,7 @@ INSERT INTO strict_values VALUES (1,-9223372036854775808,1.5,'-0',x'',9223372036
         let file = fixture.file();
         let directory = fixture.0.join("directory");
         std::fs::create_dir(&directory).unwrap();
+        #[cfg(unix)]
         let link = fixture.0.join("link.sqlite");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&file, &link).unwrap();
