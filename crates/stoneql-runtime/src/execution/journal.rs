@@ -29,11 +29,13 @@
 //! Journal changes are applied in memory only after they are durable, except the removal of
 //! work whose outcome is now known (`conclude`), which completes with the next successful
 //! write.
-// Only the Unix store reads and writes the format; elsewhere the store is a fail-closed stub
-// until its Windows port, so the format helpers are unused there.
-#![cfg_attr(not(unix), allow(dead_code))]
+//!
+//! Windows has its own store (`journal/windows.rs`) with documented, weaker guarantees.
+// Only the Unix and Windows stores read and write the format; elsewhere the store is a
+// fail-closed stub, so the format helpers are unused there.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use std::{
     fs,
     io::{Read, Write},
@@ -376,9 +378,14 @@ struct Store {
     /// the link still names this inode).
     #[cfg(unix)]
     read: Option<(u64, u64)>,
+    #[cfg(windows)]
+    platform: windows::Platform,
     #[cfg(test)]
     fault: Option<Fault>,
 }
+
+#[cfg(windows)]
+mod windows;
 
 #[cfg(unix)]
 mod private {
@@ -636,7 +643,7 @@ mod private {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl Store {
     fn open(_dir: &Path) -> Result<(Self, Loaded), JournalProblemDto> {
         Err(JournalProblemDto::Unavailable)
@@ -651,3 +658,5 @@ impl Store {
 
 #[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, windows))]
+mod windows_tests;
