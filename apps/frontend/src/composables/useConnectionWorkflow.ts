@@ -133,7 +133,9 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     connectionDraft.value!.access = undefined;
     // Remember toggles mirror existing references; they are draft-only and never persisted.
     if (connectionDraft.value!.mode === 'live') {
-      connectionDraft.value!.rememberPassword = !!connectionDraft.value!.passwordRef;
+      // New connections remember the password in the system keychain unless unticked; an
+      // existing profile shows whether it has a saved reference.
+      connectionDraft.value!.rememberPassword = existing ? !!connectionDraft.value!.passwordRef : true;
       const ssh = sshOf(connectionDraft.value);
       if (ssh) { ssh.rememberPassword = !!ssh.passwordRef; ssh.rememberPassphrase = !!ssh.passphraseRef; }
     }

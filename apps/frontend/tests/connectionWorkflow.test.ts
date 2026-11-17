@@ -215,7 +215,8 @@ test('removing a live connection asks for confirmation, disconnects and removes 
   assert.equal(confirmation().acceptLabel, 'Remove connection');
   native.calls.length = 0;
   await confirmation().action();
-  assert.deepEqual(native.calls.map(c => c.command), ['disconnect_database']);
+  // New connections remember the password by default, so removal forgets the keychain item too.
+  assert.deepEqual(native.calls.map(c => c.command), ['disconnect_database', 'delete_secret']);
   assert.equal(store.connections.some((c: any) => c.id === id), false);
   assert.equal(store.workspaces[id], undefined);
   assert.equal(notices.at(-1), 'success:Connection removed.');
@@ -584,4 +585,19 @@ test('a test with the database blank signs in to a server database and offers th
   assert.equal(flow.connectionDraft.value.database, '');
   flow.newConnection();
   assert.deepEqual(flow.databaseOptions.value, []);
+});
+test('a new live connection remembers its password in the system keychain by default', async () => {
+  const native = nativeFixture();
+  const { store, flow } = await setup(native.global);
+  flow.newConnection();
+  assert.equal(flow.connectionDraft.value.rememberPassword, true);
+  liveDraft(flow);
+  await flow.saveConnection();
+  const saved = store.connections.find((c: any) => c.id === flow.connectionDraft.value.id);
+  assert.match(saved.passwordRef, /^[0-9a-f-]{36}$/);
+  assert.equal(native.calls.filter((c) => c.command === 'store_secret').length, 1);
+  assert.ok(!JSON.stringify(store.connections).includes('synthetic-password'));
+  // Reopening shows it as remembered; unticking is still possible per connection.
+  flow.newConnection(saved);
+  assert.equal(flow.connectionDraft.value.rememberPassword, true);
 });
