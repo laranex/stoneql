@@ -10,7 +10,7 @@ Use the [roadmap G1–G6 gates and measurement profile](./roadmap.md#gates-appli
 
 ## Desktop
 
-Tauri 2 packages the shared frontend and IPC adapter. The architecture stays cross-platform; the first release is macOS only. Browser mode remains independent and uses mocks. Offline desktop operation must not depend on the documentation site's Mermaid CDN.
+Tauri 2 packages the shared frontend and IPC adapter. The architecture stays cross-platform; the alpha scope (D021) is macOS only, and v0.1.0-beta.2 adds Windows and Linux betas. Browser mode remains independent and uses mocks. Offline desktop operation must not depend on the documentation site's Mermaid CDN.
 
 ### Current host configuration — Implemented and verified
 
@@ -19,6 +19,8 @@ Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `
 ### Current public beta build
 
 The public beta is **v0.1.0-beta.1** (tag → `970ade2`), published 2026-11-17 as a GitHub pre-release: `StoneQL-0.1.0-beta-970ade2.dmg` (arm64 only) with a `.sha256` file, built by `npm run desktop:bundle:adhoc` (the `.app` above inside a DMG with a drag-to-Applications layout). It is ad-hoc signed with Hardened Runtime and **not notarized**: the first launch of a downloaded copy is blocked (“StoneQL” Not Opened, with only Move to Trash and Done), and users choose **Open Anyway** in System Settings → Privacy & Security ([install guide](../guide/install.md#approve-the-first-launch)). `Info.plist` declares macOS 10.13 as minimum (Tauri default; not decided), but the build was verified on macOS 27.0.1 only. SQLite is excluded from release builds (A5). Release-candidate checks on the DMG (checksum, `hdiutil verify`, `codesign --verify`, content scan, install/upgrade over the previous build, 30 cold launches, uninstall/reinstall, quarantined first launch) passed; Open Anyway was not exercised. This beta does not meet the signed-and-notarized release gates below, which remain open.
+
+**v0.1.0-beta.2** (pre-release, tag `v0.1.0-beta.2`, app version `0.1.0-beta.2`) adds, from one release commit: a macOS x86_64 DMG beside the arm64 one (both ad-hoc signed, not notarized; x86_64 not yet run on Intel hardware), an unsigned Windows x64 NSIS installer (per-user, WebView2 download bootstrapper; Direct connections only, no SSH tunnel) and an unsigned Linux x86_64 `.deb` for Ubuntu 22.04+ and Debian 12+, with one `SHA256SUMS` file. See [desktop platform status](../development/desktop-host.md#platform-status-v0-1-0-beta-2) and [verification](../development/verification.md#platform-verification-status-v0-1-0-beta-2).
 
 ### v0.1.0 Alpha (macOS) packaging and lifecycle requirements
 

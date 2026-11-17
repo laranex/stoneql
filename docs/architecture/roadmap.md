@@ -4,6 +4,8 @@
 
 **Published (2026-11-17):** the public beta **v0.1.0-beta.1** (tag → `970ade2`) is a GitHub [pre-release](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1): an ad-hoc signed, not notarized DMG for macOS arm64 with MySQL, MariaDB and PostgreSQL (Direct and SSH). The user approved the outstanding release decisions and signed off QA of `970ade2` on 2026-11-17; Developer ID signing and notarization are deferred. M002–M007 and M009 remain **open** with recorded engineering gaps; the beta does not complete them. Later sections keep the original v0.1.0 Alpha plan and its labels.
 
+**v0.1.0-beta.2 (pre-release; decisions approved by the user 2026-11-17):** one release commit merging the Windows and Linux work, with macOS arm64 and x86_64 DMGs (ad-hoc signed, not notarized), an unsigned Windows x64 NSIS installer and an unsigned Linux x86_64 `.deb` (Ubuntu 22.04+, Debian 12+). Windows: Direct connections, read-write (outcome-journal port with accepted gaps) and DPAPI saved passwords; SSH tunnels are not available (endpoint design **Proposed / awaiting approval**) and renderer-crash recovery is not implemented. Linux: Direct and SSH, read-write, Secret Service or master-password file, renderer-crash recovery. Verification is limited: Windows on GitHub Server 2025 runners only, Linux on a headless build server and in containers, macOS x86_64 not run on Intel hardware ([status](../development/verification.md#platform-verification-status-v0-1-0-beta-2)). D021 below scoped the *alpha* to macOS; shipping Windows and Linux betas does not complete M002, M005 or M009 for those platforms.
+
 **Approved product decision (2026-10-26, D021):** the first release is **StoneQL v0.1.0 Alpha for macOS only**. Apple Silicon (arm64) is the primary target; Intel (x86_64) is optional pending verification; Windows and Linux desktop are deferred; the Axum server is a separate future release. See [v0.1.0 Alpha (macOS)](#v0-1-0-alpha-macos) below. The ad-hoc beta above was published under this scope; the signed and notarized release work is not complete.
 
 **Approved product decision (2026-10-26, D022):** the alpha is a **usable MySQL/MariaDB client** on macOS Apple Silicon — live browsing, CRUD, safe SQL execution, SSH and basic SQL/CSV import/export. PostgreSQL is optional for the first alpha; Windows, Linux, SQLite, advanced database objects and XLSX import are deferred. Deferred is not removed: implemented PostgreSQL/SQLite code and tests stay, outside alpha support claims unless admitted.
@@ -95,7 +97,7 @@ The approved decision lists nine release requirements. Their current state:
 | PostgreSQL | Optional; admitted only if its alpha gates pass | Admitted to the beta (A10, 2026-11-17): Browse, read-write over Direct (read-only over SSH), column/index changes and data-only export ship in v0.1.0-beta.1; no graphical run in the packaged app; milestone not accepted |
 | SQLite | **Deferred** (code kept, outside support claims) | Read-only adapter implemented and verified on fixtures |
 | Advanced objects (routines, triggers, events, materialized views, object DDL editing), XLSX import | **Deferred** | Mock screens only |
-| Windows, Linux | **Deferred** | — |
+| Windows, Linux | **Deferred** for the alpha | Shipped as betas in v0.1.0-beta.2 (Windows without SSH tunnels); real-hardware and real-desktop checks pending |
 
 Anything excluded must be capability-gated and listed as an omission; acceptance criteria are not waived silently.
 
@@ -129,7 +131,7 @@ flowchart TD
   class E2E,PKG,D,A,WL,SRV planned
 ```
 
-Deferred items keep their open gates for later releases: SQLite live support, advanced database objects, XLSX import, Linux GTK dependency advisories, Windows SSH endpoint and agent, Windows/Linux credential stores, Windows SQLite path handling, and executed cross-OS CI. The internal decision register records them as deferred non-blockers for the alpha, never as passed; a deferred security advisory still needs an explicit human risk acceptance before sign-off.
+Deferred items keep their open gates for later releases: SQLite live support, advanced database objects, XLSX import, Linux GTK dependency advisories (now two documented exceptions in the Linux release audit, approved 2026-11-17), Windows SSH endpoint and agent, Windows SQLite path handling, and real-hardware Windows, Intel Mac and real-desktop Linux checks. Windows and Linux credential stores and Windows CI now exist (v0.1.0-beta.2). The internal decision register records them as deferred non-blockers for the alpha, never as passed; a deferred security advisory still needs an explicit human risk acceptance before sign-off.
 
 ## Initial slice and shared contracts
 
