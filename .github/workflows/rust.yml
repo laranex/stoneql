@@ -8,9 +8,8 @@ permissions:
   contents: read
 jobs:
   foundation:
-    # macOS (Apple Silicon) is the only supported desktop platform. windows-2025 is being ported on
-    # the windows-support branch: its steps keep going after a failure so one run lists every gap,
-    # and it does not gate anything until Windows is supported.
+    # macOS and Windows. Outside release branches the Windows steps keep going after a failure
+    # (one run lists every gap) and gate nothing; on release/* branches every Windows step gates.
     strategy:
       fail-fast: false
       matrix:
@@ -20,52 +19,52 @@ jobs:
       HAS_FIXTURE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST != '' }}
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - uses: actions/setup-node@v4
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
         with:
           node-version: '26'
           cache: npm
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm ci
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run build
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run rust:vendor
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run rust:fmt
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run rust:build
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run rust:lint
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run rust:test
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       # Windows runners cannot run the Docker fixtures: the real-database tests run here against
       # disposable fixtures on the project's test-only fixture host, reached over a restricted SSH
       # tunnel (tools/test-remote-fixture.mjs, tools/ci-fixture-host/). Skipped without the secrets.
       - name: Real databases (remote fixture host)
         if: runner.os == 'Windows' && env.HAS_FIXTURE_HOST == 'true'
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
         run: node tools/test-remote-fixture.mjs
         env:
           STONEQL_REMOTE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST }}
           STONEQL_REMOTE_KEY: ${{ secrets.STONEQL_FIXTURE_KEY }}
           STONEQL_REMOTE_KNOWN_HOSTS: ${{ secrets.STONEQL_FIXTURE_KNOWN_HOSTS }}
       - run: npm run rust:boundaries
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm run contracts:check
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: node --test tests/workspace.test.mjs tests/driver-fixtures.test.mjs
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: npm test
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       - run: cargo install cargo-audit --version 0.22.2 --locked
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       # The shipped graph (macOS release targets) must be advisory-free; this gates the build.
       - run: npm run audit:release
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os == 'Windows' && !startsWith(github.ref_name, 'release/') }}
       # The full graph also covers development-only SQLite and the unreleased Linux GTK stack.
       # Its advisories stay visible here (A4: never ignored) without blocking.
       - continue-on-error: true
