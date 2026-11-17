@@ -217,6 +217,11 @@ fn drive(app: tauri::AppHandle<Wry>, file: PathBuf) {
     });
 }
 
+/// Windows (WebView2) has no renderer-crash recovery yet, so the crash part does not apply there.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn web_content_pids() -> std::collections::BTreeSet<i32> {
+    unimplemented!("renderer-crash recovery is implemented on macOS and Linux only")
+}
 /// WebKit content processes (XPC services, children of launchd) of every app of this user.
 #[cfg(target_os = "macos")]
 fn web_content_pids() -> std::collections::BTreeSet<i32> {
