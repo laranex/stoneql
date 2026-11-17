@@ -3,6 +3,11 @@
 /vendor/sqlx-mysql/** -text
 /experiments/sqlx-receive-limit/receive-limit.patch -text
 /experiments/sqlx-receive-limit/SQLX-LICENSE-MIT -text
+/vendor/sqlx-postgres/** -text
+/experiments/sqlx-metadata-limit/metadata-limit.patch -text
+/experiments/sqlx-pg-message-limit/message-limit.patch -text
+/experiments/sqlx-pg-message-limit/SQLX-LICENSE-MIT -text
+/experiments/sqlx-metadata-limit/SQLX-LICENSE-MIT -text
 # Keep the two upstream whitespace quirks byte-identical; provenance checks cover these files.
 /vendor/sqlx-mysql/src/types/str.rs whitespace=-blank-at-eol
 /vendor/sqlx-mysql/src/testing/mod.rs whitespace=-blank-at-eol

@@ -415,6 +415,8 @@ mod private {
     /// A refused open: something other than a private regular file is at `name` (symlink,
     /// FIFO, socket, device, directory) is insecure; anything else is unavailable.
     fn refused(dir: &File, name: &str, errno: Errno) -> JournalProblemDto {
+        // `st_mode` is u16 on macOS and u32 on Linux: the cast is needed on one of them.
+        #[allow(clippy::unnecessary_cast)]
         let other = matches!(
             errno,
             Errno::ELOOP | Errno::EISDIR | Errno::ENXIO | Errno::EOPNOTSUPP | Errno::ENOTDIR
@@ -576,6 +578,8 @@ mod private {
         /// inode) is reused.
         pub(super) fn quarantine(&self) -> io::Result<String> {
             let read = self.read.ok_or(io::ErrorKind::NotFound)?;
+            // `st_dev` is i32 on macOS and u64 on Linux: the cast is needed on one of them.
+            #[allow(clippy::unnecessary_cast)]
             let inode = |name: &str| {
                 fstatat(&self.dir, name, AtFlags::AT_SYMLINK_NOFOLLOW)
                     .map(|stat| (stat.st_dev as u64, stat.st_ino))
