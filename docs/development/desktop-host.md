@@ -48,7 +48,7 @@ The active connection dialog and existing SQL workspace use `connect_direct`, `r
 
 Run `npm run test:native-database` with local Docker and Rust tooling. It provisions owned TLS fixtures and executes actual Tauri handlers (MockRuntime) against MySQL/MariaDB: exact raw values, duplicate labels, refusal, packet recovery and independent disconnect. This is real IPC-handler/database integration, not native WebView interaction.
 
-The browser suite has 22 scenarios, including two new Light/Dark live-bridge simulations exercising the actual UI, password/CA non-persistence, connection switching, SQL results/errors and narrow dialog actions. The real macOS smoke separately checks Wry startup and the mounted frontend. These three checks do **not** constitute a complete native GUI-to-real-database end-to-end test. Native GUI interaction, Windows/Linux execution, aggregate allocation profiles and indirect view/function trust remain open gates.
+The browser suite has 22 scenarios, including two new Light/Dark live-bridge simulations exercising the actual UI, password/CA non-persistence, connection switching, SQL results/errors and narrow dialog actions. The real macOS smoke separately checks Wry startup and the mounted frontend. These three checks do **not** constitute a complete native GUI-to-real-database end-to-end test. Native GUI interaction, real-hardware Windows and real-desktop Linux runs, aggregate allocation profiles and indirect view/function trust remain open gates.
 
 ## M004 PostgreSQL and SQLite commands
 

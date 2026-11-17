@@ -2,7 +2,7 @@
 
 ## Platform verification status (v0.1.0-beta.2)
 
-v0.1.0-beta.2 ships macOS arm64 and x86_64 DMGs, a Windows x64 NSIS installer and a Linux x86_64 `.deb`, all built from one release commit, with one `SHA256SUMS` file. What has been verified per platform (the recorded runs are on the platform branches; repeat runs on the release commit are recorded in the internal release plan):
+v0.1.0-beta.2 ships macOS arm64 and x86_64 DMGs, a Windows x64 NSIS installer and a Linux x86_64 `.deb`, all built from one release commit, with one `SHA256SUMS` file. What has been verified per platform (the recorded runs are from the Windows and Linux platform branches):
 
 | Platform | Verified | Not yet verified |
 | --- | --- | --- |
@@ -73,7 +73,7 @@ The desktop host refuses every navigation of the main webview while its runtime 
 | --- | --- | --- |
 | `location.reload()`, same-origin `location.assign`, native `Webview::reload` | All builds | `STONEQL_REAL_WINDOW=1 cargo test --locked -p stoneql-desktop --features custom-protocol --test real_window_reload` (real WKWebView; run `npm run build` first; skipped without the variable) |
 | Guard decision (lease, job, idle handle, confirmed rotation) | All builds | `tests/reload_guard.rs` in `npm run desktop:test` (MockRuntime; MockRuntime does not run navigation hooks) |
-| Web content process terminated (renderer crash) while a lease and a running job are held: host ends the session, reloads, the new renderer lists the interrupted job | macOS builds | `real_window_reload` (kills the window's `com.apple.WebKit.WebContent` process with SIGKILL; it is identified as the only one started since the test began and nothing is killed when that is ambiguous) and `tests/reload_guard.rs` (`renderer_lost` against MockRuntime) |
+| Web content process terminated (renderer crash) while a lease and a running job are held: host ends the session, reloads, the new renderer lists the interrupted job | macOS and Linux builds (not Windows) | `real_window_reload` (kills the window's `com.apple.WebKit.WebContent` process on macOS, or its `WebKitWebProcess` under `dbus-run-session -- xvfb-run` on Linux, with SIGKILL; it is identified as the only one started since the test began and nothing is killed when that is ambiguous) and `tests/reload_guard.rs` (`renderer_lost` against MockRuntime) |
 | In-app confirmation, cancel and confirm | All builds | `tests/browser/native-reload.spec.ts` (browser shim, Light/Dark) |
 | Cmd+R | No responder: the default macOS menu has no Reload item | Manual check |
 | WKWebView context-menu Reload; Web Inspector reload | Context menu: all builds, unverified. Inspector: debug builds only (devtools are off in release) | Manual check |

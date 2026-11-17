@@ -28,7 +28,7 @@ Keychain calls run on a blocking worker. Changing the profile's target requires 
 
 ## Windows credential store
 
-Shipped in v0.1.0-beta.2; verified on GitHub's Windows Server 2025 runners, not on a real Windows 10/11 PC.
+Shipped in v0.1.0-beta.2. Its unit tests run in the Windows CI job on GitHub's Windows Server 2025 runners; it has not been exercised on a real Windows 10/11 PC or through the app window.
 
 - One file per reference at `%APPDATA%\me.thixpin.stoneql.credentials\<reference>.bin`, holding the same `{"v":1,"scope":…,"secret":…}` JSON as on macOS, encrypted with **DPAPI** (`CryptProtectData`, current-user scope, no UI). The service name and reference are passed as entropy, so a file copied to another reference does not decrypt. Writes are atomic (temporary file, then rename).
 - Only the default per-user ACL of `%APPDATA%` protects the files. DPAPI has no per-application ACL: **any process running as the same Windows user can decrypt them**, as with Credential Manager (which was not used because it caps blobs at 2,560 bytes, below the 16,384-byte secret limit).
