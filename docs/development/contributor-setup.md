@@ -43,6 +43,7 @@ Rebuild after frontend changes. `npm run desktop:bundle:adhoc` builds the ad-hoc
 | `npm run rust:build`, `rust:fmt`, `rust:lint`, `rust:test` | Rust workspace build, format check, Clippy (`-D warnings`) and tests |
 | `npm run rust:boundaries`, `contracts:check`, `rust:vendor` | Crate layering, generated-contract drift and vendored SQLx provenance |
 | `npm run desktop:test`, `desktop:smoke` | Native IPC tests and a real-window startup smoke |
+| `npm run test:secret-service` | Linux only (in development): the Secret Service password store against a throwaway keyring on a private D-Bus; needs `gnome-keyring` and `libsecret-tools`, never uses your keyring. See [Secret Service test](./ssh-credentials.md#secret-service-test-npm-run-test-secret-service) |
 
 Single tests:
 
