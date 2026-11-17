@@ -1,16 +1,22 @@
 // Release-graph dependency audit (M002 alpha gate). `cargo audit` reads the whole Cargo.lock,
 // including development/test-only packages (for example SQLite, kept for regressions, A5). This
 // check audits only what the shipped macOS desktop build resolves: the normal+build dependency
-// graph of `stoneql-desktop --features custom-protocol` for aarch64 and x86_64 Apple targets.
+// graph of `stoneql-desktop --features custom-protocol` for aarch64 and x86_64 Apple targets, or,
+// with `--linux`, for x86_64-unknown-linux-gnu (the `.deb` built by `desktop:deb`).
 // It writes a pruned copy of Cargo.lock to a temporary directory and runs `cargo audit --file`
-// on it. The full audit (`cargo audit`) stays separate and unchanged; nothing is ignored here.
+// on it. The full audit (`cargo audit`) stays separate and unchanged. The macOS audit ignores
+// nothing. The Linux audit fails on any advisory (vulnerability or warning) except the approved
+// exceptions in audit-exceptions.mjs, and fails when one of those is no longer reported.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { auditProblems, linuxExceptions } from './audit-exceptions.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const linux = process.argv.includes('--linux');
+const targets = linux ? ['x86_64-unknown-linux-gnu'] : ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const auditArgs = process.argv.slice(2).filter((arg) => arg !== '--linux');
 const run = (args) => {
   const result = spawnSync('cargo', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (result.status !== 0) throw Error(`cargo ${args[0]} failed: ${result.stderr.trim().split('\n').at(-1)}`);
@@ -47,8 +53,21 @@ try {
   const file = join(temp, 'Cargo.lock');
   writeFileSync(file, [header, ...pruned].join('\n'));
   console.log(`release graph: ${kept.length} of ${blocks.length} locked packages (${targets.join(', ')})`);
-  const audit = spawnSync('cargo', ['audit', '--file', file, ...process.argv.slice(2)], { cwd: root, stdio: 'inherit' });
-  process.exitCode = audit.status ?? 1;
+  if (linux) {
+    const audit = spawnSync('cargo', ['audit', '--file', file, '--json', ...auditArgs], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    let report;
+    try { report = JSON.parse(audit.stdout.trim().split('\n').at(-1)); } catch { report = null; }
+    const problems = auditProblems(report, linuxExceptions);
+    if (report) console.log(`${report.database?.['advisory-count']} advisories loaded; ${report.vulnerabilities.count} vulnerabilities`);
+    for (const exception of linuxExceptions) console.log(`allowed (approved exception) ${exception.id} ${exception.kind} ${exception.package} ${exception.version}: ${exception.path}. ${exception.reason}`);
+    for (const problem of problems) console.error(problem);
+    if (!report) console.error(audit.stderr.trim().split('\n').slice(-5).join('\n'));
+    console.log(problems.length ? `audit:release:linux FAILED (${problems.length} problem(s))` : 'audit:release:linux passed: no advisories besides the approved exceptions');
+    process.exitCode = problems.length ? 1 : 0;
+  } else {
+    const audit = spawnSync('cargo', ['audit', '--file', file, ...auditArgs], { cwd: root, stdio: 'inherit' });
+    process.exitCode = audit.status ?? 1;
+  }
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

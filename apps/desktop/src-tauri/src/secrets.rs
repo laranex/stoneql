@@ -2,17 +2,27 @@
 //! OS credential store, bound to the connection target they were saved for. There is no IPC
 //! command that returns a secret: the host resolves references only while connecting.
 //!
-//! macOS uses the login Keychain (generic passwords); Windows uses DPAPI-encrypted files in the
-//! user's profile (`dpapi`). Other operating systems are explicitly unsupported until their
-//! providers are implemented and verified.
+//! macOS uses the login Keychain (generic passwords). Windows uses DPAPI-encrypted files in the
+//! user's profile (`dpapi`). Linux uses the desktop's Secret Service
+//! (`secret_service`); only when none is on the session bus does it use StoneQL's encrypted file
+//! vault (`vault`, unlocked with a master password once per app session). The provider is part
+//! of each reference: version-4 UUIDs name OS-store items, version-8 UUIDs name vault items, so
+//! a reference is never looked up in the other store. Other operating systems are explicitly
+//! unsupported until their providers are implemented and verified.
 use super::{NativeSession, database::authorize, decode, invalid};
 use serde::{Deserialize, Serialize};
 use stoneql_contracts::v1::{
     EngineDto, Envelope, ErrorDto, ProtocolVersion, SecretPurpose, SecretReference,
-    SecretReferenceRequest, SshEndpoint, StoreSecretRequest,
+    SecretReferenceRequest, SecretStoreKindDto, SecretStoreRequest, SecretStoreStatus, SshEndpoint,
+    StoreSecretRequest, UnlockSecretStoreRequest,
 };
 use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Runtime, State, WebviewWindow};
+
+#[cfg(target_os = "linux")]
+mod secret_service;
+#[cfg(target_os = "linux")]
+pub mod vault;
 
 /// Keychain service for production references. Tests pass their own per-run service.
 #[cfg(windows)]
@@ -28,6 +38,18 @@ pub enum SecretError {
     NotFound,
     /// Access denied, locked keychain or provider failure. Details are never surfaced.
     Failed,
+    /// The encrypted file vault needs the master password first (Linux fallback).
+    Locked,
+}
+/// Result of unlocking or creating the master-password vault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnlockError {
+    /// Wrong master password.
+    Rejected,
+    /// Too short, or create/unlock does not match whether a vault exists.
+    Invalid,
+    /// No vault on this system, or it cannot be used.
+    Failed,
 }
 
 /// Minimal OS credential-store binding. Implementations must not log values.
@@ -35,18 +57,79 @@ pub trait SecretStore: Send + Sync {
     fn set(&self, account: &str, value: &[u8]) -> Result<(), SecretError>;
     fn get(&self, account: &str) -> Result<Vec<u8>, SecretError>;
     fn delete(&self, account: &str) -> Result<(), SecretError>;
+    /// A fresh reference naming the provider that will hold it (see the module comment).
+    fn new_reference(&self) -> Result<uuid::Uuid, SecretError> {
+        Ok(uuid::Uuid::new_v4())
+    }
+    /// Where new saves go, and the master-password vault's state.
+    fn status(&self) -> SecretStoreStatus {
+        SecretStoreStatus {
+            kind: if cfg!(target_os = "macos") {
+                SecretStoreKindDto::Keychain
+            } else if cfg!(windows) {
+                SecretStoreKindDto::DpapiFile
+            } else {
+                SecretStoreKindDto::Unavailable
+            },
+            vault_exists: false,
+            unlocked: false,
+        }
+    }
+    /// Creates (`create`) or unlocks the master-password vault for this app session.
+    fn unlock(&self, _password: &str, _create: bool) -> Result<(), UnlockError> {
+        Err(UnlockError::Failed)
+    }
+    /// Deletes the vault and every password saved in it.
+    fn reset(&self) -> Result<(), SecretError> {
+        Err(SecretError::Unsupported)
+    }
 }
+
+/// Identifier of the app (`tauri.conf.json`), naming its data directory.
+#[cfg(target_os = "linux")]
+const APP_IDENTIFIER: &str = "me.thixpin.stoneql";
 
 /// The operating system's credential store under one service name.
 pub struct OsSecretStore {
-    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "macos", windows, target_os = "linux")),
+        allow(dead_code)
+    )]
     service: String,
+    /// Linux fallback; `None` when no data directory can be named.
+    #[cfg(target_os = "linux")]
+    vault: Option<vault::Vault>,
+    /// D-Bus address of the Secret Service; `None` is the session bus (tests use private ones).
+    #[cfg(target_os = "linux")]
+    bus: Option<String>,
 }
 impl OsSecretStore {
     pub fn new(service: impl Into<String>) -> Self {
         Self {
             service: service.into(),
+            #[cfg(target_os = "linux")]
+            vault: vault::Vault::default_dir(APP_IDENTIFIER).map(vault::Vault::new),
+            #[cfg(target_os = "linux")]
+            bus: None,
         }
+    }
+    /// Tests: the vault in `dir` instead of the user's data directory.
+    #[cfg(target_os = "linux")]
+    pub fn with_vault_dir(service: impl Into<String>, dir: std::path::PathBuf) -> Self {
+        Self {
+            service: service.into(),
+            vault: Some(vault::Vault::new(dir)),
+            bus: None,
+        }
+    }
+    #[cfg(all(test, target_os = "linux"))]
+    fn on_bus(mut self, bus: &str) -> Self {
+        self.bus = Some(bus.to_owned());
+        self
+    }
+    #[cfg(target_os = "linux")]
+    fn vault(&self) -> Result<&vault::Vault, SecretError> {
+        self.vault.as_ref().ok_or(SecretError::Unsupported)
     }
 }
 #[cfg(target_os = "macos")]
@@ -88,7 +171,74 @@ impl SecretStore for OsSecretStore {
         dpapi::delete(&self.service, account)
     }
 }
-#[cfg(not(any(target_os = "macos", windows)))]
+/// The provider a Linux reference names: version 4 = Secret Service, version 8 = vault.
+#[cfg(target_os = "linux")]
+fn in_vault(account: &str) -> Result<bool, SecretError> {
+    match uuid::Uuid::parse_str(account).map(|id| id.get_version_num()) {
+        Ok(4) => Ok(false),
+        Ok(8) => Ok(true),
+        _ => Err(SecretError::Failed),
+    }
+}
+#[cfg(target_os = "linux")]
+impl SecretStore for OsSecretStore {
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), SecretError> {
+        if in_vault(account)? {
+            self.vault()?.set(&self.service, account, value)
+        } else {
+            secret_service::set(self.bus.as_deref(), &self.service, account, value)
+        }
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, SecretError> {
+        if in_vault(account)? {
+            self.vault()?.get(&self.service, account)
+        } else {
+            secret_service::get(self.bus.as_deref(), &self.service, account)
+        }
+    }
+    fn delete(&self, account: &str) -> Result<(), SecretError> {
+        if in_vault(account)? {
+            self.vault()?.delete(account)
+        } else {
+            secret_service::delete(self.bus.as_deref(), &self.service, account)
+        }
+    }
+    /// The vault only when no Secret Service is on the bus; a present one that fails never
+    /// falls back.
+    fn new_reference(&self) -> Result<uuid::Uuid, SecretError> {
+        match secret_service::probe(self.bus.as_deref()) {
+            Ok(()) => Ok(uuid::Uuid::new_v4()),
+            Err(SecretError::Unsupported) => {
+                self.vault()?;
+                let mut bytes = [0u8; 16];
+                getrandom::fill(&mut bytes).map_err(|_| SecretError::Failed)?;
+                Ok(uuid::Builder::from_custom_bytes(bytes).into_uuid())
+            }
+            Err(error) => Err(error),
+        }
+    }
+    fn status(&self) -> SecretStoreStatus {
+        let kind = match (secret_service::probe(self.bus.as_deref()), &self.vault) {
+            (Err(SecretError::Unsupported), Some(_)) => SecretStoreKindDto::EncryptedFile,
+            (Err(SecretError::Unsupported), None) => SecretStoreKindDto::Unavailable,
+            _ => SecretStoreKindDto::SecretService,
+        };
+        let vault = self.vault.as_ref();
+        SecretStoreStatus {
+            kind,
+            vault_exists: vault.is_some_and(|vault| vault.exists().unwrap_or(false)),
+            unlocked: vault.is_some_and(vault::Vault::unlocked),
+        }
+    }
+    fn unlock(&self, password: &str, create: bool) -> Result<(), UnlockError> {
+        let vault = self.vault().map_err(|_| UnlockError::Failed)?;
+        vault.unlock(password, create)
+    }
+    fn reset(&self) -> Result<(), SecretError> {
+        self.vault()?.reset()
+    }
+}
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 impl SecretStore for OsSecretStore {
     fn set(&self, _: &str, _: &[u8]) -> Result<(), SecretError> {
         Err(SecretError::Unsupported)
@@ -163,6 +313,7 @@ fn provider_error(error: SecretError) -> ErrorDto {
     match error {
         SecretError::Unsupported => CoreError::rejected(ErrorCode::UnsupportedCapability).into(),
         SecretError::NotFound | SecretError::Failed => unavailable(),
+        SecretError::Locked => CoreError::rejected(ErrorCode::SecretStoreLocked).into(),
     }
 }
 fn valid_secret(secret: &str) -> bool {
@@ -183,7 +334,11 @@ pub(crate) fn store(
     if !valid_secret(&secret) {
         return Err(invalid());
     }
-    let reference = uuid::Uuid::new_v4().hyphenated().to_string();
+    let reference = secrets
+        .new_reference()
+        .map_err(provider_error)?
+        .hyphenated()
+        .to_string();
     let item = serde_json::to_vec(&Item {
         v: 1,
         scope,
@@ -291,6 +446,80 @@ pub async fn delete_secret<R: Runtime>(
         request_id: request.request_id,
         payload: SecretReference { reference },
     })
+}
+
+fn store_status<T>(
+    request_id: String,
+    status: SecretStoreStatus,
+) -> Result<Envelope<SecretStoreStatus>, T> {
+    Ok(Envelope {
+        version: ProtocolVersion,
+        request_id,
+        payload: status,
+    })
+}
+/// Where new saves go and whether the master-password vault exists and is unlocked.
+#[tauri::command]
+pub async fn secret_store_status<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<SecretStoreStatus>, ErrorDto> {
+    let request: Envelope<SecretStoreRequest> = decode(&message)?;
+    authorize(&window, &session, &request.payload.session_id)?;
+    let secrets = session.secrets.clone();
+    let status = blocking(move || Ok(secrets.status())).await?;
+    store_status(request.request_id, status)
+}
+/// Creates or unlocks the vault. The password (and the message carrying it) are zeroized as
+/// soon as the key is derived; a wrong password answers `MASTER_PASSWORD_REJECTED` after a
+/// fixed delay, with no lockout.
+#[tauri::command]
+pub async fn unlock_secret_store<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<SecretStoreStatus>, ErrorDto> {
+    let message = zeroize::Zeroizing::new(message);
+    let request: Envelope<UnlockSecretStoreRequest> = decode(&message)?;
+    drop(message);
+    authorize(&window, &session, &request.payload.session_id)?;
+    let request_id = request.request_id;
+    let create = request.payload.create;
+    let password = zeroize::Zeroizing::new(request.payload.password);
+    let secrets = session.secrets.clone();
+    let status = blocking(move || {
+        secrets
+            .unlock(&password, create)
+            .map_err(|error| match error {
+                UnlockError::Rejected => {
+                    CoreError::rejected(ErrorCode::MasterPasswordRejected).into()
+                }
+                UnlockError::Invalid => invalid(),
+                UnlockError::Failed => unavailable(),
+            })?;
+        Ok(secrets.status())
+    })
+    .await?;
+    store_status(request_id, status)
+}
+/// Forgotten master password: deletes the vault and every password saved in it (the renderer
+/// confirms first). OS-store items are untouched.
+#[tauri::command]
+pub async fn reset_secret_store<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<SecretStoreStatus>, ErrorDto> {
+    let request: Envelope<SecretStoreRequest> = decode(&message)?;
+    authorize(&window, &session, &request.payload.session_id)?;
+    let secrets = session.secrets.clone();
+    let status = blocking(move || {
+        secrets.reset().map_err(provider_error)?;
+        Ok(secrets.status())
+    })
+    .await?;
+    store_status(request.request_id, status)
 }
 
 #[cfg(test)]
@@ -422,7 +651,88 @@ pub(crate) mod tests {
         assert!(choose(&store_impl, Some("typed".into()), Some(reference), scope).is_err());
         assert_eq!(choose(&store_impl, None, None, scope).unwrap(), None);
     }
-    #[cfg(not(any(target_os = "macos", windows)))]
+    /// Without a Secret Service on the bus, new references are vault (v8) references that need
+    /// the master password; they never go to the OS store.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn without_a_secret_service_new_saves_use_the_master_password_vault() {
+        let bus = secret_service::tests::EmptyBus::start();
+        let dir = bus.dir.join("data").join("credentials");
+        let store_impl = OsSecretStore::with_vault_dir("me.thixpin.stoneql.test", dir.clone())
+            .on_bus(&bus.address);
+        let status = store_impl.status();
+        assert_eq!(status.kind, SecretStoreKindDto::EncryptedFile);
+        assert!(!status.vault_exists && !status.unlocked);
+        assert_eq!(
+            store(&store_impl, "scope".into(), "value".into())
+                .unwrap_err()
+                .code,
+            stoneql_contracts::v1::ErrorCodeDto::SecretStoreLocked
+        );
+        store_impl
+            .unlock("synthetic master password", true)
+            .unwrap();
+        let reference = store(&store_impl, "scope".into(), "value".into()).unwrap();
+        assert_eq!(
+            uuid::Uuid::parse_str(&reference).unwrap().get_version_num(),
+            8
+        );
+        assert!(dir.join(format!("{reference}.item")).exists());
+        assert_eq!(resolve(&store_impl, &reference, "scope").unwrap(), "value");
+        // An OS-store (v4) reference is never looked up in the vault.
+        let foreign = uuid::Uuid::new_v4().to_string();
+        assert_eq!(store_impl.get(&foreign), Err(SecretError::Unsupported));
+        store_impl.reset().unwrap();
+        assert!(!store_impl.status().vault_exists);
+        // After a reset the reference is simply gone; nothing asks to create a new vault.
+        assert_eq!(
+            resolve(&store_impl, &reference, "scope").unwrap_err().code,
+            stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
+        );
+    }
+    /// With a Secret Service present, new saves go to it (v4) and the vault directory is never
+    /// created. Driven by `npm run test:secret-service`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a disposable Secret Service: npm run test:secret-service"]
+    fn a_present_secret_service_never_selects_the_vault() {
+        let service = std::env::var("STONEQL_KEYCHAIN_SERVICE").unwrap();
+        let dir = std::env::temp_dir()
+            .join(format!("stoneql-no-vault-{}", uuid::Uuid::new_v4()))
+            .join("credentials");
+        let store_impl = OsSecretStore::with_vault_dir(service, dir.clone());
+        assert_eq!(store_impl.status().kind, SecretStoreKindDto::SecretService);
+        let reference = store(&store_impl, "scope".into(), "value".into()).unwrap();
+        assert_eq!(
+            uuid::Uuid::parse_str(&reference).unwrap().get_version_num(),
+            4
+        );
+        assert_eq!(resolve(&store_impl, &reference, "scope").unwrap(), "value");
+        store_impl.delete(&reference).unwrap();
+        assert!(!dir.parent().unwrap().exists());
+    }
+    /// A Secret Service that is on the bus but cannot be used (here: no default collection)
+    /// fails closed: no vault reference is issued and the vault directory is never created.
+    /// Driven by `npm run test:secret-service` against a keyring started without `--unlock`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a disposable Secret Service: npm run test:secret-service"]
+    fn an_unusable_secret_service_fails_closed_without_the_vault() {
+        let dir = std::env::temp_dir()
+            .join(format!("stoneql-no-vault-{}", uuid::Uuid::new_v4()))
+            .join("credentials");
+        let store_impl =
+            OsSecretStore::with_vault_dir("me.thixpin.stoneql.test-unusable", dir.clone());
+        assert_eq!(store_impl.status().kind, SecretStoreKindDto::SecretService);
+        assert_eq!(
+            store(&store_impl, "scope".into(), "value".into())
+                .unwrap_err()
+                .code,
+            stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
+        );
+        assert!(!dir.parent().unwrap().exists());
+    }
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
     #[test]
     fn other_operating_systems_are_explicitly_unsupported() {
         let store_impl = OsSecretStore::new("unused");

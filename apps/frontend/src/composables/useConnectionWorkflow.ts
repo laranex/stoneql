@@ -3,10 +3,11 @@ import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
 import { openLive, closeLive, queryLive, readWriteRoute, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState, mockConnectionsAvailable } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
+import { referenceStore, secretStoreStatus } from '../services/secretStore';
 import { connectionColors } from '../services/connectionPreferences';
 import { liveDatabasesSql, serverDatabase, toDatabaseNames } from '../services/liveSchema';
 import type { Connection, Transport } from '../types';
-import type { SecretPurpose, SshHostKey, SshTrustedHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
+import type { SecretPurpose, SecretStoreKindDto, SshHostKey, SshTrustedHostKey, TransactionEnd } from '../../../../contracts/generated/v1';
 type SshTransport = Extract<Transport, { type: 'ssh' }>;
 /** Opaque OS secret references held by a profile. */
 function secretReferences(connection?: Connection): string[] {
@@ -32,18 +33,40 @@ export function reportLeaseEnd(end: TransactionEnd | null | undefined, notify: (
   const notice = describeTransactionEnd(end);
   notify(notice.text, notice.kind === 'success' ? 'success' : 'error');
 }
-/** Keychain service holding saved references, named so a user can remove a stuck item by hand. */
+/** Service name of saved references (Keychain service, Secret Service `service` attribute), so a user can remove a stuck item by hand. */
 export const CREDENTIAL_SERVICE = 'me.thixpin.stoneql.credentials';
-/** Deletes every reference; returns how many could not be removed (failures are never swallowed). */
-async function deleteReferences(references: string[]): Promise<number> {
-  let failed = 0;
+/** Deletes every reference; returns those that could not be removed (failures are never swallowed). */
+async function deleteReferences(references: string[]): Promise<string[]> {
+  const failed: string[] = [];
   for (const reference of references) {
-    try { await deleteSecret(reference); } catch { failed++; }
+    try { await deleteSecret(reference); } catch { failed.push(reference); }
   }
   return failed;
 }
-const credentialsLeft = (count: number) =>
-  `${count} saved credential${count === 1 ? '' : 's'} could not be removed from the Keychain (service ${CREDENTIAL_SERVICE}).`;
+const storeName = (store: SecretStoreKindDto | undefined) =>
+  store === 'keychain' ? `the Keychain (service ${CREDENTIAL_SERVICE})`
+  : store === 'secret_service' ? `the desktop keyring (Secret Service, service ${CREDENTIAL_SERVICE})`
+  : store === 'encrypted_file' ? 'StoneQL’s encrypted file'
+  : store === 'dpapi_file' ? `StoneQL’s encrypted files (%APPDATA%\\${CREDENTIAL_SERVICE})`
+  : `the system credential store (service ${CREDENTIAL_SERVICE})`;
+const storeHint = (store: SecretStoreKindDto | undefined) =>
+  store === 'keychain' ? 'The item stays in the Keychain until you delete it there.'
+  : store === 'secret_service' ? 'The item stays in the desktop keyring until you delete it there.'
+  : store === 'encrypted_file' ? 'The item stays in the encrypted file until you reset saved passwords.'
+  : store === 'dpapi_file' ? 'The file stays in that folder until you delete it there.'
+  : 'The item stays there until you delete it.';
+/** Names the store each leftover reference is in (`label`: saved, old or newly saved) and how to remove it. */
+async function credentialsLeft(references: string[], label = 'saved'): Promise<{ text: string; hint: string }> {
+  let kind: SecretStoreKindDto | undefined;
+  try { kind = (await secretStoreStatus()).kind; } catch { kind = undefined; }
+  const counts = new Map<SecretStoreKindDto | undefined, number>();
+  for (const reference of references) {
+    const store = referenceStore(reference, kind);
+    counts.set(store, (counts.get(store) ?? 0) + 1);
+  }
+  const parts = [...counts].map(([store, count]) => `${count} ${label} credential${count === 1 ? '' : 's'} could not be removed from ${storeName(store)}`);
+  return { text: `${parts.join('; ')}.`, hint: [...counts.keys()].map(storeHint).join(' ') };
+}
 export interface ConnectionWorkflowOptions {
   manager: Ref<boolean>;
   notify: (message: string, type?: string) => void;
@@ -262,7 +285,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       }
     } catch (error) {
       const failed = await deleteReferences(created);
-      if (failed) throw new Error(`${(error as Error).message} ${credentialsLeft(failed).replace('saved credential', 'newly saved credential')}`);
+      if (failed.length) throw new Error(`${(error as Error).message} ${(await credentialsLeft(failed, 'newly saved')).text}`);
       throw error;
     }
     const kept = secretReferences(draft);
@@ -378,7 +401,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       const workspace=store.workspaces[draft.id];
       if(workspace){workspace.database=draft.database;workspace.databases=[{name:draft.database,tables:[]}];workspace.table='';workspace.scope='database';workspace.view='SQL';for(const tab of workspace.queries){tab.result=null;tab.error='';}}
       const leftOver=await deleteReferences(obsolete);
-      if(leftOver)notify(`Saved, but ${credentialsLeft(leftOver).replace(/^\d+ saved/, `${leftOver} old`)}`,'error');
+      if(leftOver.length)notify(`Saved, but ${(await credentialsLeft(leftOver, 'old')).text}`,'error');
       if(connectNow){attemptId.value=`attempt_${crypto.randomUUID()}`;await store.connectLiveProfile(draft, attemptId.value, access);}
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
@@ -430,12 +453,13 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
         // Forget saved credentials with the profile. A failure keeps the profile and asks again;
         // without the desktop host the references cannot be removed, which is also reported.
         const references = secretReferences(store.connections.find((c) => c.id === id));
-        const failed = nativeHostState.kind === 'desktop' ? await deleteReferences(references) : references.length;
-        if (failed) {
+        const failed = nativeHostState.kind === 'desktop' ? await deleteReferences(references) : references;
+        if (failed.length) {
+          const left = await credentialsLeft(failed);
           confirm({
             title: 'Credentials not removed',
             acceptLabel: 'Remove anyway',
-            message: `${credentialsLeft(failed)} Remove the profile anyway? The item stays in the Keychain until you delete it there.`,
+            message: `${left.text} Remove the profile anyway? ${left.hint}`,
             action: () => forgetProfile(id),
           });
           return;

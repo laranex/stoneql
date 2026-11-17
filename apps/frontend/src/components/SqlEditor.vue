@@ -6,7 +6,7 @@ import { EditorView, basicSetup } from 'codemirror';
 import { sql } from '@codemirror/lang-sql';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { tags } from '@lezer/highlight';
-import { Compartment } from '@codemirror/state';
+import { Compartment, Prec } from '@codemirror/state';
 const props = defineProps<{
   modelValue: string;
   dark: boolean;
@@ -91,16 +91,20 @@ onMounted(() => {
       EditorView.updateListener.of((update) => {
         if (update.docChanged) emit('update:modelValue', update.state.doc.toString());
       }),
-      EditorView.domEventHandlers({
-        keydown: (event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-            event.preventDefault();
-            emit('execute');
-            return true;
-          }
-          return false;
-        },
-      }),
+      // Above basicSetup's keymap, whose Mod-Enter (Ctrl on Linux/Windows, Cmd on macOS)
+      // would otherwise insert a blank line instead of running the query.
+      Prec.highest(
+        EditorView.domEventHandlers({
+          keydown: (event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+              event.preventDefault();
+              emit('execute');
+              return true;
+            }
+            return false;
+          },
+        }),
+      ),
     ],
   });
 });

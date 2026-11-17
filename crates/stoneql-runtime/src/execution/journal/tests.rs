@@ -2,14 +2,31 @@
 use super::*;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt, symlink};
 use std::path::PathBuf;
+use std::sync::{RwLock, RwLockReadGuard, TryLockError};
 use stoneql_contracts::v1::{CancellationDto, TransactionEndReasonDto};
 
-struct Dir(PathBuf);
+/// On Linux a spawned child holds a copy of every descriptor until its `execve` closes the
+/// close-on-exec ones, so a journal lock another test drops in that window stays held and the
+/// test's reopen sees `InUse`. Each `Dir` holds a read guard; spawning waits for the write guard
+/// with `try_write`, so a test holding two `Dir`s never waits behind a queued writer.
+static SPAWN: RwLock<()> = RwLock::new(());
+
+struct Dir(PathBuf, Option<RwLockReadGuard<'static, ()>>);
 impl Dir {
     fn new() -> Self {
+        let mut dir = Self::unguarded();
+        dir.1 = Some(
+            SPAWN
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        dir
+    }
+    /// For the spawning test, which must not hold a read guard itself.
+    fn unguarded() -> Self {
         let root = std::env::temp_dir().join(format!("stoneql-journal-{}", Uuid::new_v4()));
         fs::create_dir(&root).unwrap();
-        Self(fs::canonicalize(root).unwrap().join("journal"))
+        Self(fs::canonicalize(root).unwrap().join("journal"), None)
     }
     fn file(&self) -> PathBuf {
         self.0.join(FILE)
@@ -453,9 +470,18 @@ fn a_process_killed_mid_write_leaves_an_intact_snapshot() {
         }
         return;
     }
-    let dir = Dir::new();
+    let dir = Dir::unguarded();
     let mut nonempty = 0;
     for round in 0..12u64 {
+        let spawning = loop {
+            match SPAWN.try_write() {
+                Ok(guard) => break guard,
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+            }
+        };
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -467,6 +493,7 @@ fn a_process_killed_mid_write_leaves_an_intact_snapshot() {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
+        drop(spawning);
         std::thread::sleep(std::time::Duration::from_millis(150 + 37 * round));
         child.kill().unwrap();
         child.wait().unwrap();

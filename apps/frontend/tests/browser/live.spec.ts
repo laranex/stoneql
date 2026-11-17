@@ -44,7 +44,8 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await expect(page.locator('.database-context-link')).toContainText('acme_store');
  await expect(page.getByText('No matching tables',{exact:true})).toHaveCount(0);
  await page.locator('.cm-content').fill('SELECT value,value,n FROM known_table');
- await page.locator('.cm-content').press('Control+Enter');
+ // Ctrl/Cmd+Enter is CodeMirror's Mod-Enter on every platform; the editor must run, not add a line.
+ await page.locator('.cm-content').press('ControlOrMeta+Enter');
  await expect(page.getByText('18446744073709551615',{exact:true})).toBeVisible();
  await expect(page.getByText('12345678901234567890.4500',{exact:true})).toBeVisible();
  await expect(page.locator('.data-grid thead th')).toHaveText(['value','value','n']);
@@ -151,6 +152,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
    else if(command==='ssh_host_key_status')payload={trusted:enrolled?{algorithm:'ssh-ed25519',fingerprint}:null};
    else if(command==='trust_ssh_host_key'){if(p.fingerprint!==fingerprint)throw{code:'INVALID_REQUEST'};enrolled=true;payload={trusted:{algorithm:'ssh-ed25519',fingerprint}};}
    else if(command==='forget_ssh_host_key'){enrolled=false;payload={trusted:null};}
+   else if(command==='secret_store_status')payload={kind:'keychain',vaultExists:false,unlocked:false};
    else if(command==='store_secret')payload={reference:`00000000-0000-4000-8000-${String(++references).padStart(12,'0')}`};
    else if(command==='delete_secret')payload={reference:p.reference};
    else if(command==='connect_direct'){
@@ -173,7 +175,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
  await page.getByLabel('SSH username',{exact:true}).fill('deploy');
  await page.getByLabel('SSH authentication',{exact:true}).selectOption('password');
  await page.getByLabel('SSH password',{exact:true}).fill('synthetic-ssh-password');
- await page.getByLabel('Remember SSH password in the system keychain').check();
+ await page.getByLabel('Remember SSH password').check();
  await expect(page.getByText('Not enrolled · connections are refused until you verify and trust the key')).toBeVisible();
  await page.getByRole('button',{name:'Test connection',exact:true}).click();
  const check=page.getByRole('group',{name:'Verify SSH host key'});

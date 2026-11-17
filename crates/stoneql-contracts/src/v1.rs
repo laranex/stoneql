@@ -192,6 +192,8 @@ pub enum ErrorCodeDto {
     EncryptedLoginRequired,
     PermissionDenied,
     UnknownDatabase,
+    SecretStoreLocked,
+    MasterPasswordRejected,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +238,8 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::EncryptedLoginRequired => ErrorCodeDto::EncryptedLoginRequired,
             ErrorCode::PermissionDenied => ErrorCodeDto::PermissionDenied,
             ErrorCode::UnknownDatabase => ErrorCodeDto::UnknownDatabase,
+            ErrorCode::SecretStoreLocked => ErrorCodeDto::SecretStoreLocked,
+            ErrorCode::MasterPasswordRejected => ErrorCodeDto::MasterPasswordRejected,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -464,6 +468,41 @@ pub struct SecretReference {
 pub struct SecretReferenceRequest {
     pub session_id: String,
     pub reference: String,
+}
+/// Where saved passwords go on this system. `encrypted_file` is the Linux fallback used only
+/// when no Secret Service is on the session bus (master password).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretStoreKindDto {
+    Keychain,
+    SecretService,
+    EncryptedFile,
+    /// Windows: DPAPI-encrypted files in the user's profile.
+    DpapiFile,
+    Unavailable,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStoreStatus {
+    pub kind: SecretStoreKindDto,
+    /// The encrypted file vault exists (it has a master password).
+    pub vault_exists: bool,
+    /// The vault's key is in memory for this app session.
+    pub unlocked: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStoreRequest {
+    pub session_id: String,
+}
+/// Creates (`create`) or unlocks the vault. The password crosses IPC once; the host keeps only
+/// the derived key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UnlockSecretStoreRequest {
+    pub session_id: String,
+    pub password: String,
+    pub create: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1086,6 +1125,10 @@ pub fn typescript() -> String {
         StoreSecretRequest::decl(&config),
         SecretReference::decl(&config),
         SecretReferenceRequest::decl(&config),
+        SecretStoreKindDto::decl(&config),
+        SecretStoreStatus::decl(&config),
+        SecretStoreRequest::decl(&config),
+        UnlockSecretStoreRequest::decl(&config),
         SshHostKeyRequest::decl(&config),
         SshHostKey::decl(&config),
         SshHostKeyTrustRequest::decl(&config),

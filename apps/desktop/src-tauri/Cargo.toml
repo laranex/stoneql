@@ -23,13 +23,29 @@ uuid.workspace = true
 tokio.workspace = true
 # A20 GZIP export (approved 2026-11-17); pure-Rust backend, already in the lockfile.
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+# Clears the master password and the vault key from memory; already in the lockfile.
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 
-# D005 desktop secret providers: macOS Keychain; Windows DPAPI-encrypted files. Other OSes are
-# explicitly unsupported.
+# D005 desktop secret providers: macOS Keychain; Windows DPAPI-encrypted files; Linux below.
+# Other OSes are explicitly unsupported.
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "=3.7.0", default-features = false }
 [target.'cfg(windows)'.dependencies]
 stoneql-dpapi = { path = "../../../crates/stoneql-dpapi" }
+
+# Linux: the Secret Service over libdbus (D005) and WebKitGTK's web-process-terminated signal
+# (F-2). Both are already in the lockfile through tao/wry; no extra features (v2_xx would raise
+# the WebKitGTK floor above wry's own).
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = { version = "=0.9.12", default-features = false }
+webkit2gtk = { version = "=2.0.2", default-features = false }
+# Encrypted file vault, used only without a Secret Service (approved 2026-11-17): RustCrypto
+# AES-256-GCM and Argon2id, OS randomness, and descriptor-relative file access like the journal.
+# All already in the lockfile (russh, ssh-key, uuid, stoneql-runtime).
+aes-gcm = { version = "=0.11.1", default-features = false, features = ["aes", "alloc"] }
+argon2 = { version = "=0.6.0", default-features = false, features = ["alloc"] }
+getrandom = { version = "=0.4.3", default-features = false }
+nix = { version = "=0.31.3", default-features = false, features = ["fs", "user"] }
 
 [dev-dependencies]
 sqlx = { workspace = true, features = ["sqlite"] }

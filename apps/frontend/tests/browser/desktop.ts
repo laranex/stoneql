@@ -9,5 +9,5 @@ export async function newLiveConnection(page: Page, user = 'root', database = 'a
   await page.getByRole('textbox', { name: 'Username' }).fill(user);
   await page.getByRole('textbox', { name: 'Default database' }).fill(database);
   // New connections remember the password by default; these stubbed hosts have no keychain.
-  await page.getByRole('checkbox', { name: 'Remember database password in the system keychain' }).uncheck();
+  await page.getByRole('checkbox', { name: 'Remember database password' }).uncheck();
 }

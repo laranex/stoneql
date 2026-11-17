@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bootstrapNativeHost,NativeOperationError} from '../src/services/nativeHost.ts';
-import {openLive,queryLive,closeLive,isLoopbackHost,tlsOptional,usesTls} from '../src/services/liveConnections.ts';
+import {openLive,queryLive,closeLive,isLoopbackHost,tlsOptional,usesTls,storeSecret,SECRET_STORE_MISSING,SECRET_STORE_REFUSED} from '../src/services/liveConnections.ts';
 import {connectionSnapshot,loadConnectionPreferences} from '../src/services/connectionPreferences.ts';
 import {connections} from '../src/data/sample.ts';
 const profile={...connections[0]!,mode:'live' as const,password:'synthetic-password',rootCertificatePem:'synthetic-public-ca',transport:{type:'direct' as const}};
@@ -9,6 +9,7 @@ function fixture(fail=false){
  const calls:Array<{command:string;payload:any}>=[];
  return {calls,global:{__TAURI__:{core:{async invoke(command:string,args:{message:string}){
   const request=JSON.parse(args.message);calls.push({command,payload:request.payload});
+  if(command==='store_secret'&&fail)throw{code:request.payload.secret==='refused'?'SECRET_UNAVAILABLE':'UNSUPPORTED_CAPABILITY',message:'no provider'};
   if(command==='read_only_query'&&fail)throw{code:'QUERY_REJECTED',message:'synthetic-password must not be displayed'};
   const payload=command==='host_info'?{runtime:'desktop',appVersion:'0.1.0',sessionId:'test_session',nonce:request.payload.nonce,simulated:true,sqlite:true}
    :command==='contract_probe'?{values:request.payload.values,simulated:true}
@@ -33,6 +34,12 @@ test('native query failures remain failures and hide untrusted error details',as
  const f=fixture(true);await bootstrapNativeHost(f.global);
  await assert.rejects(queryLive('owned_handle','SELECT * FROM fixture'),error=>error instanceof NativeOperationError&&error.code==='QUERY_REJECTED'&&!error.message.includes('synthetic-password'));
  await bootstrapNativeHost({});await assert.rejects(openLive(profile),/native desktop app/);
+});
+test('saving a password without a system credential store says it was not saved',async()=>{
+ const f=fixture(true);await bootstrapNativeHost(f.global);
+ await assert.rejects(storeSecret('database_password',profile,'synthetic-password'),error=>error instanceof NativeOperationError&&error.code==='UNSUPPORTED_CAPABILITY'&&error.message===SECRET_STORE_MISSING&&/not saved/.test(error.message));
+ await assert.rejects(storeSecret('database_password',profile,'refused'),error=>error instanceof NativeOperationError&&error.code==='SECRET_UNAVAILABLE'&&error.message===SECRET_STORE_REFUSED&&/not saved/.test(error.message));
+ await bootstrapNativeHost({});
 });
 test('live preference migration never persists credentials, CA content or runtime handles',()=>{
  const serialized=JSON.stringify(connectionSnapshot([{...profile,handle:'not-allowed'} as any],[]));

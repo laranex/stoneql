@@ -8,6 +8,18 @@ export type SecretTarget = { engine: EngineDto, host: string, port: number, user
 export type StoreSecretRequest = { sessionId: string, purpose: SecretPurpose, target: SecretTarget, secret: string, };
 export type SecretReference = { reference: string, };
 export type SecretReferenceRequest = { sessionId: string, reference: string, };
+export type SecretStoreKindDto = "keychain" | "secret_service" | "encrypted_file" | "dpapi_file" | "unavailable";
+export type SecretStoreStatus = { kind: SecretStoreKindDto, 
+/**
+ * The encrypted file vault exists (it has a master password).
+ */
+vaultExists: boolean, 
+/**
+ * The vault's key is in memory for this app session.
+ */
+unlocked: boolean, };
+export type SecretStoreRequest = { sessionId: string, };
+export type UnlockSecretStoreRequest = { sessionId: string, password: string, create: boolean, };
 export type SshHostKeyRequest = { sessionId: string, host: string, port: number, };
 export type SshHostKey = { algorithm: string, publicKey: string, fingerprint: string, };
 export type SshHostKeyTrustRequest = { sessionId: string, host: string, port: number, fingerprint: string, };
@@ -84,7 +96,7 @@ export type QueryRequest = { connectionId: string, database: string | null, sql:
 export type Column = { name: string, databaseType: string, nullable: boolean | null, };
 export type ResultSet = { index: number, columns: Array<Column>, rows: Array<Array<CellValue>>, affectedRows: string, truncated: boolean, };
 export type QueryResult = { resultSets: Array<ResultSet>, };
-export type ErrorCodeDto = "FORBIDDEN" | "INVALID_REQUEST" | "UNSUPPORTED_VERSION" | "UNSUPPORTED_CAPABILITY" | "UNVERIFIED_CAPABILITY" | "CONFLICT" | "CONNECTION_LOST" | "CANCELLED" | "INTERNAL" | "DEADLINE_EXCEEDED" | "PACKET_TOO_LARGE" | "QUERY_REJECTED" | "CONNECTION_UNAVAILABLE" | "CAPACITY" | "UNSUPPORTED_SQL" | "SSH_HOST_KEY_UNKNOWN" | "SSH_HOST_KEY_CHANGED" | "SSH_AUTHENTICATION_FAILED" | "SSH_AGENT_UNAVAILABLE" | "SECRET_UNAVAILABLE" | "BUSY" | "UNRESOLVED_OUTCOMES" | "OUTCOME_JOURNAL_UNAVAILABLE" | "ENCRYPTED_LOGIN_REQUIRED" | "PERMISSION_DENIED" | "UNKNOWN_DATABASE";
+export type ErrorCodeDto = "FORBIDDEN" | "INVALID_REQUEST" | "UNSUPPORTED_VERSION" | "UNSUPPORTED_CAPABILITY" | "UNVERIFIED_CAPABILITY" | "CONFLICT" | "CONNECTION_LOST" | "CANCELLED" | "INTERNAL" | "DEADLINE_EXCEEDED" | "PACKET_TOO_LARGE" | "QUERY_REJECTED" | "CONNECTION_UNAVAILABLE" | "CAPACITY" | "UNSUPPORTED_SQL" | "SSH_HOST_KEY_UNKNOWN" | "SSH_HOST_KEY_CHANGED" | "SSH_AUTHENTICATION_FAILED" | "SSH_AGENT_UNAVAILABLE" | "SECRET_UNAVAILABLE" | "BUSY" | "UNRESOLVED_OUTCOMES" | "OUTCOME_JOURNAL_UNAVAILABLE" | "ENCRYPTED_LOGIN_REQUIRED" | "PERMISSION_DENIED" | "UNKNOWN_DATABASE" | "SECRET_STORE_LOCKED" | "MASTER_PASSWORD_REJECTED";
 export type OutcomeDto = "rejected" | "rolled_back" | "committed" | "unknown";
 export type ErrorDto = { code: ErrorCodeDto, message: string, retryable: boolean, outcome: OutcomeDto, };
 export type EngineDto = "mysql" | "mariadb" | "postgresql" | "sqlite";

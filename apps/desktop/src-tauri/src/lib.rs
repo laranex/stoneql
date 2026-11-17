@@ -14,8 +14,10 @@ use execution::{
     list_unresolved_outcomes, submit_job,
 };
 pub use host_keys::{FileHostKeyStore, HostKeyStore, HostKeyStoreError, MemoryHostKeyStore};
-pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
-use secrets::{delete_secret, store_secret};
+pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore, UnlockError};
+use secrets::{
+    delete_secret, reset_secret_store, secret_store_status, store_secret, unlock_secret_store,
+};
 pub use sql_import::authorize_import_file;
 use sql_import::{pick_import_file, sql_import_status, start_sql_import};
 pub use sqlite_file::authorize_sqlite_file;
@@ -441,8 +443,35 @@ pub async fn renderer_lost<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
     session.end_renderer().await;
     true
 }
+/// Ends the session for a terminated main renderer, then reloads (shared by both OS handlers).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn recover_renderer<R: Runtime>(webview: tauri::Webview<R>) {
+    tauri::async_runtime::spawn(async move {
+        if renderer_lost(webview.app_handle()).await {
+            let _ = webview.reload();
+        }
+    });
+}
 fn navigation_guard<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
-    tauri::plugin::Builder::new("stoneql-navigation-guard")
+    let builder = tauri::plugin::Builder::new("stoneql-navigation-guard");
+    // WebKitGTK reports a terminated web process with `web-process-terminated` and, unlike
+    // macOS, Tauri has no hook for it (F-2): connect the signal on the main webview directly.
+    #[cfg(target_os = "linux")]
+    let builder = builder.on_webview_ready(|webview| {
+        if webview.label() != "main" {
+            return;
+        }
+        let handler = webview.clone();
+        let _ = webview.with_webview(move |platform| {
+            use webkit2gtk::WebViewExt;
+            platform
+                .inner()
+                .connect_web_process_terminated(move |_, _reason| {
+                    recover_renderer(handler.clone())
+                });
+        });
+    });
+    builder
         .on_navigation(|webview, _url| {
             if webview.label() != "main" || navigation_allowed(webview.app_handle()) {
                 return true;
@@ -502,15 +531,9 @@ pub fn app_builder_with<R: Runtime>(
     // the navigation guard refuses that reload and the window stays blank (F-2).
     #[cfg(target_os = "macos")]
     let builder = builder.on_web_content_process_terminate(|webview| {
-        if webview.label() != "main" {
-            return;
+        if webview.label() == "main" {
+            recover_renderer(webview.clone());
         }
-        let webview = webview.clone();
-        tauri::async_runtime::spawn(async move {
-            if renderer_lost(webview.app_handle()).await {
-                let _ = webview.reload();
-            }
-        });
     });
     builder
         .plugin(tauri_plugin_dialog::init())
@@ -562,6 +585,9 @@ pub fn app_builder_with<R: Runtime>(
             forget_ssh_host_key,
             store_secret,
             delete_secret,
+            secret_store_status,
+            unlock_secret_store,
+            reset_secret_store,
             pick_export_file,
             start_export,
             export_status,

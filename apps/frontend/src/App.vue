@@ -81,6 +81,10 @@ import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import LiveExport from './components/LiveExport.vue';
 import LiveDdlDialog from './components/LiveDdlDialog.vue';
+import MasterPasswordDialog from './components/MasterPasswordDialog.vue';
+import { secretStoreStatus, unlockSecretStore, resetSecretStore, secretStoreNote, savedPlaceholder } from './services/secretStore';
+import { onSecretStoreLocked, NativeOperationError } from './services/nativeHost';
+import type { SecretStoreKindDto } from '../../../contracts/generated/v1';
 import { showCreateTableSql, columnDefinitions, dropColumnSql, dropIndexSql, type PgColumnState } from './services/liveDdl';
 import LiveSqlImport from './components/LiveSqlImport.vue';
 import { liveCsvImportPlan, MAX_IMPORT_BYTES } from './services/liveImport';
@@ -1009,6 +1013,49 @@ const {
     };
   }),
 });
+/** Where saved passwords go (shown in the connection dialog), and the master-password prompt. */
+const secretStoreKind = ref<SecretStoreKindDto>();
+async function refreshSecretStore() {
+  if (nativeHostState.kind !== 'desktop') return;
+  try { secretStoreKind.value = (await secretStoreStatus()).kind; } catch { secretStoreKind.value = undefined; }
+}
+watch(connectionDraft, (draft, previous) => { if (draft && !previous) void refreshSecretStore(); });
+const masterPassword = ref<{ mode: 'create' | 'unlock'; busy: boolean; error: string; done: (unlocked: boolean) => void } | null>(null);
+let pendingUnlock: Promise<boolean> | undefined;
+/** Asked by the native bridge when the encrypted file is locked; resolves true once unlocked. */
+function askMasterPassword(): Promise<boolean> {
+  if (pendingUnlock) return pendingUnlock;
+  pendingUnlock = secretStoreStatus().then((status) => new Promise<boolean>((resolve) => {
+    if (status.unlocked) return resolve(true);
+    masterPassword.value = { mode: status.vaultExists ? 'unlock' : 'create', busy: false, error: '', done: (unlocked) => { masterPassword.value = null; resolve(unlocked); } };
+  }), () => false).finally(() => { pendingUnlock = undefined; });
+  return pendingUnlock;
+}
+if (nativeHostState.kind === 'desktop') onSecretStoreLocked(askMasterPassword);
+async function submitMasterPassword(password: string) {
+  const prompt = masterPassword.value;
+  if (!prompt) return;
+  prompt.busy = true; prompt.error = '';
+  try {
+    await unlockSecretStore(password, prompt.mode === 'create');
+    prompt.done(true);
+  } catch (error) {
+    prompt.busy = false;
+    prompt.error = error instanceof NativeOperationError && error.code === 'MASTER_PASSWORD_REJECTED' ? 'Incorrect master password. Try again.' : (error as Error).message;
+  }
+}
+function resetMasterPassword() {
+  confirmation.value = {
+    title: 'Reset saved passwords?',
+    kind: 'destructive',
+    acceptLabel: 'Delete saved passwords',
+    message: 'This deletes StoneQL\u2019s encrypted file. Every password saved in it is lost and cannot be recovered; connections keep their other settings and ask for the password again. You then set a new master password.',
+    action: () => {
+      void resetSecretStore().then(() => { if (masterPassword.value) Object.assign(masterPassword.value, { mode: 'create', error: '' }); },
+        (error) => { if (masterPassword.value) masterPassword.value.error = (error as Error).message; });
+    },
+  };
+}
 async function closeColumnDialog() {
   if (
     JSON.stringify(columnDraft.value) !== columnDraftInitial.value &&
@@ -3010,10 +3057,11 @@ onBeforeUnmount(() => {
                     v-model="connectionDraft.password"
                     type="password"
                     autocomplete="new-password"
-                    :placeholder="connectionDraft.mode==='live' && connectionDraft.passwordRef ? 'Saved in Keychain' : 'Optional'"
+                    :placeholder="connectionDraft.mode==='live' && connectionDraft.passwordRef ? savedPlaceholder(connectionDraft.passwordRef, secretStoreKind) : 'Optional'"
                 /></label></div>
               <label v-if="connectionDraft.mode==='live'" class="checkbox-label"
-                ><input :disabled="testing" type="checkbox" v-model="connectionDraft.rememberPassword" /> Remember database password in the system keychain</label
+                ><input :disabled="testing" type="checkbox" v-model="connectionDraft.rememberPassword" /> Remember database password</label
+              ><p v-if="connectionDraft.mode==='live' && secretStoreKind" class="muted secret-store-note" data-testid="secret-store">{{ secretStoreNote(secretStoreKind) }}</p
               ></template
             ><label v-if="connectionDraft.mode!=='live' || connectionDraft.engine!=='SQLite'" class="form-label"
               >{{
@@ -3061,9 +3109,9 @@ onBeforeUnmount(() => {
                     v-model="connectionDraft.transport.password"
                     type="password"
                     autocomplete="new-password"
-                    :placeholder="connectionDraft.transport.passwordRef ? 'Saved in Keychain' : ''" /></label
+                    :placeholder="connectionDraft.transport.passwordRef ? savedPlaceholder(connectionDraft.transport.passwordRef, secretStoreKind) : ''" /></label
                 ><label v-if="connectionDraft.transport.auth === 'password'" class="checkbox-label"
-                  ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassword" /> Remember SSH password in the system keychain</label
+                  ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassword" /> Remember SSH password</label
                 ><template v-if="connectionDraft.transport.auth === 'private-key'"
                   ><div class="form-label">Private key file<div class="sqlite-file"><button type="button" class="button" :disabled="testing" @click="chooseSshKeyFile">{{ picking ? 'Opening…' : 'Choose key file…' }}</button><span :class="{ muted: !connectionDraft.transport.keyGrant }">{{ connectionDraft.transport.keyGrant ? connectionDraft.transport.keyFileName : connectionDraft.transport.keyFileName ? `${connectionDraft.transport.keyFileName} · choose again this session` : 'No key file chosen for this app session' }}</span></div><span class="muted">The key is read natively at connect time and never enters this window. Ed25519/ECDSA keys; RSA is not supported yet.</span></div
                   ><label class="form-label"
@@ -3071,9 +3119,9 @@ onBeforeUnmount(() => {
                       v-model="connectionDraft.transport.passphrase"
                       type="password"
                       autocomplete="new-password"
-                      :placeholder="connectionDraft.transport.passphraseRef ? 'Saved in Keychain' : 'If the key is encrypted'" /></label
+                      :placeholder="connectionDraft.transport.passphraseRef ? savedPlaceholder(connectionDraft.transport.passphraseRef, secretStoreKind) : 'If the key is encrypted'" /></label
                   ><label class="checkbox-label"
-                    ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassphrase" /> Remember key passphrase in the system keychain</label
+                    ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassphrase" /> Remember key passphrase</label
                 ></template>
                 <p v-if="connectionDraft.transport.auth === 'agent'" class="muted">
                   Uses the SSH agent available to StoneQL (SSH_AUTH_SOCK). Agent forwarding is never requested.
@@ -3133,6 +3181,16 @@ onBeforeUnmount(() => {
         </form>
       </section>
     </div>
+    <MasterPasswordDialog
+      v-if="masterPassword"
+      :key="masterPassword.mode"
+      :mode="masterPassword.mode"
+      :busy="masterPassword.busy"
+      :error="masterPassword.error"
+      @submit="submitMasterPassword"
+      @cancel="masterPassword.done(false)"
+      @reset="resetMasterPassword"
+    />
     <LiveDdlDialog
       v-if="liveDdl"
       :key="liveDdl.mode + (liveDdl.column ?? '')"
