@@ -16,6 +16,12 @@ use tauri::{
     test::{INVOKE_KEY, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+/// The app's own origin: Tauri serves the frontend from `http://tauri.localhost` on Windows.
+const LOCAL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
 
 struct TempDir(PathBuf);
 impl Drop for TempDir {
@@ -59,7 +65,7 @@ fn reload_is_refused_natively_while_a_lease_or_job_is_held_and_allowed_after_rot
         .build()
         .unwrap();
     let invoke = |command: &str, payload: Value| -> Result<Value, Value> {
-        get_ipc_response(&window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: "tauri://localhost".parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "reload_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
+        get_ipc_response(&window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: LOCAL.parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "reload_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
             .map(|body| body.deserialize().unwrap())
     };
     let allowed = || stoneql_desktop::navigation_allowed(app.handle());
@@ -249,7 +255,7 @@ fn rw_app(journal: &common::TempJournal) -> tauri::App<tauri::test::MockRuntime>
 }
 fn invoker(window: &tauri::WebviewWindow<tauri::test::MockRuntime>) -> Invoke<'_> {
     Box::new(move |command: &str, payload: Value| {
-        get_ipc_response(window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: "tauri://localhost".parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "outcome_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
+        get_ipc_response(window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: LOCAL.parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "outcome_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
             .map(|body| body.deserialize().unwrap())
     })
 }

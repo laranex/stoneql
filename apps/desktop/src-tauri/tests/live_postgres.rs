@@ -13,6 +13,12 @@ use tauri::{
     test::{INVOKE_KEY, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+/// The app's own origin: Tauri serves the frontend from `http://tauri.localhost` on Windows.
+const LOCAL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
 const TRUST_VIEWS: [&str; 3] = [
     "SELECT effect FROM trust_view",
     "SELECT effect FROM trust_nested_view",
@@ -247,7 +253,7 @@ fn postgres_commands_use_owned_tls_fixture() {
         .build()
         .unwrap();
     let invoke = |command: &str, payload: Value| -> Result<Value, Value> {
-        get_ipc_response(&window,InvokeRequest{cmd:command.into(),callback:CallbackFn(0),error:CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:InvokeBody::Json(json!({"message":json!({"version":1,"requestId":"fixture_request","payload":payload}).to_string()})),headers:Default::default(),invoke_key:INVOKE_KEY.into()}).map(|body|body.deserialize().unwrap())
+        get_ipc_response(&window,InvokeRequest{cmd:command.into(),callback:CallbackFn(0),error:CallbackFn(1),url:LOCAL.parse().unwrap(),body:InvokeBody::Json(json!({"message":json!({"version":1,"requestId":"fixture_request","payload":payload}).to_string()})),headers:Default::default(),invoke_key:INVOKE_KEY.into()}).map(|body|body.deserialize().unwrap())
     };
     let session =
         invoke("host_info", json!({"nonce":"pg_fixture_nonce"})).unwrap()["payload"]["sessionId"]

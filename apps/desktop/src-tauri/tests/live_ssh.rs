@@ -11,6 +11,12 @@ use tauri::{
     test::{INVOKE_KEY, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+/// The app's own origin: Tauri serves the frontend from `http://tauri.localhost` on Windows.
+const LOCAL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
 
 fn var(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| panic!("{name} is set by the owning fixture runner"))
@@ -69,7 +75,7 @@ fn ssh_commands_use_owned_fixture() {
         .build()
         .unwrap();
     let raw = |command: &str, payload: Value| -> Result<Value, Value> {
-        let reply = get_ipc_response(&window,InvokeRequest{cmd:command.into(),callback:CallbackFn(0),error:CallbackFn(1),url:"tauri://localhost".parse().unwrap(),body:InvokeBody::Json(json!({"message":json!({"version":1,"requestId":"fixture_request","payload":payload}).to_string()})),headers:Default::default(),invoke_key:INVOKE_KEY.into()}).map(|body|body.deserialize::<Value>().unwrap());
+        let reply = get_ipc_response(&window,InvokeRequest{cmd:command.into(),callback:CallbackFn(0),error:CallbackFn(1),url:LOCAL.parse().unwrap(),body:InvokeBody::Json(json!({"message":json!({"version":1,"requestId":"fixture_request","payload":payload}).to_string()})),headers:Default::default(),invoke_key:INVOKE_KEY.into()}).map(|body|body.deserialize::<Value>().unwrap());
         let text = format!("{reply:?}");
         assert!(
             secrets.iter().all(|secret| !text.contains(secret.as_str())),
