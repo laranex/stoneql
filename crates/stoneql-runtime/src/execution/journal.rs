@@ -29,6 +29,9 @@
 //! Journal changes are applied in memory only after they are durable, except the removal of
 //! work whose outcome is now known (`conclude`), which completes with the next successful
 //! write.
+// Only the Unix store reads and writes the format; elsewhere the store is a fail-closed stub
+// until its Windows port, so the format helpers are unused there.
+#![cfg_attr(not(unix), allow(dead_code))]
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::{

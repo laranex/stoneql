@@ -1983,6 +1983,7 @@ async fn j3_restored_outcomes_count_toward_the_cap_and_are_never_evicted() {
 /// J-4: a journal that cannot be used refuses new jobs and transactions before anything is
 /// sent; read-only queries are unaffected. A failed write blocks admission until the
 /// snapshot can be written again.
+#[cfg(unix)]
 #[tokio::test]
 async fn j4_an_unusable_journal_refuses_new_work_before_anything_is_sent() {
     use std::os::unix::fs::PermissionsExt;
