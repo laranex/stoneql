@@ -2095,18 +2095,32 @@ async fn harness() -> Result<(), Failure> {
     }
 
     step("expiry lease start");
-    // Lease expiry runs in the background on a second handle for the real LEASE_IDLE.
+    // Lease expiry runs in the background on a second handle for the real LEASE_IDLE. It has its
+    // own owner: the fault cycles end 100 leases of `owner`, and on a host where they are still
+    // running when this lease expires they would evict its ended record (32 per owner).
+    let expiry_owner = OwnerId::new();
     let expiry_handle = connections
-        .connect_with_access(owner, config(), None, None, Access::ReadWrite)
+        .connect_with_access(expiry_owner, config(), None, None, Access::ReadWrite)
         .await?;
-    let expiry_lease = connections.begin_transaction(owner, expiry_handle).await?;
+    let expiry_lease = connections
+        .begin_transaction(expiry_owner, expiry_handle)
+        .await?;
     let expiry_started = Instant::now();
     let mut options = JobOptions::new("INSERT INTO exec_item(id, parent) VALUES (900, 1)");
     options.lease = Some(expiry_lease);
-    let (id, _) = connections.submit_job(owner, expiry_handle, options)?;
-    let (_, update) = run.drain(id).await?;
+    let (id, _) = connections.submit_job(expiry_owner, expiry_handle, options)?;
+    let mut update = None;
+    for _ in 0..900 {
+        let next = connections
+            .fetch_job(expiry_owner, id, Duration::from_secs(1))
+            .await?;
+        if next.done {
+            update = Some(next);
+            break;
+        }
+    }
     ensure(
-        update.outcome == Some(ExecutionOutcomeDto::Succeeded),
+        update.is_some_and(|update| update.outcome == Some(ExecutionOutcomeDto::Succeeded)),
         "expiry lease insert",
     )?;
 
@@ -2583,7 +2597,16 @@ async fn harness() -> Result<(), Failure> {
                 if mysql { "SLEEP(30)" } else { "pg_sleep(30)" }
             ));
             options.lease = Some(lease);
-            let (id, _) = connections.submit_job(owner, handle, options)?;
+            let (id, count) = connections.submit_job(owner, handle, options)?;
+            // Cancel once the sleep itself is running (the statements before it can take longer
+            // than 150 ms on a slower host), then after a further 150 ms.
+            for _ in 0..200 {
+                let update = connections.fetch_job(owner, id, Duration::ZERO).await?;
+                if update.statements[count - 1].status == StatementStatusDto::Running {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             tokio::time::sleep(Duration::from_millis(150)).await;
             connections.cancel_job(owner, id)?;
             let (_, update) = run.drain(id).await?;
@@ -2715,7 +2738,7 @@ async fn harness() -> Result<(), Failure> {
         tokio::time::sleep(remaining).await;
     }
     let end = connections
-        .end_transaction(owner, expiry_lease, true)
+        .end_transaction(expiry_owner, expiry_lease, true)
         .await?;
     ensure(
         end.outcome == Outcome::RolledBack && end.reason == EndReason::Expired,
