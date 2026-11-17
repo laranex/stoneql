@@ -1,4 +1,4 @@
-//! M006 blocker 2 in a real window (WKWebView on macOS): the native navigation guard refuses
+//! M006 blocker 2 in a real window (WKWebView on macOS, WebKitGTK on Linux): the native navigation guard refuses
 //! `location.reload()`, a same-origin `location.assign` and the native `Webview::reload` while
 //! the host holds an open lease and an unfetched job; the app's in-app dialog appears;
 //! confirming it rotates the session (lease rolled back and recorded) and the reload proceeds.
@@ -7,7 +7,8 @@
 //!
 //! Opens a real window, so it only runs when `STONEQL_REAL_WINDOW=1` (needs a desktop session):
 //! `npm run build && STONEQL_REAL_WINDOW=1 cargo test --locked -p stoneql-desktop
-//! --features custom-protocol --test real_window_reload`. Physical Cmd+R, the context-menu
+//! --features custom-protocol,sqlite --test real_window_reload`. On a headless Linux host, run it
+//! under `dbus-run-session -- xvfb-run -a`. Physical Cmd+R, the context-menu
 //! Reload and the Web Inspector reload are manual checks (docs/development/verification.md).
 use serde_json::{Value, json};
 use sqlx::{Connection, Executor, SqliteConnection, sqlite::SqliteConnectOptions};
@@ -217,6 +218,7 @@ fn drive(app: tauri::AppHandle<Wry>, file: PathBuf) {
 }
 
 /// WebKit content processes (XPC services, children of launchd) of every app of this user.
+#[cfg(target_os = "macos")]
 fn web_content_pids() -> std::collections::BTreeSet<i32> {
     let listing = std::process::Command::new("/bin/ps")
         .args(["-axo", "pid=,comm="])
@@ -226,6 +228,45 @@ fn web_content_pids() -> std::collections::BTreeSet<i32> {
         .lines()
         .filter(|line| line.ends_with("/com.apple.WebKit.WebContent"))
         .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect()
+}
+/// WebKitGTK web processes descending from this test process (directly or through its
+/// bubblewrap sandbox). `comm` is truncated to 15 bytes, so `argv[0]` is matched instead; the
+/// network process (`WebKitNetworkProcess`) is never selected.
+#[cfg(target_os = "linux")]
+fn web_content_pids() -> std::collections::BTreeSet<i32> {
+    let me = std::process::id() as i32;
+    let parent = |pid: i32| -> Option<i32> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:"))?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let descends = |mut pid: i32| {
+        while pid > 1 {
+            match parent(pid) {
+                Some(next) if next == me => return true,
+                Some(next) => pid = next,
+                None => return false,
+            }
+        }
+        false
+    };
+    std::fs::read_dir("/proc")
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|pid| {
+            std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmdline| {
+                cmdline
+                    .split(|byte| *byte == 0)
+                    .next()
+                    .is_some_and(|argv0| argv0.ends_with(b"/WebKitWebProcess"))
+            })
+        })
+        .filter(|pid| descends(*pid))
         .collect()
 }
 /// This window's content process: the only one that appeared since the app started. The
