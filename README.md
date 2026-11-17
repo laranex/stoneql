@@ -68,3 +68,11 @@ Building the desktop app from source is documented in [Desktop development](docs
 The [preserved prototype reference](docs/development/prototype-reference.md) retains the previous detailed workflow documentation. Advanced autocomplete helpers are not all integrated; see the [SQL completion status](docs/development/browser-demo.md#sql-completion-status) rather than assuming helper existence proves support.
 
 Production signing, notarization and server decisions remain gated; no commit certifies unverified capabilities. The documentation site is published manually from `docs/`.
+
+## Contributing and community
+
+Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) to set up a development environment and run the checks, and follow the [Code of Conduct](CODE_OF_CONDUCT.md). For help using StoneQL see [SUPPORT.md](SUPPORT.md); report security problems privately as described in [SECURITY.md](SECURITY.md).
+
+## Licence
+
+StoneQL is released under the [MIT Licence](LICENSE). Vendored third-party code keeps its own licence notice (for example `vendor/sqlx-mysql/LICENSE-MIT` and `vendor/sqlx-postgres/LICENSE-MIT`).

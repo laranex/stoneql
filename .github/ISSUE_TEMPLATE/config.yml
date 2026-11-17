@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: User guide and troubleshooting
+    url: https://stoneace.github.io/stoneql/guide/troubleshooting
+    about: Install, first-launch approval, Keychain prompts and connection errors.
+  - name: Report a security vulnerability
+    url: https://github.com/stoneAce/stoneql/security/advisories/new
+    about: Report security problems privately, not in public issues.
