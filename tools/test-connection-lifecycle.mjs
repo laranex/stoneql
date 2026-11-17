@@ -138,7 +138,11 @@ extendedKeyUsage = serverAuth
     const exposed = join(temp, 'server-tls');
     mkdirSync(exposed);
     for (const name of ['ca.pem', 'server.pem', 'server-key.pem']) writeFileSync(join(exposed, name), readFileSync(join(tls, name)), { mode: 0o644 });
-    writeFileSync(override, JSON.stringify({ services: { [engine]: { volumes: [`${exposed}:/stoneql-tls:ro`], command: ['--ssl-ca=/stoneql-tls/ca.pem', '--ssl-cert=/stoneql-tls/server.pem', '--ssl-key=/stoneql-tls/server-key.pem', '--require-secure-transport=ON'] } } }));
+    // The 100,000-row profile's data, binlog and redo live on tmpfs, which counts against the
+    // memory limit. Docker Desktop lets tmpfs pages swap (1g + swap); a host without swap OOM-kills
+    // the 1g server during init, so this profile gets the same 2g total as memory, without swap.
+    const memory = resourceEvaluation ? { mem_limit: '2g', memswap_limit: '2g' } : {};
+    writeFileSync(override, JSON.stringify({ services: { [engine]: { ...memory, volumes: [`${exposed}:/stoneql-tls:ro`], command: ['--ssl-ca=/stoneql-tls/ca.pem', '--ssl-cert=/stoneql-tls/server.pem', '--ssl-key=/stoneql-tls/server-key.pem', '--require-secure-transport=ON'] } } }));
     writeFileSync(join(init, '001-fixture.sql'), `CREATE TABLE stoneql_fixture_marker(id VARCHAR(64) PRIMARY KEY); INSERT INTO stoneql_fixture_marker VALUES ('${marker}');
 SET SESSION sql_mode='';
 CREATE TABLE raw_large(payload LONGBLOB);
