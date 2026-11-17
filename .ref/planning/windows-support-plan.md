@@ -27,6 +27,8 @@ Most Unix-only code is already `cfg`-gated with non-Unix fallbacks, so a Windows
 6. **Verification standard (decision needed).** Windows runners cannot run the Docker fixtures; options: native services on the runner (MySQL/PostgreSQL installers), a remote fixture host, or a stated gap.
 7. **Docs and release** only after 2–6 pass.
 
+**Before merging to `main`:** restore `macos-15` in the `.github/workflows/rust.yml` matrix (dropped on this branch on 2026-11-17 at the user's request to save runner time; `main` runs macOS only).
+
 ## Decisions to ask the user (batched after phase 1)
 
 - SSH tunnel endpoint design (4a vs 4b) and agent support order.
