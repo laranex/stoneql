@@ -2,7 +2,8 @@
 //! OS credential store, bound to the connection target they were saved for. There is no IPC
 //! command that returns a secret: the host resolves references only while connecting.
 //!
-//! macOS uses the login Keychain (generic passwords). Other operating systems are explicitly
+//! macOS uses the login Keychain (generic passwords); Linux uses the desktop's Secret Service
+//! (`secret_service`) and fails closed without one. Other operating systems are explicitly
 //! unsupported until their providers are implemented and verified.
 use super::{NativeSession, database::authorize, decode, invalid};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,9 @@ use stoneql_contracts::v1::{
 };
 use stoneql_core::{CoreError, ErrorCode};
 use tauri::{Runtime, State, WebviewWindow};
+
+#[cfg(target_os = "linux")]
+mod secret_service;
 
 /// Keychain service for production references. Tests pass their own per-run service.
 pub const DEFAULT_SERVICE: &str = "me.thixpin.stoneql.credentials";
@@ -35,7 +39,7 @@ pub trait SecretStore: Send + Sync {
 
 /// The operating system's credential store under one service name.
 pub struct OsSecretStore {
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
     service: String,
 }
 impl OsSecretStore {
@@ -72,7 +76,21 @@ impl SecretStore for OsSecretStore {
 }
 #[cfg(target_os = "macos")]
 const ITEM_NOT_FOUND: i32 = -25300;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+impl SecretStore for OsSecretStore {
+    // `Unsupported` (no usable Secret Service) is the only result another Linux provider may
+    // handle; a refusal or failure from a present Secret Service always fails closed.
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), SecretError> {
+        secret_service::set(None, &self.service, account, value)
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, SecretError> {
+        secret_service::get(None, &self.service, account)
+    }
+    fn delete(&self, account: &str) -> Result<(), SecretError> {
+        secret_service::delete(None, &self.service, account)
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 impl SecretStore for OsSecretStore {
     fn set(&self, _: &str, _: &[u8]) -> Result<(), SecretError> {
         Err(SecretError::Unsupported)
@@ -406,7 +424,7 @@ pub(crate) mod tests {
         assert!(choose(&store_impl, Some("typed".into()), Some(reference), scope).is_err());
         assert_eq!(choose(&store_impl, None, None, scope).unwrap(), None);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[test]
     fn other_operating_systems_are_explicitly_unsupported() {
         let store_impl = OsSecretStore::new("unused");

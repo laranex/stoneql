@@ -20,8 +20,14 @@ export const hostKeyStatus = (host: string, port: number) => nativeDatabase<SshH
 export const trustScannedHostKey = (host: string, port: number, fingerprint: string) => nativeDatabase<SshHostKeyStatus>('trust_ssh_host_key', { host, port, fingerprint });
 export const forgetTrustedHostKey = (host: string, port: number) => nativeDatabase<SshHostKeyStatus>('forget_ssh_host_key', { host, port });
 export const cancelConnect = (attemptId: string) => nativeDatabase<CancelConnectResult>('cancel_connect', { attemptId });
+export const SECRET_STORE_MISSING = 'Password not saved: this system has no credential store (Secret Service) available. Turn off Remember to save the connection without it.';
 export async function storeSecret(purpose: SecretPurpose, connection: Connection, secret: string): Promise<string> {
-  return (await nativeDatabase<SecretReference>('store_secret', { purpose, target: secretTarget(connection), secret })).reference;
+  try {
+    return (await nativeDatabase<SecretReference>('store_secret', { purpose, target: secretTarget(connection), secret })).reference;
+  } catch (error) {
+    if (error instanceof NativeOperationError && error.code === 'UNSUPPORTED_CAPABILITY') throw new NativeOperationError(error.code, SECRET_STORE_MISSING);
+    throw error;
+  }
 }
 export const deleteSecret = (reference: string) => nativeDatabase<SecretReference>('delete_secret', { reference });
 /** The target a saved secret is bound to; the host refuses it for any other target or route. */

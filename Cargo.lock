@@ -4390,6 +4390,7 @@ version = "0.1.0"
 name = "stoneql-desktop"
 version = "0.1.0"
 dependencies = [
+ "dbus",
  "flate2",
  "security-framework",
  "serde",

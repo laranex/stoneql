@@ -166,7 +166,8 @@ fn ssh_commands_use_owned_fixture() {
             "store_secret",
             json!({"purpose":purpose,"target":target,"secret":secret}),
         );
-        if cfg!(target_os = "macos") {
+        // macOS Keychain; Linux disposable Secret Service (test:ssh starts it).
+        if cfg!(any(target_os = "macos", target_os = "linux")) {
             let reference = reply.unwrap()["payload"]["reference"]
                 .as_str()
                 .unwrap()

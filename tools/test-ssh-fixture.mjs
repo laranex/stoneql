@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { connect } from 'node:net';
 import { resolve, join } from 'node:path';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
+import { startSecretService } from './secret-service-fixture.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
@@ -108,8 +109,14 @@ function banner(port) {
 }
 
 // Only the dedicated per-run service is ever queried or deleted; exit status 44 = not found.
+// Linux: the run's disposable Secret Service (`secretService`), never the user's keyring.
 function keychainItemsRemaining(service, purge = false) {
-  if (process.platform !== 'darwin' || !service) return 0;
+  if (!service) return 0;
+  if (process.platform === 'linux') {
+    if (!secretService) return 0;
+    return purge ? secretService.purge(service) : secretService.itemsRemaining(service);
+  }
+  if (process.platform !== 'darwin') return 0;
   let remaining = 0;
   for (let attempt = 0; attempt < 32; attempt++) {
     const lookup = spawnSync('security', [purge ? 'delete-generic-password' : 'find-generic-password', '-s', service], { env: base, encoding: 'utf8', timeout: 10_000 });
@@ -120,6 +127,7 @@ function keychainItemsRemaining(service, purge = false) {
   }
   return remaining;
 }
+let secretService;
 for (const engine of engines) {
   // Short base path: Unix socket endpoints are limited to ~104 bytes on macOS.
   const temp = mkdtempSync('/tmp/stoneql-m005-');
@@ -221,6 +229,11 @@ CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
     agent = spawn('ssh-agent', ['-D', '-a', agentSocket], { env: base, stdio: 'ignore' });
     await waitFor(() => existsSync(agentSocket), 'ssh-agent', 10_000);
     run('ssh-add', ['-q', join(client, 'plain')], { ...base, SSH_AUTH_SOCK: agentSocket });
+    if (process.platform === 'linux') {
+      secretService = await startSecretService(mkdtempSync(join(temp, 'secrets-')), {});
+      const { DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR, XDG_DATA_HOME } = secretService.env;
+      Object.assign(env, { DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR, XDG_DATA_HOME });
+    }
 
     Object.assign(env, {
       TMPDIR: endpoints,
@@ -276,6 +289,7 @@ CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${dbPassword}' REQUIRE SSL; GRAN
       cleanup.endpointDirectoriesLeft = existsSync(endpoints) ? readdirSync(endpoints).length : 0;
       // A failed test may stop before its own cleanup; purge the dedicated service and record it.
       cleanup.keychainItemsPurged = keychainItemsRemaining(env.STONEQL_KEYCHAIN_SERVICE, true);
+      if (secretService) { await secretService.stop(); secretService = undefined; }
       if (started) {
         cleanup.attempted = true;
         run('docker', [...args, 'down', '--volumes', '--remove-orphans'], env);
