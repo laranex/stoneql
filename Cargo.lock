@@ -4390,8 +4390,12 @@ version = "0.1.0"
 name = "stoneql-desktop"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "argon2",
  "dbus",
  "flate2",
+ "getrandom 0.4.3",
+ "nix",
  "security-framework",
  "serde",
  "serde_json",
@@ -4405,6 +4409,7 @@ dependencies = [
  "tokio",
  "uuid",
  "webkit2gtk",
+ "zeroize",
 ]
 
 [[package]]

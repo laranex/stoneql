@@ -93,6 +93,8 @@ const nativeMessages: Record<string,string> = {
   UNRESOLVED_OUTCOMES: 'Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them.',
   ENCRYPTED_LOGIN_REQUIRED: 'The server requires an encrypted sign-in for this account. Turn on Use TLS with a trusted certificate, or (MySQL caching_sha2_password) sign in once with the mysql client since the server last started, then try again. Nothing was retried without TLS.',
   OUTCOME_JOURNAL_UNAVAILABLE: 'Nothing was sent: StoneQL cannot save unknown outcomes durably right now. See the notice about the unknown-outcome journal.',
+  SECRET_STORE_LOCKED: 'Saved passwords are locked. Enter the master password to use them.',
+  MASTER_PASSWORD_REJECTED: 'The master password is incorrect.',
 };
 // The host's own fixed text is more specific for these codes (it never contains SQL or values).
 const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOMES', 'OUTCOME_JOURNAL_UNAVAILABLE']);
@@ -102,8 +104,9 @@ const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOME
  */
 // start_sql_import reads and validates the whole file before it answers (Proposed bound; see the
 // M007 import benchmark).
-export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000, start_sql_import: 120_000 };
-export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'switch_database'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome'|'pick_import_file'|'start_sql_import'|'sql_import_status';
+// unlock_secret_store derives the key with Argon2id (and waits a fixed delay after a wrong password).
+export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000, start_sql_import: 120_000, secret_store_status: 20_000, unlock_secret_store: 30_000, reset_secret_store: 20_000 };
+export type NativeDatabaseCommand = 'secret_store_status'|'unlock_secret_store'|'reset_secret_store'|'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'switch_database'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome'|'pick_import_file'|'start_sql_import'|'sql_import_status';
 /** Proposed (M005 T2): above the native 60 s secret deadline, so the host answers first. */
 export const SECRET_CONNECT_WAIT_MS = 75_000;
 /** True when connecting resolves a saved reference natively (a Keychain prompt may appear). */
@@ -117,7 +120,22 @@ export function nativeWaitFor(command: NativeDatabaseCommand, payload: Record<st
   if (command === 'connect_direct' && usesSavedSecret(payload)) return SECRET_CONNECT_WAIT_MS;
   return nativeWaitMs[command] ?? 8000;
 }
+/**
+ * Asks the user for the master password when saved passwords are in StoneQL's encrypted file
+ * (Linux without a Secret Service) and it is still locked. Resolves true once it is unlocked.
+ */
+let unlockSecretStore: (() => Promise<boolean>) | undefined;
+export function onSecretStoreLocked(handler: (() => Promise<boolean>) | undefined) { unlockSecretStore = handler; }
 export async function nativeDatabase<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
+  try {
+    return await nativeDatabaseOnce<T>(command, payload);
+  } catch (error) {
+    // The host refused before using any secret; retry once after the user unlocks.
+    if (error instanceof NativeOperationError && error.code === 'SECRET_STORE_LOCKED' && unlockSecretStore && await unlockSecretStore()) return nativeDatabaseOnce<T>(command, payload);
+    throw error;
+  }
+}
+async function nativeDatabaseOnce<T>(command: NativeDatabaseCommand, payload: Record<string,unknown>): Promise<T> {
   if (current.kind !== 'desktop' || !activeInvoker) throw new NativeOperationError('UNSUPPORTED_CAPABILITY', 'Live connections require the native desktop app.');
   const invoker = activeInvoker, sessionId = current.info.sessionId;
   // F-02: a connect that succeeds after the renderer stopped waiting is closed at once.

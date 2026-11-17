@@ -25,8 +25,10 @@ const service = `me.thixpin.stoneql.test-${randomBytes(6).toString('hex')}`;
 const fixture = await startSecretService(mkdtempSync(join(tmpdir(), 'stoneql-secret-service-')), process.env);
 let remaining;
 try {
-  const result = spawnSync(binary, ['--ignored', '--exact', 'secrets::secret_service::tests::items_round_trip_in_the_session_secret_service', '--test-threads=1'], { cwd: root, env: { ...fixture.env, STONEQL_KEYCHAIN_SERVICE: service }, encoding: 'utf8', timeout: 120_000 });
-  if (result.status !== 0 || result.error || !/1 passed/.test(result.stdout)) throw Error(`round trip failed\n${(result.stdout + result.stderr).slice(-4000)}`);
+  for (const name of ['secrets::secret_service::tests::items_round_trip_in_the_session_secret_service', 'secrets::tests::a_present_secret_service_never_selects_the_vault']) {
+    const result = spawnSync(binary, ['--ignored', '--exact', name, '--test-threads=1'], { cwd: root, env: { ...fixture.env, STONEQL_KEYCHAIN_SERVICE: service }, encoding: 'utf8', timeout: 120_000 });
+    if (result.status !== 0 || result.error || !/1 passed/.test(result.stdout)) throw Error(`${name} failed\n${(result.stdout + result.stderr).slice(-4000)}`);
+  }
   remaining = fixture.itemsRemaining(service);
 } finally {
   fixture.purge(service);
@@ -35,4 +37,4 @@ try {
 const after = existsSync(userKeyrings) ? statSync(userKeyrings).mtimeMs : null;
 if (remaining) throw Error(`${remaining} test item(s) remained`);
 if (before !== after) throw Error('The user keyring directory changed');
-console.log(`test:secret-service passed (round trip, replace, label and attributes, delete; 0 items left; user keyrings ${before === null ? 'absent' : 'unchanged'})`);
+console.log(`test:secret-service passed (round trip, replace, label and attributes, delete, present service never selects the vault; 0 items left; user keyrings ${before === null ? 'absent' : 'unchanged'})`);

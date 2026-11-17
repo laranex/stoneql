@@ -337,6 +337,149 @@ impl stoneql_desktop::SecretStore for MemoryStore {
             .ok_or(stoneql_desktop::SecretError::NotFound)
     }
 }
+/// Stand-in for the Linux master-password vault: locked until unlocked over IPC.
+#[derive(Default)]
+struct VaultDouble {
+    items: MemoryStore,
+    password: std::sync::Mutex<Option<String>>,
+    unlocked: std::sync::atomic::AtomicBool,
+}
+impl stoneql_desktop::SecretStore for VaultDouble {
+    fn set(&self, account: &str, value: &[u8]) -> Result<(), stoneql_desktop::SecretError> {
+        self.check()?;
+        self.items.set(account, value)
+    }
+    fn get(&self, account: &str) -> Result<Vec<u8>, stoneql_desktop::SecretError> {
+        self.check()?;
+        self.items.get(account)
+    }
+    fn delete(&self, account: &str) -> Result<(), stoneql_desktop::SecretError> {
+        self.items.delete(account)
+    }
+    fn status(&self) -> stoneql_contracts::v1::SecretStoreStatus {
+        stoneql_contracts::v1::SecretStoreStatus {
+            kind: stoneql_contracts::v1::SecretStoreKindDto::EncryptedFile,
+            vault_exists: self.password.lock().unwrap().is_some(),
+            unlocked: self.unlocked.load(std::sync::atomic::Ordering::SeqCst),
+        }
+    }
+    fn unlock(&self, password: &str, create: bool) -> Result<(), stoneql_desktop::UnlockError> {
+        let mut stored = self.password.lock().unwrap();
+        match (stored.as_deref(), create) {
+            (None, true) if password.chars().count() >= 12 => *stored = Some(password.into()),
+            (Some(expected), false) if expected == password => {}
+            (Some(_), false) => return Err(stoneql_desktop::UnlockError::Rejected),
+            _ => return Err(stoneql_desktop::UnlockError::Invalid),
+        }
+        self.unlocked
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn reset(&self) -> Result<(), stoneql_desktop::SecretError> {
+        *self.password.lock().unwrap() = None;
+        self.unlocked
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.items.0.lock().unwrap().clear();
+        Ok(())
+    }
+}
+impl VaultDouble {
+    fn check(&self) -> Result<(), stoneql_desktop::SecretError> {
+        if self.unlocked.load(std::sync::atomic::Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(stoneql_desktop::SecretError::Locked)
+        }
+    }
+}
+#[test]
+fn the_master_password_vault_is_unlocked_over_ipc_without_echoing_the_password() {
+    let store = std::sync::Arc::new(VaultDouble::default());
+    let journal = common::TempJournal::new();
+    let app = build(stoneql_desktop::app_builder_with(
+        mock_builder(),
+        false,
+        stoneql_desktop::HostServices {
+            secrets: store.clone(),
+            agent_socket: None,
+            read_write_sql: false,
+            outcome_journal: Some(journal.dir()),
+            secret_deadline: std::time::Duration::from_secs(60),
+            host_keys: None,
+        },
+    ));
+    let webview = window(&app, "main");
+    let session = bootstrap(&webview).payload.session_id;
+    let call = |command: &str, payload: Value, session: &str| {
+        let mut payload = payload;
+        payload["sessionId"] = json!(session);
+        let reply = invoke(
+            &webview,
+            command,
+            json!({"version":1,"requestId":"vault_case","payload":payload}),
+            "tauri://localhost",
+        );
+        assert!(!format!("{reply:?}").contains("synthetic-master"));
+        reply
+    };
+    let code = |reply: Result<Value, Value>| reply.unwrap_err()["code"].clone();
+    let status = call("secret_store_status", json!({}), &session).unwrap();
+    assert_eq!(
+        status["payload"],
+        json!({"kind":"encrypted_file","vaultExists":false,"unlocked":false})
+    );
+    let target = json!({"engine":"mysql","host":"db.internal","port":3306,"username":"reader"});
+    let save = json!({"purpose":"database_password","target":target,"secret":"synthetic-secret"});
+    assert_eq!(
+        code(call("store_secret", save.clone(), &session)),
+        "SECRET_STORE_LOCKED"
+    );
+    assert_eq!(
+        code(call(
+            "unlock_secret_store",
+            json!({"password":"synthetic-master-password","create":true}),
+            "stale_session"
+        )),
+        "FORBIDDEN"
+    );
+    assert_eq!(
+        code(call(
+            "unlock_secret_store",
+            json!({"password":"synthetic-master","create":false}),
+            &session
+        )),
+        "INVALID_REQUEST"
+    );
+    let unlocked = call(
+        "unlock_secret_store",
+        json!({"password":"synthetic-master-password","create":true}),
+        &session,
+    )
+    .unwrap();
+    assert_eq!(
+        unlocked["payload"],
+        json!({"kind":"encrypted_file","vaultExists":true,"unlocked":true})
+    );
+    call("store_secret", save, &session).unwrap();
+    // A later renderer session that sends the wrong password is refused, not locked out.
+    store
+        .unlocked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        code(call(
+            "unlock_secret_store",
+            json!({"password":"synthetic-master-wrong","create":false}),
+            &session
+        )),
+        "MASTER_PASSWORD_REJECTED"
+    );
+    let reset = call("reset_secret_store", json!({}), &session).unwrap();
+    assert_eq!(
+        reset["payload"],
+        json!({"kind":"encrypted_file","vaultExists":false,"unlocked":false})
+    );
+    assert!(store.items.0.lock().unwrap().is_empty());
+}
 #[test]
 fn ssh_and_secret_commands_fail_closed_before_network_and_never_echo_secrets() {
     let store = std::sync::Arc::new(MemoryStore::default());

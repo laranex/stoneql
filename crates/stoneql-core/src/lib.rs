@@ -101,6 +101,10 @@ pub enum ErrorCode {
     PermissionDenied,
     /// The requested database does not exist on the server.
     UnknownDatabase,
+    /// Saved passwords are in StoneQL's encrypted file, which needs the master password first.
+    SecretStoreLocked,
+    /// The master password did not open the encrypted file of saved passwords.
+    MasterPasswordRejected,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -150,6 +154,8 @@ impl ErrorCode {
             }
             Self::PermissionDenied => "The server denied this account access; nothing was changed.",
             Self::UnknownDatabase => "That database does not exist on the server.",
+            Self::SecretStoreLocked => "Enter the master password to use saved passwords.",
+            Self::MasterPasswordRejected => "The master password is incorrect.",
             Self::Internal => "The operation could not be completed.",
         }
     }

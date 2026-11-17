@@ -174,7 +174,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
  await page.getByLabel('SSH username',{exact:true}).fill('deploy');
  await page.getByLabel('SSH authentication',{exact:true}).selectOption('password');
  await page.getByLabel('SSH password',{exact:true}).fill('synthetic-ssh-password');
- await page.getByLabel('Remember SSH password in the system keychain').check();
+ await page.getByLabel('Remember SSH password').check();
  await expect(page.getByText('Not enrolled · connections are refused until you verify and trust the key')).toBeVisible();
  await page.getByRole('button',{name:'Test connection',exact:true}).click();
  const check=page.getByRole('group',{name:'Verify SSH host key'});

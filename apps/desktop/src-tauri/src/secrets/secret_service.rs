@@ -7,10 +7,11 @@
 //! unencrypted. Any process of the same user can already read the item through the same API,
 //! so DH session encryption would add new crypto code without changing who can read it.
 //!
-//! `Unsupported` means no Secret Service is usable (no session bus, nothing owns the name, or no
-//! default collection); it is the only error that may select another provider. A locked
-//! collection is unlocked only through the service's own prompt; a dismissed or timed-out prompt
-//! and every other failure are `Failed`.
+//! `Unsupported` means no Secret Service is on the session bus (no bus, or nothing owns or can
+//! activate the name); it is the only result that selects the encrypted file vault. A present
+//! Secret Service that cannot be used (no default collection, a dismissed or timed-out unlock
+//! prompt, any other error) is `Failed`: saving and reading fail closed. A locked collection is
+//! unlocked only through the service's own prompt.
 use super::SecretError;
 use dbus::{
     Path,
@@ -102,6 +103,11 @@ pub(super) fn delete(bus: Option<&str>, service: &str, account: &str) -> Result<
     Ok(())
 }
 
+/// Whether a Secret Service answers on the session bus (`Unsupported` when none does).
+pub(super) fn probe(bus: Option<&str>) -> Result<(), SecretError> {
+    Session::open(bus).map(drop)
+}
+
 fn attributes(service: &str, account: &str) -> HashMap<String, String> {
     HashMap::from([
         ("service".to_owned(), service.to_owned()),
@@ -172,7 +178,7 @@ impl Session {
             .method_call(SERVICE, "ReadAlias", ("default",))
             .map_err(failed)?;
         if &*collection == "/" {
-            return Err(SecretError::Unsupported);
+            return Err(SecretError::Failed);
         }
         Ok(collection)
     }
@@ -246,18 +252,18 @@ impl Drop for Session {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::process::{Child, Command, Stdio};
 
     /// A private session bus with no service directories, so nothing can be D-Bus-activated.
-    struct EmptyBus {
+    pub(crate) struct EmptyBus {
         daemon: Child,
-        dir: std::path::PathBuf,
-        address: String,
+        pub(crate) dir: std::path::PathBuf,
+        pub(crate) address: String,
     }
     impl EmptyBus {
-        fn start() -> Self {
+        pub(crate) fn start() -> Self {
             let dir =
                 std::env::temp_dir().join(format!("stoneql-empty-bus-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&dir).unwrap();
@@ -316,6 +322,7 @@ mod tests {
             delete(Some(bus), "me.thixpin.stoneql.test", &account),
             Err(SecretError::Unsupported)
         );
+        assert_eq!(probe(Some(bus)), Err(SecretError::Unsupported));
     }
 
     #[test]

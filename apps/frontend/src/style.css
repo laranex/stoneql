@@ -2891,3 +2891,7 @@ label svg {
 /* Live Structure panels: the action sits at the end of the heading row. */
 .panel h3:has(.panel-action) { display: flex; align-items: center; gap: 8px; }
 .panel h3 .panel-action { margin-left: auto; }
+.secret-store-note {
+  margin: -4px 0 10px;
+  font-size: var(--font-small);
+}

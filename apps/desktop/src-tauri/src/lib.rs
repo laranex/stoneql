@@ -14,8 +14,10 @@ use execution::{
     list_unresolved_outcomes, submit_job,
 };
 pub use host_keys::{FileHostKeyStore, HostKeyStore, HostKeyStoreError, MemoryHostKeyStore};
-pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore};
-use secrets::{delete_secret, store_secret};
+pub use secrets::{DEFAULT_SERVICE, OsSecretStore, SecretError, SecretStore, UnlockError};
+use secrets::{
+    delete_secret, reset_secret_store, secret_store_status, store_secret, unlock_secret_store,
+};
 pub use sql_import::authorize_import_file;
 use sql_import::{pick_import_file, sql_import_status, start_sql_import};
 pub use sqlite_file::authorize_sqlite_file;
@@ -569,6 +571,9 @@ pub fn app_builder_with<R: Runtime>(
             forget_ssh_host_key,
             store_secret,
             delete_secret,
+            secret_store_status,
+            unlock_secret_store,
+            reset_secret_store,
             pick_export_file,
             start_export,
             export_status,
