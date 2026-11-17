@@ -80,11 +80,13 @@ import RawTextarea from './components/RawTextarea.vue';
 import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import LiveExport from './components/LiveExport.vue';
+import LiveDdlDialog from './components/LiveDdlDialog.vue';
+import { showCreateTableSql, columnDefinitions, dropColumnSql } from './services/liveDdl';
 import LiveSqlImport from './components/LiveSqlImport.vue';
 import { liveCsvImportPlan, MAX_IMPORT_BYTES } from './services/liveImport';
 import { gridResize as vGridResize } from './directives/gridResize';
 import { queryWidthKey } from './services/gridWidths';
-import { liveCatalogSupported, ddlStatements } from './services/liveSchema';
+import { liveCatalogSupported, ddlStatements, catalogRows } from './services/liveSchema';
 import { liveEditBlocker, liveEditableColumn, liveUpdateSql, liveInsertSql, liveDeleteSql, liveMutationOutcome, type LiveValue } from './services/liveMutations';
 import { validateValue, choiceDefinition, hasColumnDefault } from './services/valueValidation';
 import { connectionColors, environments, environmentLabel } from './services/connectionPreferences';
@@ -317,8 +319,11 @@ async function loadLiveCatalog(profile = store.activeId) {
   const ws = store.workspaces[profile];
   liveCatalogError.value[profile] = '';
   try {
+    // MySQL/MariaDB list every database the account can see; the session's one is loaded.
+    await store.loadLiveDatabases(profile);
     await store.loadLiveTables(profile);
-    if (ws && ws.scope === 'table' && !ws.databases[0]?.tables.some((t) => t.name === ws.table)) Object.assign(ws, { scope: 'database', table: '', view: 'SQL' });
+    const current = ws?.databases.find((d) => d.name === store.liveDatabase(profile));
+    if (ws && ws.scope === 'table' && !current?.tables.some((t) => t.name === ws.table)) Object.assign(ws, { scope: 'database', table: '', view: 'SQL' });
   } catch (error) {
     liveCatalogError.value[profile] = (error as Error).message;
   }
@@ -582,7 +587,10 @@ async function navigate(view: View) {
   if (view === 'Insert') prepareInsert();
 }
 async function openDatabaseContext(name?: string) {
-  if(isLive.value) { w.value.view='SQL';w.value.scope='database';return; }
+  if(isLive.value) {
+    if (name && !(await useLiveDatabase(name))) return;
+    w.value.view='SQL';w.value.scope='database';return;
+  }
   if (!(await discard())) return;
   if (name) {
     const database = w.value.databases.find(d=>d.name===name);
@@ -601,6 +609,8 @@ async function toggleDatabase(name: string) {
     return;
   }
   await openDatabaseContext(name);
+  // Live: a refused switch (for example an open transaction) leaves the list collapsed.
+  if (isLive.value && w.value.database !== name) return;
   if (!expanded.value.includes(name)) expanded.value.push(name);
 }
 async function openOverviewTable(database: string, name: string, view: View) {
@@ -615,9 +625,16 @@ const visibleTabs = computed(() => {
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
 });
 let tableChoice = 0;
+/** Live: makes `name` the session's database (Browse, SQL, edits, import and export use it). */
+async function useLiveDatabase(name: string): Promise<boolean> {
+  if (!isLive.value || store.liveDatabase(store.activeId) === name) return true;
+  try { await store.switchLiveDatabase(store.activeId, name); return true; }
+  catch (error) { notify((error as Error).message, 'error'); return false; }
+}
 async function chooseTable(db: string, name: string) {
   if (await discard()) {
     if (isLive.value) {
+      if (!(await useLiveDatabase(db))) return;
       // Only the latest choice applies; a slower earlier column load cannot open its table.
       const profile = store.activeId, ticket = ++tableChoice;
       try { await store.loadLiveColumns(profile, name); }
@@ -782,6 +799,66 @@ function askConfirm(request: { title: string; message: string; acceptLabel: stri
       cancel: () => resolve(false),
     };
   });
+}
+/** Live MySQL/MariaDB schema changes need a read-write session; the server enforces privileges. */
+const liveDdlAvailable = computed(() => isLive.value && liveReadWrite.value && (store.connection.engine === 'MySQL' || store.connection.engine === 'MariaDB'));
+/** Column changes apply to base tables (any table, with or without a primary key). */
+const liveStructureEditable = computed(() => liveDdlAvailable.value && !!table.value && (table.value.kind ?? 'table') === 'table');
+const liveDdl = ref<null | { mode: 'add-column' | 'edit-column' | 'create-database'; column?: string; definition?: string; error?: string }>(null);
+const liveDdlBusy = ref(false);
+const LIVE_DDL_IN_TRANSACTION = 'Commit or roll back the open transaction first: a schema change ends it.';
+/** The server's exact column definitions, from SHOW CREATE TABLE (run as a job). */
+async function liveColumnDefinitions(name: string) {
+  const job = await store.runLiveJob(store.activeId, showCreateTableSql(store.connection.engine, name));
+  if (job.outcome !== 'succeeded' || !job.resultSets[0]) throw new Error(describeJob(job, false).text);
+  const row = catalogRows(job.resultSets[0])[0] ?? {};
+  return columnDefinitions(String(row['Create Table'] ?? ''));
+}
+async function openLiveColumn(column?: Column) {
+  if (!table.value) return;
+  if (liveLease.value) return notify(LIVE_DDL_IN_TRANSACTION, 'error');
+  if (!column) { liveDdl.value = { mode: 'add-column' }; return; }
+  try {
+    const definition = (await liveColumnDefinitions(table.value.name)).get(column.name);
+    if (definition === undefined) throw new Error(`Column ${column.name} was not found in the table definition. Refresh and try again.`);
+    liveDdl.value = { mode: 'edit-column', column: column.name, definition };
+  } catch (error) { notify((error as Error).message, 'error'); }
+}
+function openCreateDatabase() {
+  if (liveLease.value) return notify(LIVE_DDL_IN_TRANSACTION, 'error');
+  liveDdl.value = { mode: 'create-database' };
+}
+async function dropLiveColumn(column: Column) {
+  if (!table.value) return;
+  const sql = dropColumnSql(store.connection.engine, table.value.name, column.name);
+  await applyLiveDdl(sql, true, `Drop column ${column.name} from ${table.value.name}? Its values are deleted on the server and cannot be restored from StoneQL.`);
+}
+/** Runs exactly the previewed statement; destructive or PROD changes are confirmed first. */
+async function applyLiveDdl(sql: string, destructive: boolean, warning?: string): Promise<boolean> {
+  const profile = store.activeId, creating = liveDdl.value?.mode === 'create-database';
+  const fail = (text: string) => { if (liveDdl.value) liveDdl.value.error = text; else notify(text, 'error'); return false; };
+  if (liveLease.value) return fail(LIVE_DDL_IN_TRANSACTION);
+  if ((destructive || store.connection.environment === 'Production') && !(await askConfirm({
+    title: destructive ? 'Apply a destructive schema change?' : 'Apply schema change?',
+    acceptLabel: 'Apply',
+    message: `${warning ?? (destructive ? 'Changing the column definition can convert or truncate stored values.' : 'This changes the schema on the server.')} SQL: ${sql}`,
+  }))) return false;
+  liveDdlBusy.value = true;
+  try {
+    const job = await store.runLiveJob(profile, sql);
+    if (job.outcome !== 'succeeded') {
+      const failed = job.statements.find((s) => s.failure);
+      return fail(failed?.failure?.denied
+        ? `The server denied this account the change (it needs the ${creating ? 'CREATE' : 'ALTER'} privilege). Nothing was changed.`
+        : describeJob(job, false).text);
+    }
+    liveDdl.value = null;
+    notify(creating ? 'Database created.' : 'Schema change applied.');
+    if (creating) await store.loadLiveDatabases(profile).catch(() => undefined);
+    else await refreshLiveMetadata(profile);
+    return true;
+  } catch (error) { return fail((error as Error).message); }
+  finally { liveDdlBusy.value = false; }
 }
 function cancelConfirmation() {
   confirmation.value?.cancel?.();
@@ -1535,6 +1612,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="tree-caption">
           <span>DATABASES</span><span>{{ w.databases.length }}</span>
+          <button v-if="liveDdlAvailable" type="button" class="icon-button" title="Create database" aria-label="Create database" @click="openCreateDatabase"><Plus :size="13" /></button>
         </div>
         <nav class="database-tree">
           <div v-for="db in treeDatabases" :key="db.name" class="database-group">
@@ -1543,10 +1621,10 @@ onBeforeUnmount(() => {
               type="button"
               class="database-row database-context-link"
               :aria-expanded="expanded.includes(db.name) || !!treeSearch"
-              :aria-label="`${db.name}, ${isLive && !liveCatalog ? 'tables not listed' : `${db.tables.length} tables`}`"
+              :aria-label="`${db.name}, ${isLive && !liveCatalog ? 'tables not listed' : isLive && db.name !== w.database && !db.tables.length ? 'open to list tables' : `${db.tables.length} tables`}`"
               @click="toggleDatabase(db.name)"
             >
-              <ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" aria-hidden="true" /><ChevronRight v-else :size="12" aria-hidden="true" /><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" aria-hidden="true" /><strong>{{ db.name }}</strong><span :title="isLive && !liveCatalog ? 'Schema discovery is not available for this engine yet' : ''">{{ isLive && !liveCatalog ? '—' : db.tables.length }}</span>
+              <ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" aria-hidden="true" /><ChevronRight v-else :size="12" aria-hidden="true" /><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" aria-hidden="true" /><strong>{{ db.name }}</strong><span :title="isLive && !liveCatalog ? 'Schema discovery is not available for this engine yet' : ''">{{ isLive && !liveCatalog ? '—' : isLive && db.name !== w.database && !db.tables.length ? '' : db.tables.length }}</span>
             </button>
             <div v-if="expanded.includes(db.name) || treeSearch" class="table-tree">
               <button
@@ -1564,7 +1642,7 @@ onBeforeUnmount(() => {
           <p v-if="isLive && !liveCatalog" class="tree-empty">Schema discovery is available for MySQL, MariaDB and PostgreSQL. Use SQL with known table names.</p>
           <p v-else-if="isLive && liveSession?.status !== 'connected'" class="tree-empty">Connect to list tables.</p>
           <p v-else-if="isLive && liveCatalogError[store.activeId]" class="tree-empty" role="alert">Tables could not be listed: {{ liveCatalogError[store.activeId] }}</p>
-          <p v-else-if="isLive && w.liveCatalogTruncated" class="tree-empty">Only the first {{ w.databases[0]?.tables.length }} tables are listed (native result limit).</p>
+          <p v-else-if="isLive && w.liveCatalogTruncated" class="tree-empty">Only the first {{ w.databases.find((d) => d.name === w.database)?.tables.length }} tables are listed (native result limit).</p>
         </nav>
         <div class="sidebar-bottom">
           <div class="connection-status">
@@ -1996,7 +2074,7 @@ onBeforeUnmount(() => {
           <template v-else-if="table && w.view === 'Structure'"
             ><div v-if="isMockView" class="panel"><div class="workspace-toolbar"><span>{{table.kind==='materialized-view'?'Materialized view':'View'}} · read-only mock snapshot</span><div class="row-actions"><button @click="objectManager?.openView(table)">Definition / Edit</button><button @click="refreshBrowse">{{table.kind==='materialized-view'?'Refresh materialized view (mock)':'Refresh snapshot (mock)'}}</button><button class="danger-text" @click="objectManager?.dropView(table)">Drop view</button></div></div><pre class="object-definition"><SqlText :text="table.definition || ''" :engine="store.connection.engine" /></pre><div v-if="viewError" class="notice error" role="alert">{{viewError}}</div></div><div class="workspace-toolbar">
               <span class="muted">{{ table.columns.length }} columns</span
-              ><button v-if="!isReadOnly && !isLive" class="button" @click="editColumn()"><Plus :size="13" /> Add column</button>
+              ><button v-if="(!isReadOnly && !isLive) || liveStructureEditable" class="button" @click="isLive ? openLiveColumn() : editColumn()"><Plus :size="13" /> Add column</button>
             </div>
             <div class="data-grid-wrap schema-grid-wrap">
               <table class="data-grid structure-grid">
@@ -2017,7 +2095,7 @@ onBeforeUnmount(() => {
                     <th>Null</th>
                     <th>Default</th>
                     <th>Extra</th>
-                    <th v-if="!isReadOnly && !isLive">Actions</th>
+                    <th v-if="(!isReadOnly && !isLive) || liveStructureEditable">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2033,10 +2111,10 @@ onBeforeUnmount(() => {
                       {{ c.defaultKind === 'null' ? 'NULL' : (c.default ?? 'None') }}
                     </td>
                     <td>{{ (c.autoIncrement) ? columnCap.autoLabel : '' }}</td>
-                    <td v-if="!isReadOnly && !isLive">
+                    <td v-if="(!isReadOnly && !isLive) || liveStructureEditable">
                       <div class="inline-actions">
-                        <button @click="editColumn(c)"><Pencil :size="12" />Change</button
-                        ><button class="delete-link" @click="dropColumn(c)">
+                        <button :aria-label="`Change column ${c.name}`" @click="isLive ? openLiveColumn(c) : editColumn(c)"><Pencil :size="12" />Change</button
+                        ><button class="delete-link" :aria-label="`Drop column ${c.name}`" @click="isLive ? dropLiveColumn(c) : dropColumn(c)">
                           <Trash2 :size="12" />Drop
                         </button>
                       </div>
@@ -3040,6 +3118,20 @@ onBeforeUnmount(() => {
         </form>
       </section>
     </div>
+    <LiveDdlDialog
+      v-if="liveDdl"
+      :key="liveDdl.mode + (liveDdl.column ?? '')"
+      :mode="liveDdl.mode"
+      :engine="store.connection.engine"
+      :table="table?.name"
+      :columns="table?.columns.map((c) => c.name)"
+      :column="liveDdl.column"
+      :definition="liveDdl.definition"
+      :busy="liveDdlBusy"
+      :error="liveDdl.error"
+      @close="liveDdl = null"
+      @apply="(sql, destructive) => applyLiveDdl(sql, destructive)"
+    />
     <div v-if="settings" class="modal-overlay" @mousedown.self="settings = false">
       <section
         class="modal settings-modal"

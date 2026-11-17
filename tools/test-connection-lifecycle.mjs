@@ -164,7 +164,11 @@ CREATE SQL SECURITY INVOKER VIEW trust_safe_view AS SELECT id,txt FROM raw_value
 CREATE SQL SECURITY DEFINER VIEW trust_lock_view AS SELECT GET_LOCK('stoneql_${marker}',0) AS acquired;
 CREATE USER 'stoneql_writer'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT, INSERT, UPDATE, DELETE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE USER 'stoneql_reader'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_reader'@'%';
-CREATE USER 'stoneql_plain'@'%' IDENTIFIED BY '${password}'; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_plain'@'%';`);
+CREATE USER 'stoneql_plain'@'%' IDENTIFIED BY '${password}'; GRANT SELECT ON stoneql_m001_fixture.* TO 'stoneql_plain'@'%';
+CREATE TABLE switch_marker(id INT PRIMARY KEY, label VARCHAR(20)); INSERT INTO switch_marker VALUES (1, 'default');
+CREATE DATABASE stoneql_switch_b; CREATE TABLE stoneql_switch_b.switch_marker(id INT PRIMARY KEY, label VARCHAR(20)); INSERT INTO stoneql_switch_b.switch_marker VALUES (1, 'other');
+GRANT SELECT, INSERT, DELETE ON stoneql_switch_b.* TO 'stoneql_writer'@'%';
+CREATE USER 'stoneql_admin'@'%' IDENTIFIED BY '${password}' REQUIRE SSL; GRANT ALL PRIVILEGES ON *.* TO 'stoneql_admin'@'%';`);
     if(executionEvaluation||importBench){
       writeFileSync(join(init,'003-execution.sql'),`GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, CREATE TEMPORARY TABLES, EXECUTE, CREATE ROUTINE, ALTER ROUTINE ON stoneql_m001_fixture.* TO 'stoneql_writer'@'%';
 CREATE DATABASE stoneql_export_whole; GRANT CREATE, DROP, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, DELETE ON stoneql_export_whole.* TO 'stoneql_writer'@'%';

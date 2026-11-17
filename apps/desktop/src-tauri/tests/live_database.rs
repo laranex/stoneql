@@ -131,6 +131,249 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         )
         .unwrap();
     };
+    // Switching databases: reads and jobs follow the switch on the same handle; an unknown
+    // database or one the account may not use is refused with a clear code and the session
+    // stays where it was; an open transaction blocks the switch.
+    {
+        let cell = |handle: &Value, sql: &str| {
+            invoke(
+                "read_only_query",
+                json!({"sessionId":session,"handle":handle,"sql":sql}),
+            )
+            .unwrap()["payload"]["rows"][0][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let switch = |handle: &Value, database: &str| {
+            invoke(
+                "switch_database",
+                json!({"sessionId":session,"handle":handle,"database":database}),
+            )
+        };
+        let mut writer_config = config.clone();
+        writer_config["username"] = json!("stoneql_writer");
+        writer_config["access"] = json!("read_write");
+        let writer = invoke("connect_direct", writer_config).unwrap()["payload"]["handle"].clone();
+        assert_eq!(
+            cell(&writer, "SELECT label FROM switch_marker WHERE id = 1"),
+            "default"
+        );
+        let switched = switch(&writer, "stoneql_switch_b").unwrap();
+        assert_eq!(switched["payload"]["database"], "stoneql_switch_b");
+        assert_eq!(cell(&writer, "SELECT DATABASE()"), "stoneql_switch_b");
+        assert_eq!(
+            cell(&writer, "SELECT label FROM switch_marker WHERE id = 1"),
+            "other"
+        );
+        let job = |sql: &str| {
+            let accepted = invoke(
+                "submit_job",
+                json!({"sessionId":session,"handle":writer,"sql":sql}),
+            )
+            .unwrap();
+            let id = accepted["payload"]["jobId"].clone();
+            loop {
+                let update = invoke(
+                    "fetch_job",
+                    json!({"sessionId":session,"jobId":id,"waitMs":1000}),
+                )
+                .unwrap()["payload"]
+                    .clone();
+                if update["done"] == json!(true) {
+                    return update;
+                }
+            }
+        };
+        assert_eq!(
+            job("INSERT INTO switch_marker VALUES (2, 'job')")["outcome"],
+            "succeeded"
+        );
+        assert_eq!(
+            cell(
+                &writer,
+                "SELECT COUNT(*) FROM stoneql_switch_b.switch_marker"
+            ),
+            "2"
+        );
+        assert_eq!(
+            job("DELETE FROM switch_marker WHERE id = 2")["outcome"],
+            "succeeded"
+        );
+        // Without global privileges the server answers 1044 for a missing database too, so
+        // the account cannot probe which databases exist.
+        assert_eq!(
+            switch(&writer, "stoneql_missing_db").unwrap_err()["code"],
+            "PERMISSION_DENIED"
+        );
+        assert_eq!(cell(&writer, "SELECT DATABASE()"), "stoneql_switch_b");
+        // The reader may not use stoneql_switch_b: denied, and it stays on its database.
+        assert_eq!(
+            switch(&first["handle"], "stoneql_switch_b").unwrap_err()["code"],
+            "PERMISSION_DENIED"
+        );
+        assert_eq!(
+            cell(&first["handle"], "SELECT DATABASE()"),
+            "stoneql_m001_fixture"
+        );
+        // An open transaction blocks the switch; after it ends the switch works.
+        let lease = invoke(
+            "begin_transaction",
+            json!({"sessionId":session,"handle":writer}),
+        )
+        .unwrap()["payload"]["leaseId"]
+            .clone();
+        assert_eq!(
+            switch(&writer, "stoneql_m001_fixture").unwrap_err()["code"],
+            "BUSY"
+        );
+        invoke(
+            "end_transaction",
+            json!({"sessionId":session,"leaseId":lease,"action":"rollback"}),
+        )
+        .unwrap();
+        assert_eq!(
+            switch(&writer, "stoneql_m001_fixture").unwrap()["payload"]["database"],
+            "stoneql_m001_fixture"
+        );
+
+        // Schema edits as the renderer builds them. The restricted writer (no ALTER/CREATE) is
+        // refused with `denied`; a privileged account creates a database and adds, renames,
+        // redefines and drops columns; restating a column's own SHOW CREATE TABLE definition
+        // changes nothing.
+        let run = |handle: &Value, sql: &str| {
+            let accepted = invoke(
+                "submit_job",
+                json!({"sessionId":session,"handle":handle,"sql":sql}),
+            )
+            .unwrap();
+            let id = accepted["payload"]["jobId"].clone();
+            let mut rows = Vec::new();
+            loop {
+                let update = invoke(
+                    "fetch_job",
+                    json!({"sessionId":session,"jobId":id,"waitMs":1000}),
+                )
+                .unwrap()["payload"]
+                    .clone();
+                if let Some(batch) = update["batch"].as_object() {
+                    rows.extend(batch["rows"].as_array().unwrap().iter().cloned());
+                }
+                if update["done"] == json!(true) {
+                    return (update, rows);
+                }
+            }
+        };
+        let text = |cell: &Value| match cell["kind"].as_str() {
+            Some("binary") => {
+                let hex = cell["hex"].as_str().unwrap();
+                String::from_utf8(
+                    (0..hex.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                        .collect(),
+                )
+                .unwrap()
+            }
+            _ => cell["text"].as_str().unwrap().to_owned(),
+        };
+        let mut admin_config = config.clone();
+        admin_config["username"] = json!("stoneql_admin");
+        admin_config["access"] = json!("read_write");
+        admin_config["database"] = json!("stoneql_switch_b");
+        let admin = invoke("connect_direct", admin_config).unwrap()["payload"]["handle"].clone();
+        let show = |handle: &Value| {
+            let (update, rows) = run(handle, "SHOW CREATE TABLE `ddl_probe`;");
+            assert_eq!(update["outcome"], "succeeded", "{update}");
+            text(&rows[0][1])
+        };
+        assert_eq!(run(&admin, "CREATE TABLE `ddl_probe` (`id` int NOT NULL AUTO_INCREMENT PRIMARY KEY, `label` varchar(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT 'x' COMMENT 'c;d', `changed` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP);").0["outcome"], "succeeded");
+        let before = show(&admin);
+        // Restricted: ALTER and CREATE DATABASE are refused as denied; nothing changes.
+        switch(&writer, "stoneql_switch_b").unwrap();
+        for sql in [
+            "ALTER TABLE `ddl_probe` ADD COLUMN `blocked` INT NULL;",
+            "CREATE DATABASE `stoneql_writer_db`;",
+        ] {
+            let (update, _) = run(&writer, sql);
+            assert_eq!(update["outcome"], "failed", "{sql}");
+            assert_eq!(
+                update["statements"][0]["failure"]["denied"], true,
+                "{sql}: {update}"
+            );
+        }
+        assert_eq!(show(&admin), before);
+        // Restating each column's exact definition (from SHOW CREATE TABLE) is a no-op.
+        let definition = |create: &str, column: &str| {
+            let prefix = format!("  `{column}` ");
+            create
+                .lines()
+                .find_map(|line| line.strip_prefix(&prefix))
+                .unwrap()
+                .trim_end_matches(',')
+                .to_owned()
+        };
+        for column in ["id", "label", "changed"] {
+            let sql = format!(
+                "ALTER TABLE `ddl_probe` CHANGE COLUMN `{column}` `{column}` {};",
+                definition(&before, column)
+            );
+            assert_eq!(run(&admin, &sql).0["outcome"], "succeeded", "{sql}");
+        }
+        assert_eq!(
+            show(&admin),
+            before,
+            "restated definitions changed the table"
+        );
+        // Add, rename (definition kept), redefine and drop.
+        assert_eq!(
+            run(
+                &admin,
+                "ALTER TABLE `ddl_probe` ADD COLUMN `note` VARCHAR(20) NULL AFTER `id`;"
+            )
+            .0["outcome"],
+            "succeeded"
+        );
+        assert_eq!(
+            run(
+                &admin,
+                "ALTER TABLE `ddl_probe` RENAME COLUMN `label` TO `title`;"
+            )
+            .0["outcome"],
+            "succeeded"
+        );
+        let renamed = show(&admin);
+        assert_eq!(definition(&renamed, "title"), definition(&before, "label"));
+        assert_eq!(
+            run(
+                &admin,
+                "ALTER TABLE `ddl_probe` CHANGE COLUMN `note` `note` VARCHAR(80) NULL;"
+            )
+            .0["outcome"],
+            "succeeded"
+        );
+        assert!(show(&admin).contains("`note` varchar(80)"));
+        assert_eq!(
+            run(&admin, "ALTER TABLE `ddl_probe` DROP COLUMN `note`;").0["outcome"],
+            "succeeded"
+        );
+        assert!(!show(&admin).contains("`note`"));
+        // Create database, then switch to it as the account that made it.
+        assert_eq!(
+            run(
+                &admin,
+                "CREATE DATABASE `stoneql_created_db` CHARACTER SET utf8mb4;"
+            )
+            .0["outcome"],
+            "succeeded"
+        );
+        assert_eq!(
+            switch(&admin, "stoneql_created_db").unwrap()["payload"]["database"],
+            "stoneql_created_db"
+        );
+        close(&admin);
+        close(&writer);
+    }
     // Remote with TLS off: refused before any network or secret work.
     let started = std::time::Instant::now();
     assert_eq!(

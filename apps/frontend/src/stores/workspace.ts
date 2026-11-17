@@ -1,8 +1,8 @@
-import { openLive, closeLive, queryLive, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd, listUnresolvedOutcomes, acknowledgeOutcome } from '../services/liveConnections';
+import { openLive, closeLive, queryLive, switchDatabase, liveStatus, runLiveJob, beginLiveTransaction, endLiveTransaction, describeTransactionEnd, listUnresolvedOutcomes, acknowledgeOutcome } from '../services/liveConnections';
 import {NativeOperationError, hostState, mockConnectionsAvailable} from '../services/nativeHost';
 import type {AccessModeDto, JournalProblemDto, LiveConnection, TransactionActionDto, TransactionEnd, UnresolvedOutcome} from '../../../../contracts/generated/v1';
 import { relations } from '../services/objectCapabilities';
-import { liveCatalogSupported, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery, liveIndexesSql, liveForeignKeysSql, toLiveIndexes, toLiveForeignKeys } from '../services/liveSchema';
+import { liveCatalogSupported, liveDatabasesSql, toDatabaseNames, liveTablesSql, liveColumnsSql, toLiveTables, toLiveColumns, labelledRows, liveBrowseQuery, liveIndexesSql, liveForeignKeysSql, toLiveIndexes, toLiveForeignKeys } from '../services/liveSchema';
 import { saveIndex as applyIndex, dropIndex as removeIndex, assertIndexDependencies } from '../services/indexes';
 import * as objectActions from '../services/databaseObjects';
 import type { TableIndex, Routine, Trigger, ScheduledEvent } from '../types/objects';
@@ -242,31 +242,77 @@ export const useWorkspace = defineStore('workspace', () => {
     return result;
   }
   /** Read-only catalog of the profile's database. Returns false when the engine has no live catalog yet. */
+  /** The database the live session uses: the profile's default until the user switches. */
+  function liveDatabase(id:string):string {
+    return liveSessions.value[id]?.info?.database || connections.value.find(c=>c.id===id)?.database || '';
+  }
+  /** The catalog entry of the session's current database (created on demand). */
+  function currentCatalog(id:string) {
+    const ws=workspaces.value[id]!, name=liveDatabase(id);
+    let entry=ws.databases.find(d=>d.name===name);
+    if(!entry){ entry={name,tables:[]}; ws.databases.push(entry); }
+    return entry;
+  }
+  /** MySQL/MariaDB: every database the account can see, keeping tables already loaded. */
+  async function loadLiveDatabases(id:string) {
+    const profile=connections.value.find(c=>c.id===id), ws=workspaces.value[id];
+    if(!profile||!ws||(profile.engine!=='MySQL'&&profile.engine!=='MariaDB'))return;
+    const names=toDatabaseNames(await executeLive(id,liveDatabasesSql(profile.engine)));
+    const current=liveDatabase(id), known=new Map(ws.databases.map(d=>[d.name,d]));
+    if(!names.includes(current))names.push(current);
+    ws.databases=names.map(name=>known.get(name)??{name,tables:[]});
+  }
   async function loadLiveTables(id:string) {
     const profile=connections.value.find(c=>c.id===id), ws=workspaces.value[id];
     if(!profile||!ws||!liveCatalogSupported(profile.engine))return false;
-    const result=await executeLive(id,liveTablesSql(profile.engine,profile.database));
-    const previous=new Map(ws.databases[0]?.tables.map(t=>[t.name,t])||[]);
-    ws.databases=[{name:profile.database,tables:toLiveTables(result).map(t=>previous.get(t.name)?.kind===t.kind?{...t,columns:previous.get(t.name)!.columns}:t)}];
-    ws.liveCatalogTruncated=!!result.truncated;
+    const database=liveDatabase(id);
+    const result=await executeLive(id,liveTablesSql(profile.engine,database));
+    // A switch while this was loading: the answer belongs to the database it was asked for.
+    const entry=ws.databases.find(d=>d.name===database) ?? (ws.databases.push({name:database,tables:[]}), ws.databases.at(-1)!);
+    const previous=new Map(entry.tables.map(t=>[t.name,t]));
+    entry.tables=toLiveTables(result).map(t=>previous.get(t.name)?.kind===t.kind?{...t,columns:previous.get(t.name)!.columns}:t);
+    if(liveDatabase(id)===database)ws.liveCatalogTruncated=!!result.truncated;
     return true;
   }
+  /**
+   * Reopens the live session on another database the account can use (same handle and
+   * access). Refused while a transaction is open; unsaved query tabs are kept.
+   */
+  async function switchLiveDatabase(id:string,database:string) {
+    const current=liveSessions.value[id];
+    if(current?.status!=='connected'||!current.info)throw new Error('Connect this live profile first.');
+    if(current.info.database===database)return;
+    if(current.lease)throw new Error('Commit or roll back the open transaction before switching databases.');
+    let switched;
+    try { switched=await switchDatabase(current.info.handle,database); }
+    catch(error){
+      // Without global privileges MySQL answers "access denied" for a missing database too.
+      if(error instanceof NativeOperationError&&error.code==='PERMISSION_DENIED')throw new Error(`The server refused ${database} for this account (no access, or it does not exist); you are still using ${current.info.database}.`);
+      throw error;
+    }
+    current.info={...current.info,database:switched.database};
+    const ws=workspaces.value[id]!;
+    Object.assign(ws,{database:switched.database,table:'',scope:'database',page:1,filter:''});
+    currentCatalog(id);
+    await loadLiveTables(id);
+  }
   async function loadLiveColumns(id:string,name:string) {
-    const profile=connections.value.find(c=>c.id===id)!, table=workspaces.value[id]?.databases[0]?.tables.find(t=>t.name===name);
+    const profile=connections.value.find(c=>c.id===id)!, table=currentCatalog(id).tables.find(t=>t.name===name);
     if(!table)throw new Error(`Table ${name} is no longer in the loaded catalog. Refresh the explorer.`);
-    table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.engine,profile.database,name)),profile.engine);
+    const database=liveDatabase(id);
+    table.columns=toLiveColumns(await executeLive(id,liveColumnsSql(profile.engine,database,name)),profile.engine);
     if(!table.columns.length)throw new Error(`No columns are visible for ${name}; it may have been dropped or your account lacks privileges.`);
     // Indexes and foreign keys are read-only catalog detail; a failure keeps the columns usable.
     try {
       table.live={
-        indexes:toLiveIndexes(await executeLive(id,liveIndexesSql(profile.engine,profile.database,name)),profile.engine),
-        foreignKeys:toLiveForeignKeys(await executeLive(id,liveForeignKeysSql(profile.engine,profile.database,name)),profile.engine),
+        indexes:toLiveIndexes(await executeLive(id,liveIndexesSql(profile.engine,database,name)),profile.engine),
+        foreignKeys:toLiveForeignKeys(await executeLive(id,liveForeignKeysSql(profile.engine,database,name)),profile.engine),
       };
     } catch(error) { table.live={indexes:[],foreignKeys:[],error:(error as Error).message}; }
   }
   /** One server-side page plus the matching total; both are plain read-only SELECTs. */
   async function browseLive(id:string) {
-    const ws=workspaces.value[id]!, table=ws.databases[0]?.tables.find(t=>t.name===ws.table);
+    const ws=workspaces.value[id]!, table=currentCatalog(id).tables.find(t=>t.name===ws.table);
     if(!table)throw new Error('Choose a table first.');
     const plan=liveBrowseQuery({engine:connections.value.find(c=>c.id===id)!.engine,table:table.name,columns:table.columns,filter:ws.filter,sort:ws.sort,descending:ws.descending,offset:(ws.page-1)*ws.pageSize,limit:ws.pageSize});
     const page=await executeLive(id,plan.sql);
@@ -474,6 +520,7 @@ export const useWorkspace = defineStore('workspace', () => {
   function dropObject(kind:'routines'|'triggers'|'events',name:string) {objectActions.dropDatabaseObject(objectDatabase(),kind,name,connection.value.engine);}
   return {
     liveSessions, connectLiveProfile, disconnectLiveProfile, executeLive, refreshLiveStatus, loadLiveTables, loadLiveColumns, browseLive,
+    liveDatabase, loadLiveDatabases, switchLiveDatabase,
     unresolvedOutcomes, unresolvedError, journalProblem, outcomeProfiles, refreshUnresolvedOutcomes, acknowledgeUnresolvedOutcome,
     runLiveJob: runLiveJobFor, beginLiveTransaction: beginLiveTransaction_, endLiveTransaction: endLiveTransaction_,
     saveTableIndex, dropTableIndex, createTable, saveView, previewView, dropView, saveRoutine, saveTrigger, saveEvent, dropObject,

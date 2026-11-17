@@ -31,7 +31,8 @@ test('live read-write CRUD sends exact single-row statements and reports conflic
       }
       else if (command === 'read_only_query') {
         const sql: string = p.sql;
-        if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], tables);
+        if (sql.includes('information_schema.SCHEMATA')) payload = result([col('name')], [['acme_store'], ['analytics']]);
+        else if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], tables);
         else if (sql.includes('information_schema.COLUMNS')) payload = result(['name', 'type', 'nullable', 'ckey', 'dflt', 'extra'].map((n) => col(n)), [['id', 'bigint(20) unsigned', 'NO', 'PRI', null, 'auto_increment'], ['name', 'varchar(40)', 'YES', '', null, '']]);
         else if (sql.includes('STATISTICS') || sql.includes('KEY_COLUMN_USAGE')) payload = result([col('name')], []);
         else if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [[String(rows.length)]]);

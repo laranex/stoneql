@@ -25,7 +25,8 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
         else if (command === 'read_only_query') {
           const sql: string = p.sql;
           w.liveSql.push(sql);
-          if (/information_schema\.tables/i.test(sql)) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE'], ['active_accounts', 'VIEW']]);
+          if (sql.includes('information_schema.SCHEMATA')) payload = result([col('name')], [['acme_store'], ['analytics']]);
+          else if (/information_schema\.tables/i.test(sql)) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE'], ['active_accounts', 'VIEW']]);
           else if (postgres && sql.includes('information_schema.columns')) payload = result(['name', 'type', 'udt', 'len', 'prec', 'scale', 'dprec', 'nullable', 'dflt', 'ident', 'pk'].map((n) => col(n)), [['id', 'bigint', 'int8', null, '64', '0', null, 'NO', null, 'YES', '1'], ['name', 'character varying', 'varchar', '40', null, null, null, 'YES', null, 'NO', '0']]);
           else if (sql.includes('information_schema.STATISTICS')) payload = result([col('name'), col('nonunique'), col('col'), col('type')], [['PRIMARY', '0', 'id', 'BTREE']]);
           else if (sql.includes('pg_catalog.pg_indexes')) payload = result([col('name'), col('definition')], [['accounts_pkey', 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)']]);

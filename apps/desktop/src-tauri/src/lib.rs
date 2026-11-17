@@ -6,7 +6,9 @@ mod sql_import;
 mod sqlite_file;
 mod ssh_transport;
 mod transfer;
-use database::{connect_direct, database_status, disconnect_database, read_only_query};
+use database::{
+    connect_direct, database_status, disconnect_database, read_only_query, switch_database,
+};
 use execution::{
     acknowledge_outcome, begin_transaction, cancel_job, end_transaction, fetch_job,
     list_unresolved_outcomes, submit_job,
@@ -535,6 +537,7 @@ pub fn app_builder_with<R: Runtime>(
             read_only_query,
             disconnect_database,
             database_status,
+            switch_database,
             pick_sqlite_file,
             connect_sqlite,
             ssh_host_key,

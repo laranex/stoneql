@@ -1296,6 +1296,17 @@ fn failure(error: &sqlx::Error) -> StatementFailure {
             ErrorKind::CheckViolation => Some(ConstraintKindDto::Check),
             _ => None,
         }),
+        denied: database.is_some_and(|error| {
+            error
+                .try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>()
+                .is_some_and(|error| {
+                    matches!(error.number(), 1044 | 1045 | 1142 | 1143 | 1227 | 1370)
+                })
+                || (error
+                    .try_downcast_ref::<sqlx::postgres::PgDatabaseError>()
+                    .is_some()
+                    && error.code().as_deref() == Some("42501"))
+        }),
         // SQLSTATE only; database message text can contain row values and stays private.
         sql_state: database
             .and_then(|error| error.code())
@@ -2518,6 +2529,7 @@ async fn run(mut plan: Plan) {
                 progress.statements[index].failure = Some(StatementFailure {
                     constraint: None,
                     sql_state: None,
+                    denied: false,
                 });
             });
             outcome = ExecutionOutcome::Failed;
@@ -2541,6 +2553,7 @@ async fn run(mut plan: Plan) {
                 report.failure = Some(StatementFailure {
                     constraint: None,
                     sql_state: None,
+                    denied: false,
                 });
             });
             outcome = ExecutionOutcome::Failed;

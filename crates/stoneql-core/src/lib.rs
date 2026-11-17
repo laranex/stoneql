@@ -97,6 +97,10 @@ pub enum ErrorCode {
     /// A plaintext (TLS off) MySQL/MariaDB connection was refused because the server requires
     /// secure transport or the account's first sign-in needs encryption. Never retried.
     EncryptedLoginRequired,
+    /// The server denied this account the requested database or action.
+    PermissionDenied,
+    /// The requested database does not exist on the server.
+    UnknownDatabase,
 }
 impl ErrorCode {
     pub const fn message(self) -> &'static str {
@@ -144,6 +148,8 @@ impl ErrorCode {
             Self::EncryptedLoginRequired => {
                 "The server requires an encrypted sign-in for this account; nothing was retried without TLS."
             }
+            Self::PermissionDenied => "The server denied this account access; nothing was changed.",
+            Self::UnknownDatabase => "That database does not exist on the server.",
             Self::Internal => "The operation could not be completed.",
         }
     }

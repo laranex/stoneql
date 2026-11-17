@@ -190,6 +190,8 @@ pub enum ErrorCodeDto {
     UnresolvedOutcomes,
     OutcomeJournalUnavailable,
     EncryptedLoginRequired,
+    PermissionDenied,
+    UnknownDatabase,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -232,6 +234,8 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::UnresolvedOutcomes => ErrorCodeDto::UnresolvedOutcomes,
             ErrorCode::OutcomeJournalUnavailable => ErrorCodeDto::OutcomeJournalUnavailable,
             ErrorCode::EncryptedLoginRequired => ErrorCodeDto::EncryptedLoginRequired,
+            ErrorCode::PermissionDenied => ErrorCodeDto::PermissionDenied,
+            ErrorCode::UnknownDatabase => ErrorCodeDto::UnknownDatabase,
             ErrorCode::Internal => ErrorCodeDto::Internal,
         };
         let outcome = match error.outcome {
@@ -640,6 +644,19 @@ pub struct LiveConnection {
     pub expires_after_seconds: u32,
     pub access: AccessModeDto,
 }
+/// Reopens a MySQL/MariaDB handle's session on another database (same handle and access).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchDatabaseRequest {
+    pub session_id: String,
+    pub handle: String,
+    pub database: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DatabaseSwitched {
+    pub database: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionHandleRequest {
@@ -778,6 +795,10 @@ pub enum ConstraintKindDto {
 pub struct StatementFailure {
     pub constraint: Option<ConstraintKindDto>,
     pub sql_state: Option<String>,
+    // The server refused for lack of privileges (MySQL 1044/1045/1142/1143/1227/1370,
+    // PostgreSQL 42501). SQLSTATE 42000 alone cannot tell this from a syntax error.
+    #[serde(default)]
+    pub denied: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1075,6 +1096,8 @@ pub fn typescript() -> String {
         ExportFileGrant::decl(&config),
         StartExportRequest::decl(&config),
         ExportOptionsDto::decl(&config),
+        SwitchDatabaseRequest::decl(&config),
+        DatabaseSwitched::decl(&config),
         InsertVerbDto::decl(&config),
         TransferAccepted::decl(&config),
         TransferRequest::decl(&config),

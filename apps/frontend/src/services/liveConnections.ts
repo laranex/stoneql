@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, ImportFileGrant, SqlImportAccepted, SqlImportStatus, TransferAccepted, TransferStatus, TransferFormatDto, ExportOptionsDto, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, ImportFileGrant, SqlImportAccepted, SqlImportStatus, TransferAccepted, TransferStatus, TransferFormatDto, ExportOptionsDto, DatabaseSwitched, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { hostState, nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -311,6 +311,9 @@ export const exportStatus = (transferId: string) => nativeDatabase<TransferStatu
 export const cancelExport = (transferId: string) => nativeDatabase<TransferStatus>('cancel_export', { transferId });
 /** M007 d5 SQL import (MySQL/MariaDB read-write sessions): native open grant, then the host reads,
  *  validates the whole file and runs it from that snapshot; cancel with `cancelLiveJob`. */
+/** Reopens the handle's session on another database (MySQL/MariaDB); same handle and access. */
+export const switchDatabase = (handle: string, database: string) =>
+  nativeDatabase<DatabaseSwitched>('switch_database', { handle, database });
 export const pickImportFile = () => nativeDatabase<ImportFileGrant>('pick_import_file', {});
 export const startSqlImport = (handle: string, grant: string) => nativeDatabase<SqlImportAccepted>('start_sql_import', { handle, grant });
 export const sqlImportStatus = (importId: string) => nativeDatabase<SqlImportStatus>('sql_import_status', { importId });

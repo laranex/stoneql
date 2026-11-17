@@ -87,6 +87,8 @@ const nativeMessages: Record<string,string> = {
   SSH_AGENT_UNAVAILABLE: 'The SSH agent is unavailable. Start an agent with your key loaded, or choose another method.',
   SECRET_UNAVAILABLE: 'The saved credential is unavailable or belongs to a different target. Enter it again.',
   BUSY: 'This connection is busy with another statement or an open transaction. Nothing was queued or sent.',
+  PERMISSION_DENIED: 'The server denied this account access; nothing was changed.',
+  UNKNOWN_DATABASE: 'That database does not exist on the server.',
   CONFLICT: 'A statement in this transaction failed; only rollback is possible.',
   UNRESOLVED_OUTCOMES: 'Nothing was sent: acknowledge the unknown outcomes listed first. The server may or may not have applied them.',
   ENCRYPTED_LOGIN_REQUIRED: 'The server requires an encrypted sign-in for this account. Turn on Use TLS with a trusted certificate, or (MySQL caching_sha2_password) sign in once with the mysql client since the server last started, then try again. Nothing was retried without TLS.',
@@ -101,7 +103,7 @@ const hostMessages = new Set(['UNSUPPORTED_SQL', 'CONFLICT', 'UNRESOLVED_OUTCOME
 // start_sql_import reads and validates the whole file before it answers (Proposed bound; see the
 // M007 import benchmark).
 export const nativeWaitMs: Partial<Record<NativeDatabaseCommand, number>> = { end_transaction: 20_000, disconnect_database: 20_000, start_sql_import: 120_000 };
-export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome'|'pick_import_file'|'start_sql_import'|'sql_import_status';
+export type NativeDatabaseCommand = 'connect_direct'|'connect_sqlite'|'pick_sqlite_file'|'read_only_query'|'disconnect_database'|'database_status'|'switch_database'|'ssh_host_key'|'ssh_host_key_status'|'trust_ssh_host_key'|'forget_ssh_host_key'|'pick_ssh_key_file'|'cancel_connect'|'store_secret'|'delete_secret'|'pick_export_file'|'start_export'|'export_status'|'cancel_export'|'submit_job'|'fetch_job'|'cancel_job'|'begin_transaction'|'end_transaction'|'list_unresolved_outcomes'|'acknowledge_outcome'|'pick_import_file'|'start_sql_import'|'sql_import_status';
 /** Proposed (M005 T2): above the native 60 s secret deadline, so the host answers first. */
 export const SECRET_CONNECT_WAIT_MS = 75_000;
 /** True when connecting resolves a saved reference natively (a Keychain prompt may appear). */

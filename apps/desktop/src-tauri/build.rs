@@ -8,6 +8,7 @@ fn main() {
             "read_only_query",
             "disconnect_database",
             "database_status",
+            "switch_database",
             "pick_sqlite_file",
             "connect_sqlite",
             "ssh_host_key",

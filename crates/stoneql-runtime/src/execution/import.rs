@@ -406,6 +406,7 @@ async fn run_import(mut plan: ImportPlan) {
             let failed = at(Some(StatementFailure {
                 constraint: None,
                 sql_state: None,
+                denied: false,
             }));
             update(&job, |import| import.failed = Some(failed));
             outcome = ExecutionOutcome::Failed;

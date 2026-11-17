@@ -22,7 +22,11 @@ Browsers show and report every line break in a text box as LF, so StoneQL rebuil
 
 ## Structure and database objects
 
-In the desktop app, Table → Structure shows a live table's columns, indexes and foreign keys exactly as the server's catalog reports them; it is read-only for now. In the browser demo you can also manage columns and indexes, and database-level navigation exposes views, routines, triggers and events; engine capabilities determine available operations. See [database object management](../database-objects.md) for the demo's precise behavior and limitations.
+In the desktop app, Table → Structure shows a live table's columns, indexes and foreign keys exactly as the server's catalog reports them. On a read-write MySQL or MariaDB connection you can **Add column**, and use **Change** (rename or edit the definition) and **Drop** on any column of a base table. Change starts from the server's own column definition (`SHOW CREATE TABLE`), so collation, comment, `ON UPDATE` and other attributes are kept unless you edit them; a rename alone uses `RENAME COLUMN`. Every change shows the exact SQL before **Apply**; dropping a column or changing a definition asks for confirmation (and PROD connections always confirm). The server enforces privileges: an account without `ALTER` is refused and nothing changes. Schema changes are refused while a transaction is open, because the server would commit it. In the browser demo you can also manage columns and indexes, and database-level navigation exposes views, routines, triggers and events; engine capabilities determine available operations. See [database object management](../database-objects.md) for the demo's precise behavior and limitations.
+
+## Databases in the Explorer
+
+For MySQL and MariaDB the Explorer lists every database the account can see; the connection's default database is open first. Opening another database (or one of its tables) switches the session to it on the same connection, so Browse, SQL, edits, import and export use it; unsaved query tabs are kept. A switch is refused while a transaction is open. If the server refuses a database (no access, or it does not exist), StoneQL says so and stays on the current one. On a read-write connection, the **+** next to DATABASES creates a database (name, optional character set and collation), with the SQL shown first.
 
 ## Not yet available in the desktop app
 
@@ -30,10 +34,9 @@ These features are hidden for live connections rather than simulated:
 
 - the Search tab and bulk Copy of selected rows;
 - table Operations (rename, copy, truncate, drop);
-- column and index changes in Structure (being worked on next);
+- index changes in Structure, and column changes on PostgreSQL;
 - database objects: managing views, routines, triggers and events;
 - the database-level Structure overview;
-- switching between databases on a server (the Explorer shows the connection's default database);
 - CSV import at database level, and SQL import for PostgreSQL;
 - exporting views, routines, triggers and events.
 

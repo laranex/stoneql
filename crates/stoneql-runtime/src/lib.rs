@@ -144,6 +144,12 @@ pub enum LifecycleError {
     /// first sign-in needs an encrypted connection (`caching_sha2_password` full authentication,
     /// which this build performs only over TLS).
     EncryptedLoginRequired,
+    /// The handle is running a job or holds a transaction; nothing was changed.
+    Busy,
+    /// The server denied this account access to the requested database (MySQL 1044).
+    DatabaseAccessDenied,
+    /// The requested database does not exist (MySQL 1049).
+    UnknownDatabase,
 }
 impl fmt::Display for LifecycleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -163,6 +169,9 @@ impl fmt::Display for LifecycleError {
             Self::EncryptedLoginRequired => {
                 "The server requires an encrypted sign-in for this account; use TLS."
             }
+            Self::Busy => "The connection is busy; finish the running work or transaction first.",
+            Self::DatabaseAccessDenied => "The server denied this account access to that database.",
+            Self::UnknownDatabase => "That database does not exist on the server.",
         })
     }
 }
@@ -781,6 +790,89 @@ impl Connections {
     }
     pub fn is_connected(&self, owner: OwnerId, id: ConnectionId) -> bool {
         self.owned_pool(owner, id).is_some()
+    }
+    /// Reopens a MySQL/MariaDB handle's session on another database, keeping the handle, its
+    /// access, credentials and SSH tunnel. Refused while the handle runs a job or holds a
+    /// transaction. The new session is opened and verified before it replaces the old one, so
+    /// a denied or failed switch leaves the handle exactly as it was. Returns the database the
+    /// server reports as current.
+    pub async fn switch_database(
+        &self,
+        owner: OwnerId,
+        id: ConnectionId,
+        database: &str,
+    ) -> Result<String, LifecycleError> {
+        if database.is_empty() || database.len() > 64 || database.chars().any(char::is_control) {
+            return Err(LifecycleError::InvalidConfiguration);
+        }
+        let (pool, work, access) = {
+            let entries = self.0.entries.lock().expect("connection registry lock");
+            let entry = entries
+                .get(&id)
+                .filter(|entry| entry.usable(owner))
+                .ok_or(LifecycleError::Forbidden)?;
+            let EnginePool::MySql(pool) = &entry.pool else {
+                return Err(LifecycleError::Unsupported);
+            };
+            (pool.clone(), entry.work.clone(), entry.access)
+        };
+        // Jobs and transactions hold the work permit for their whole run.
+        let _permit = match access {
+            Access::ReadWrite => Some(work.try_acquire_owned().map_err(|_| LifecycleError::Busy)?),
+            Access::ReadOnly => None,
+        };
+        let options = (*pool.connect_options()).clone().database(database);
+        let deadline = self.0.deadline;
+        let opened = tokio::time::timeout(
+            deadline,
+            sqlx::mysql::MySqlPoolOptions::new()
+                .max_connections(1)
+                .min_connections(0)
+                .acquire_timeout(deadline)
+                .connect_with(options),
+        )
+        .await
+        .map_err(|_| LifecycleError::Timeout)?
+        .map_err(|error| {
+            match error
+                .as_database_error()
+                .and_then(|error| error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
+                .map(|error| error.number())
+            {
+                Some(1044) => LifecycleError::DatabaseAccessDenied,
+                Some(1049) => LifecycleError::UnknownDatabase,
+                _ => connect_error(error),
+            }
+        })?;
+        let current = tokio::time::timeout(
+            deadline,
+            sqlx::query_scalar::<_, Option<String>>("SELECT DATABASE()").fetch_one(&opened),
+        )
+        .await;
+        let current = match current {
+            Ok(Ok(Some(current))) if current == database => current,
+            _ => {
+                opened.close().await;
+                return Err(LifecycleError::Unavailable);
+            }
+        };
+        let swapped = {
+            let mut entries = self.0.entries.lock().expect("connection registry lock");
+            match entries.get_mut(&id).filter(|entry| entry.usable(owner)) {
+                Some(entry) => Ok(std::mem::replace(
+                    &mut entry.pool,
+                    EnginePool::MySql(opened.clone()),
+                )),
+                None => Err(()),
+            }
+        };
+        let Ok(old) = swapped else {
+            opened.close().await;
+            return Err(LifecycleError::Forbidden);
+        };
+        // In-flight reads finish on the old session; it closes once they return.
+        tokio::spawn(async move { old.close().await });
+        Ok(current)
     }
     pub async fn disconnect(&self, owner: OwnerId, id: ConnectionId) -> Result<(), LifecycleError> {
         // The handle is removed first, so a racing submit/begin sees it gone and refuses;

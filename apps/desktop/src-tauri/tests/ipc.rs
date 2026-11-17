@@ -196,6 +196,7 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
         "read_only_query",
         "disconnect_database",
         "database_status",
+        "switch_database",
         "pick_sqlite_file",
         "connect_sqlite",
     ] {
@@ -214,6 +215,19 @@ fn database_commands_enforce_session_acl_engine_and_secret_boundaries_before_net
     .unwrap_err();
     assert_eq!(error["code"], "FORBIDDEN");
     assert!(!error.to_string().contains("synthetic-secret"));
+    // Switching databases: a forged session, then an unknown handle, are refused before I/O.
+    let switch = |session: &str| {
+        invoke(
+            &main,
+            "switch_database",
+            json!({"version":1,"requestId":"switch","payload":{"sessionId":session,"handle":"00000000-0000-4000-8000-000000000000","database":"other"}}),
+            "tauri://localhost",
+        )
+        .unwrap_err()["code"]
+            .clone()
+    };
+    assert_eq!(switch("forged"), "FORBIDDEN");
+    assert_eq!(switch(&session), "FORBIDDEN");
     payload["payload"]["sessionId"] = json!(session);
     payload["payload"]["engine"] = json!("sqlite");
     assert_eq!(
@@ -559,7 +573,7 @@ fn every_command_refuses_foreign_windows_origins_versions_and_unknown_fields() {
     let other = window(&app, "auxiliary");
     let session = bootstrap(&main).payload.session_id;
     let commands = registered_commands();
-    assert_eq!(commands.len(), 31, "{commands:?}");
+    assert_eq!(commands.len(), 32, "{commands:?}");
     for command in &commands {
         let payload = json!({"version":1,"requestId":"acl","payload":{"sessionId":session}});
         assert!(

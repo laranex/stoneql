@@ -6,8 +6,9 @@ use super::{
 use std::{sync::atomic::Ordering, time::Duration};
 use stoneql_contracts::v1::AccessModeDto;
 use stoneql_contracts::v1::{
-    ConnectionHandleRequest, DirectConnectionRequest, EngineDto, Envelope, ErrorDto,
-    LiveConnection, LiveConnectionStatus, LiveQueryRequest, ProtocolVersion, ResultSet,
+    ConnectionHandleRequest, DatabaseSwitched, DirectConnectionRequest, EngineDto, Envelope,
+    ErrorDto, LiveConnection, LiveConnectionStatus, LiveQueryRequest, ProtocolVersion, ResultSet,
+    SwitchDatabaseRequest,
 };
 use stoneql_core::{CoreError, Engine, ErrorCode, Outcome};
 use stoneql_runtime::{Access, ConnectionId, DirectServer, LifecycleError, QueryLimits, ReadError};
@@ -76,6 +77,9 @@ pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
         LifecycleError::Unsupported => ErrorCode::UnsupportedCapability,
         LifecycleError::Cancelled => ErrorCode::Cancelled,
         LifecycleError::EncryptedLoginRequired => ErrorCode::EncryptedLoginRequired,
+        LifecycleError::Busy => ErrorCode::Busy,
+        LifecycleError::DatabaseAccessDenied => ErrorCode::PermissionDenied,
+        LifecycleError::UnknownDatabase => ErrorCode::UnknownDatabase,
     })
     .into()
 }
@@ -317,6 +321,29 @@ pub async fn disconnect_database<R: Runtime>(
         version: ProtocolVersion,
         request_id: request.request_id,
         payload: LiveConnectionStatus { connected: false },
+    })
+}
+/// Switches a MySQL/MariaDB handle to another database the account can use. The previous
+/// session stays in place unless the new one opens and verifies.
+#[tauri::command]
+pub async fn switch_database<R: Runtime>(
+    window: WebviewWindow<R>,
+    session: State<'_, NativeSession>,
+    message: String,
+) -> Result<Envelope<DatabaseSwitched>, ErrorDto> {
+    let request: Envelope<SwitchDatabaseRequest> = decode(&message)?;
+    authorize(&window, &session, &request.payload.session_id)?;
+    let _slot = admit(&session)?;
+    let handle = ConnectionId::parse(&request.payload.handle).map_err(lifecycle)?;
+    let database = session
+        .connections
+        .switch_database(session.owner, handle, &request.payload.database)
+        .await
+        .map_err(lifecycle)?;
+    Ok(Envelope {
+        version: ProtocolVersion,
+        request_id: request.request_id,
+        payload: DatabaseSwitched { database },
     })
 }
 #[tauri::command]
