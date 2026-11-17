@@ -1,0 +1,24 @@
+#!/bin/sh
+# Runs one remote-mode fixture harness, as the `stoneql` account (Docker access), from a clean
+# checkout of the requested commit of the public repository. One run at a time.
+set -eu
+mode=$1 commit=$2
+printf '%s' "$commit" | grep -Eqx '[0-9a-f]{40}' || { echo "invalid commit" >&2; exit 2; }
+case "$mode" in
+  native) harness="tools/test-connection-lifecycle.mjs --native-ipc --remote" ;;
+  postgres) harness="tools/test-postgres-fixture.mjs --remote" ;;
+  *) echo "invalid mode" >&2; exit 2 ;;
+esac
+export PATH="$HOME/.local/opt/node/bin:$PATH"
+work="$HOME/ci-fixture"
+mkdir -p "$work"
+exec 9>"$work/lock"
+flock -w 1800 9
+rm -rf "$work/src"
+git init -q "$work/src"
+git -C "$work/src" fetch -q --depth 1 https://github.com/stoneAce/stoneql.git "$commit" >&2
+git -C "$work/src" -c advice.detachedHead=false checkout -q FETCH_HEAD
+cd "$work/src"
+# Word splitting of $harness is intended (fixed, validated arguments).
+# shellcheck disable=SC2086
+exec node $harness

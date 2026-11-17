@@ -516,6 +516,10 @@ async fn journal_restart(
             .scalar("SELECT COUNT(*) FROM exec_item WHERE id = 9002".into())
             .await?;
         restarted.acknowledge_outcome(next, OutcomeId::parse(&lease.opaque())?)?;
+        // Unix permission bits; the harness and the journal it checks run on Unix only.
+        #[cfg(not(unix))]
+        let modes = (0o700_u32, 0o600_u32);
+        #[cfg(unix)]
         let modes = {
             use std::os::unix::fs::MetadataExt;
             (

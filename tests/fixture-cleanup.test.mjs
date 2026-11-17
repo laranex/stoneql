@@ -12,7 +12,9 @@ const cases = [
   {script: 'test-connection-lifecycle.mjs', stage: 'remote'},
   {script: 'run-driver-spikes.mjs', stage: 'remote'},
 ];
-for (const {script,stage} of cases) test(`${script}: ${stage} failure removes private material and scopes Docker cleanup`, () => {
+// The Docker fixtures and these executable shims (shebang files on a `:`-separated PATH) are POSIX-only.
+const posixOnly = process.platform === 'win32' && 'Docker fixtures and their command shims are POSIX-only';
+for (const {script,stage} of cases) test(`${script}: ${stage} failure removes private material and scopes Docker cleanup`, {skip: posixOnly}, () => {
   const temp = mkdtempSync(join(tmpdir(), 'stoneql-cleanup-regression-'));
   const scratch = join(temp, 'scratch');
   const workspace = join(temp, 'workspace');
@@ -22,7 +24,7 @@ for (const {script,stage} of cases) test(`${script}: ${stage} failure removes pr
   try {
     copyFileSync(resolve(import.meta.dirname,'../Cargo.lock'),join(workspace,'Cargo.lock'));
     // Run exact source copies so synthetic failure tests cannot overwrite real fixture evidence.
-    for (const name of [script, 'fixture-environment.mjs', 'resource-report.mjs']) copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
+    for (const name of [script, 'fixture-environment.mjs', 'resource-report.mjs', 'remote-fixture.mjs']) copyFileSync(resolve(import.meta.dirname,'../tools',name),join(workspace,'tools',name));
     for (const command of ['docker', 'cargo', 'rustc', 'openssl']) {
       writeFileSync(join(temp, command), `#!${process.execPath}
 import {appendFileSync,writeFileSync} from 'node:fs';

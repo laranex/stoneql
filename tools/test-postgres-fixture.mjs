@@ -8,13 +8,16 @@ import { tmpdir, arch, release, cpus, totalmem } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 import { parseMaximumRss } from './resource-report.mjs';
+import { runRemotely, endRemote } from './remote-fixture.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 // `--execution` runs the M006 read-write harness (examples/execution.rs) instead of IPC checks.
 const executionEvaluation = process.argv[2] === '--execution';
 // `--resource-profile` runs the shared 100,000-row resource profile (examples/resources.rs).
 const resourceEvaluation = process.argv[2] === '--resource-profile';
-if (process.argv.length > (executionEvaluation || resourceEvaluation ? 3 : 2)) throw Error('Unknown fixture option');
+// `--remote`: the native test binary runs on another machine (tools/remote-fixture.mjs).
+const remote = process.argv[2] === '--remote';
+if (process.argv.length > (executionEvaluation || resourceEvaluation || remote ? 3 : 2)) throw Error('Unknown fixture option');
 if (resourceEvaluation && !['darwin', 'linux'].includes(process.platform)) throw Error('Resource profiling requires macOS or Linux');
 let binary;
 function run(command, args, env = base) {
@@ -34,6 +37,8 @@ if (executionEvaluation || resourceEvaluation) {
   const example = executionEvaluation ? 'execution' : 'resources';
   run('cargo', ['build', '--locked', '-p', 'stoneql-runtime', '--example', example]);
   binary = resolve(root, `target/debug/examples/${example}`);
+} else if (remote) {
+  binary = 'remote';
 } else {
   const artifacts = run('cargo', ['test', '--locked', '-p', 'stoneql-desktop', '--features', 'custom-protocol', '--test', 'live_postgres', '--no-run', '--message-format=json']);
   binary = artifacts.split('\n').map(line => JSON.parse(line)).find(message => message.reason === 'compiler-artifact' && message.target.name === 'live_postgres' && message.executable)?.executable;
@@ -188,7 +193,7 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
     const exports = join(temp, 'exports');
     mkdirSync(exports);
     env.STONEQL_EXPORT_DIR = exports;
-    const result = run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
+    const result = remote ? await runRemotely({ ...env, STONEQL_EXPORT_DIR: exports }, 'postgresql') : run(binary, ['--ignored', '--exact', 'postgres_commands_use_owned_tls_fixture', '--nocapture'], env);
     const report = JSON.parse(result.split('\n').find(line => line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null');
     if (!report) throw Error('Fixture report missing');
     report.image = image;
@@ -237,3 +242,4 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
     }
   }
 }
+if (remote) endRemote();

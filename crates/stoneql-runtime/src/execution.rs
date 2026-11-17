@@ -2734,7 +2734,8 @@ mod import;
 mod journal;
 pub use import::{ImportError, ImportRefusal, ImportRefusalReason};
 // The execution suite runs against SQLite fixture files (A5: `sqlite` is a default feature).
-#[cfg(all(test, feature = "sqlite"))]
+// The SSH fixture talks to the Unix-socket tunnel endpoint.
+#[cfg(all(test, feature = "sqlite", unix))]
 mod ssh_fixture;
 #[cfg(all(test, feature = "sqlite"))]
 mod tests;

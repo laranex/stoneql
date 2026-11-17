@@ -6,6 +6,7 @@ import { resolve, join } from 'node:path';
 import { parseMaximumRss } from './resource-report.mjs';
 import { cpus, totalmem, release, arch } from 'node:os';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
+import { runRemotely, endRemote } from './remote-fixture.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
@@ -17,9 +18,12 @@ const executionEvaluation = process.argv.slice(2).includes('--execution');
 // M007 SQL import benchmark (examples/import_bench.rs, release build): one case per process
 // under /usr/bin/time for peak RSS; results feed the A20 limit sign-off.
 const importBench = process.argv.slice(2).includes('--import-bench');
+// `--native-ipc --remote`: the native test binary runs on another machine (tools/remote-fixture.mjs).
+const remote = process.argv.slice(2).includes('--remote');
+if(remote&&!nativeEvaluation)throw Error('--remote requires --native-ipc');
 if([packetEvaluation,nativeEvaluation,resourceEvaluation,executionEvaluation,importBench].filter(Boolean).length>1)throw Error('Choose a single fixture mode');
 let nativeBinary;
-if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile','--execution','--import-bench'].includes(argument))) throw Error('Unknown fixture option');
+if (process.argv.slice(2).some(argument => !['--packet-limit','--native-ipc','--resource-profile','--execution','--import-bench','--remote'].includes(argument))) throw Error('Unknown fixture option');
 function run(command, args, env = base) {
   // The execution harness waits for a real lease idle expiry and 100 cancel/fault cycles.
   const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: executionEvaluation ? 1_800_000 : 240_000 });
@@ -39,6 +43,8 @@ if(importBench){
   run('cargo',['build','--locked','-p','stoneql-runtime','--example','resources']);
 } else if(executionEvaluation){
   run('cargo',['build','--locked','-p','stoneql-runtime','--example','execution']);
+} else if(remote){
+  // The native test binary is built and run by the remote client.
 } else if(nativeEvaluation){
   const artifacts=run('cargo',['test','--locked','-p','stoneql-desktop','--features','custom-protocol','--test','live_database','--no-run','--message-format=json']);
   nativeBinary=artifacts.split('\n').map(line=>JSON.parse(line)).find(message=>message.reason==='compiler-artifact'&&message.target.name==='live_database'&&message.executable)?.executable;
@@ -233,7 +239,7 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     const binary = executionEvaluation ? 'target/debug/examples/execution' : resourceEvaluation ? 'target/debug/examples/resources' : nativeEvaluation ? nativeBinary : packetEvaluation ? 'target/receive-limit/debug/examples/live_packet_limits' : 'target/debug/examples/lifecycle';
     const measured = resourceEvaluation ? spawnSync('/usr/bin/time',[process.platform==='darwin'?'-l':'-v',resolve(root,binary)],{cwd:root,env,encoding:'utf8',timeout:240000}) : null;
     if(measured && (measured.status!==0||measured.error))throw Error('Resource fixture execution failed; credentials and raw errors withheld');
-    const result = measured ? measured.stdout.trim() : run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
+    const result = measured ? measured.stdout.trim() : remote ? await runRemotely(env, engine) : run(resolve(root, binary), nativeEvaluation ? ['--ignored','--exact','actual_database_commands_use_owned_tls_fixtures','--nocapture'] : [], env);
     const report = JSON.parse(nativeEvaluation ? result.split('\n').find(line=>line.startsWith('STONEQL_NATIVE_RESULT '))?.slice('STONEQL_NATIVE_RESULT '.length) || 'null' : result);
     if(!report)throw Error('Fixture report missing');
     if(measured){report.processMaxRssBytes=parseMaximumRss(measured.stderr,process.platform);report.machine={platform:process.platform,arch:arch(),osRelease:release(),cpu:cpus()[0]?.model,logicalCpus:cpus().length,totalMemoryBytes:totalmem()};}
@@ -302,3 +308,4 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     }
   }
 }
+if (remote) endRemote();

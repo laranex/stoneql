@@ -29,10 +29,20 @@
 //! Journal changes are applied in memory only after they are durable, except the removal of
 //! work whose outcome is now known (`conclude`), which completes with the next successful
 //! write.
+//!
+//! Windows has its own store (`journal/windows.rs`) with documented, weaker guarantees.
+// Only the Unix and Windows stores read and write the format; elsewhere the store is a
+// fail-closed stub, so the format helpers are unused there.
+#![cfg_attr(not(any(unix, windows)), allow(dead_code))]
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, windows))]
 use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
+    fs,
+    io::{Read, Write},
+};
+use std::{
+    fs::File,
+    io,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -43,7 +53,7 @@ use uuid::Uuid;
 
 pub(crate) const FILE: &str = "unknown-outcomes.journal";
 const TEMP: &str = "unknown-outcomes.journal.tmp";
-const LOCK: &str = "unknown-outcomes.lock";
+pub(super) const LOCK: &str = "unknown-outcomes.lock";
 const FORMAT: &str = "stoneql-unknown-outcomes";
 const VERSION: u64 = 1;
 /// Far above any legitimate journal (bounded by the unresolved cap); larger is damage.
@@ -368,9 +378,14 @@ struct Store {
     /// the link still names this inode).
     #[cfg(unix)]
     read: Option<(u64, u64)>,
+    #[cfg(windows)]
+    platform: windows::Platform,
     #[cfg(test)]
     fault: Option<Fault>,
 }
+
+#[cfg(windows)]
+mod windows;
 
 #[cfg(unix)]
 mod private {
@@ -628,7 +643,7 @@ mod private {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl Store {
     fn open(_dir: &Path) -> Result<(Self, Loaded), JournalProblemDto> {
         Err(JournalProblemDto::Unavailable)
@@ -643,3 +658,5 @@ impl Store {
 
 #[cfg(all(test, unix))]
 mod tests;
+#[cfg(all(test, windows))]
+mod windows_tests;

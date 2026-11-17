@@ -1,0 +1,13 @@
+#!/bin/sh
+# Forced command for the `ci-tunnel` account (authorized_keys `command=`). The key can do only
+# this and `-N` port forwarding to 127.0.0.1 (`permitopen`); no shell, PTY, agent or X11.
+# Accepts exactly "<native|postgres> <40-hex commit>" and hands it to the fixture runner.
+set -eu
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  native\ * | postgres\ *) ;;
+  *) echo "usage: <native|postgres> <commit>" >&2; exit 2 ;;
+esac
+mode=${SSH_ORIGINAL_COMMAND%% *}
+commit=${SSH_ORIGINAL_COMMAND#* }
+printf '%s' "$commit" | grep -Eqx '[0-9a-f]{40}' || { echo "invalid commit" >&2; exit 2; }
+exec sudo -n -u stoneql /usr/local/bin/stoneql-ci-run "$mode" "$commit"

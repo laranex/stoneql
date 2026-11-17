@@ -8,35 +8,122 @@ permissions:
   contents: read
 jobs:
   foundation:
-    # macOS (Apple Silicon) is the only supported desktop platform. Add Windows and Linux back to
-    # this matrix when each is supported and its checks pass.
+    # macOS (Apple Silicon) is the only supported desktop platform. windows-2025 is being ported on
+    # the windows-support branch: its steps keep going after a failure so one run lists every gap,
+    # and it does not gate anything until Windows is supported.
+    # windows-support branch only: macOS is left out to save runner time while Windows is in
+    # development. Restore `macos-15` before merging (main runs macOS only).
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15]
+        os: [windows-2025]
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_FIXTURE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - uses: actions/setup-node@v4
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        with:
+          node-version: '26'
+          cache: npm
+      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm ci
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run build
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run rust:vendor
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run rust:fmt
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run rust:build
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run rust:lint
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run rust:test
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      # Windows runners cannot run the Docker fixtures: the real-database tests run here against
+      # disposable fixtures on the project's test-only fixture host, reached over a restricted SSH
+      # tunnel (tools/test-remote-fixture.mjs, tools/ci-fixture-host/). Skipped without the secrets.
+      - name: Real databases (remote fixture host)
+        if: runner.os == 'Windows' && env.HAS_FIXTURE_HOST == 'true'
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: node tools/test-remote-fixture.mjs
+        env:
+          STONEQL_REMOTE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST }}
+          STONEQL_REMOTE_KEY: ${{ secrets.STONEQL_FIXTURE_KEY }}
+          STONEQL_REMOTE_KNOWN_HOSTS: ${{ secrets.STONEQL_FIXTURE_KNOWN_HOSTS }}
+      - run: npm run rust:boundaries
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm run contracts:check
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: node --test tests/workspace.test.mjs tests/driver-fixtures.test.mjs
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: npm test
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      # The shipped graph (macOS release targets) must be advisory-free; this gates the build.
+      - run: npm run audit:release
+        continue-on-error: ${{ runner.os == 'Windows' }}
+      # The full graph also covers development-only SQLite and the unreleased Linux GTK stack.
+      # Its advisories stay visible here (A4: never ignored) without blocking.
+      - continue-on-error: true
+        run: cargo audit --deny warnings
+  # Release branches only: the unsigned Windows x64 NSIS installer for the dispatched commit,
+  # installed silently on the runner, checked to open its StoneQL window, uninstalled, and
+  # uploaded with its SHA-256. Publishing stays a separate, manual step.
+  windows-installer:
+    if: startsWith(github.ref_name, 'release/')
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '26'
           cache: npm
-      - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - run: rustup toolchain install 1.99.1 --profile minimal
       - run: npm ci
       - run: npm run build
-      - run: npm run rust:vendor
-      - run: npm run rust:fmt
-      - run: npm run rust:build
-      - run: npm run rust:lint
-      - run: npm run rust:test
-      - run: npm run rust:boundaries
-      - run: npm run contracts:check
-      - run: node --test tests/workspace.test.mjs tests/driver-fixtures.test.mjs
-      - run: npm test
-      - run: cargo install cargo-audit --version 0.22.2 --locked
-      # The shipped graph (macOS release targets) must be advisory-free; this gates the build.
-      - run: npm run audit:release
-      # The full graph also covers development-only SQLite and the unreleased Linux GTK stack.
-      # Its advisories stay visible here (A4: never ignored) without blocking.
-      - continue-on-error: true
-        run: cargo audit --deny warnings
+      - name: Build the NSIS installer
+        working-directory: apps/desktop/src-tauri
+        run: npx tauri build --bundles nsis --features custom-protocol --config tauri.windows-nsis.conf.json -- --locked
+      - name: Install silently, open the window, uninstall
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($installer.Count -ne 1) { throw "expected one installer, found $($installer.Count)" }
+          $setup = Start-Process $installer[0].FullName -ArgumentList '/S' -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "installer exit code $($setup.ExitCode)" }
+          $dir = Join-Path $env:LOCALAPPDATA 'StoneQL'
+          $app = Get-ChildItem $dir -Filter *.exe | Where-Object { $_.Name -notmatch '^uninstall' } | Select-Object -First 1
+          if (-not $app) { throw "installed app not found in $dir" }
+          $process = Start-Process $app.FullName -PassThru
+          $deadline = (Get-Date).AddSeconds(60)
+          do { Start-Sleep -Seconds 2; $process.Refresh() } until ($process.HasExited -or $process.MainWindowTitle -eq 'StoneQL' -or (Get-Date) -gt $deadline)
+          if ($process.HasExited) { throw "app exited with code $($process.ExitCode)" }
+          if ($process.MainWindowTitle -ne 'StoneQL') { throw "no StoneQL window within 60 s (title: '$($process.MainWindowTitle)')" }
+          Start-Sleep -Seconds 10
+          $process.Refresh()
+          if ($process.HasExited) { throw "app exited after opening its window" }
+          Write-Output "Installed $($app.Name) opened its StoneQL window and stayed running."
+          Stop-Process -Id $process.Id
+          $uninstall = Start-Process (Join-Path $dir 'uninstall.exe') -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "uninstaller exit code $($uninstall.ExitCode)" }
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem target/release/bundle/nsis/*-setup.exe
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($installer.Name)" | Out-File -Encoding ascii -NoNewline "$($installer.FullName).sha256"
+          Write-Output "$hash  $($installer.Name)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stoneql-windows-x64-nsis
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sha256
+          if-no-files-found: error

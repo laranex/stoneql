@@ -41,7 +41,7 @@ pub struct SshConfig {
 /// Authentication material resolved by the trusted host. The renderer supplies at most a
 /// session-only secret or an opaque reference; the host resolves references before this point.
 pub enum SshAuth {
-    /// Agent socket chosen by the trusted host (normally `SSH_AUTH_SOCK`); `None` = unavailable.
+    /// Agent socket (Unix) or named pipe (Windows) chosen by the trusted host; `None` = unavailable.
     Agent(Option<PathBuf>),
     Password(String),
     /// Owner-scoped key-file grant issued after the native file picker.
@@ -265,9 +265,12 @@ async fn authenticate(
         }
         SshAuth::Agent(socket) => {
             let socket = socket.ok_or(LifecycleError::AgentUnavailable)?;
-            let mut agent = AgentClient::connect_uds(&socket)
-                .await
-                .map_err(|_| LifecycleError::AgentUnavailable)?;
+            // Unix: an OpenSSH agent socket. Windows: the OpenSSH agent's named pipe.
+            #[cfg(unix)]
+            let agent = AgentClient::connect_uds(&socket).await;
+            #[cfg(windows)]
+            let agent = AgentClient::connect_named_pipe(&socket).await;
+            let mut agent = agent.map_err(|_| LifecycleError::AgentUnavailable)?;
             let identities = agent
                 .request_identities()
                 .await

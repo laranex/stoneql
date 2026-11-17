@@ -4397,12 +4397,20 @@ dependencies = [
  "sqlx",
  "stoneql-contracts",
  "stoneql-core",
+ "stoneql-dpapi",
  "stoneql-runtime",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "stoneql-dpapi"
+version = "0.1.0"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

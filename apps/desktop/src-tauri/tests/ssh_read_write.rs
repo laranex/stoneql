@@ -19,6 +19,12 @@ use tauri::{
     test::{INVOKE_KEY, get_ipc_response, mock_builder},
     webview::InvokeRequest,
 };
+/// The app's own origin: Tauri serves the frontend from `http://tauri.localhost` on Windows.
+const LOCAL: &str = if cfg!(windows) {
+    "http://tauri.localhost"
+} else {
+    "tauri://localhost"
+};
 
 #[derive(Default)]
 struct RecordingStore(AtomicUsize);
@@ -67,7 +73,7 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
         .build()
         .unwrap();
     let raw = |command: &str, payload: Value| -> Result<Value, Value> {
-        get_ipc_response(&window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: "tauri://localhost".parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "rw_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
+        get_ipc_response(&window, InvokeRequest { cmd: command.into(), callback: CallbackFn(0), error: CallbackFn(1), url: LOCAL.parse().unwrap(), body: InvokeBody::Json(json!({"message": json!({"version": 1, "requestId": "rw_request", "payload": payload}).to_string()})), headers: Default::default(), invoke_key: INVOKE_KEY.into() })
             .map(|body| body.deserialize().unwrap())
     };
     let info = raw("host_info", json!({"nonce": "rw_nonce"})).unwrap()["payload"].clone();
