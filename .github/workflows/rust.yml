@@ -1,7 +1,8 @@
 name: Rust foundation
+# The macOS platform checks run when a release is published, and on demand from the Actions tab.
 on:
-  pull_request:
-  push:
+  release:
+    types: [published]
   workflow_dispatch:
 permissions:
   contents: read

@@ -35,7 +35,7 @@ Run the checks that match your change before opening a pull request:
 | Database behaviour | the matching Docker-backed suite, e.g. `npm run test:native-database`, `npm run test:native-postgres`, `npm run test:execution`, `npm run test:ssh` |
 | Documentation | `npm run docs:build` |
 
-CI runs the Rust and frontend checks on macOS for every push and pull request.
+CI runs the Rust and frontend checks on macOS when a release is published; maintainers can also start them from the Actions tab. Run the checks above locally before opening a pull request.
 
 ## Pull requests
 

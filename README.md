@@ -55,7 +55,7 @@ npm run docs:preview
 - `.ref/planning/`, `.ref/ms/`: internal audit, decisions and milestone specifications.
 - `.ref/workprogress.md`: ignored local continuity notes; never commit.
 - `.github/workflows/docs.yml`: manually gated GitHub Pages workflow for the [documentation site](https://stoneace.github.io/stoneql/).
-- `.github/workflows/rust.yml`: Rust foundation checks on every push and pull request, on a macOS 15 runner only.
+- `.github/workflows/rust.yml`: Rust foundation checks on a macOS 15 runner, run when a release is published or started manually.
 
 Building the desktop app from source is documented in [Desktop development](docs/development/desktop-host.md); the server path remains reserved. Shared Rust crates (core, contracts, runtime) and an isolated driver lab exist; see [Rust development](docs/development/rust-foundation.md) and [driver evaluation](docs/architecture/driver-evaluation.md). Read [AGENTS.md](AGENTS.md) before changes. The frontend remains browser-runnable without native APIs.
 
