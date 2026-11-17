@@ -11,10 +11,12 @@ jobs:
     # macOS (Apple Silicon) is the only supported desktop platform. windows-2025 is being ported on
     # the windows-support branch: its steps keep going after a failure so one run lists every gap,
     # and it does not gate anything until Windows is supported.
+    # windows-support branch only: macOS is left out to save runner time while Windows is in
+    # development. Restore `macos-15` before merging (main runs macOS only).
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-2025]
+        os: [windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
