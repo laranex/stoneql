@@ -1,7 +1,7 @@
 # M009 — Desktop Release
 
 ## Status
-Planned / not started. **First release re-scoped to StoneQL v0.1.0 Alpha for macOS (D021, Approved product decision 2026-10-26).** **Feature scope and release direction approved by D022 (2026-10-26):** usable MySQL/MariaDB client (live browsing, CRUD, safe SQL, SSH, basic SQL/CSV import/export), signed and notarized DMG planned, separate desktop/server gates. Implementation plan: `.ref/planning/v0.1.0-alpha-plan.md` workstream (f) (Proposed). The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
+**In progress — beta RC checks executed 2026-11-17 on the ad-hoc DMG (see "RC evidence 2026-11-17" below); not complete.** Earlier status: Planned / not started. **First release re-scoped to StoneQL v0.1.0 Alpha for macOS (D021, Approved product decision 2026-10-26).** **Feature scope and release direction approved by D022 (2026-10-26):** usable MySQL/MariaDB client (live browsing, CRUD, safe SQL, SSH, basic SQL/CSV import/export), signed and notarized DMG planned, separate desktop/server gates. Implementation plan: `.ref/planning/v0.1.0-alpha-plan.md` workstream (f) (Proposed). The user authorized roadmap continuation and local milestone commits. Prerequisites, unresolved technical decisions and security/release acceptance gates still apply; no push, publication or deployment is authorized.
 
 ## Objective and scope
 Signed desktop distribution. First release: **StoneQL v0.1.0 Alpha**, signed, notarized and stapled macOS package for Apple Silicon (arm64), with Intel (x86_64) only if separately verified. Windows and Linux packages are Deferred to later desktop releases. This retains the M009 specification path while separating all server packaging into M011.
@@ -77,3 +77,29 @@ Signing custody, artifact formats, OS minima and updater operations need approva
 
 
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
+
+## RC evidence 2026-11-17 (ad-hoc signed beta DMG, commit 970ade2)
+
+Artifact: `target/release/rc-970ade2/StoneQL-0.1.0-beta-970ade2.dmg`, SHA-256 `3da858b6cd3c5819bd7d44ae5674cf257a28dfef58bdb6f0b7731c0ea9467a1a`, 8.42 MiB (app 23 MiB), arm64, macOS 27.0.1 (MacBook arm64). Log: `target/release/rc-970ade2/m009-checks.log`; SBOMs `sbom-rust.txt` (350 crates), `sbom-npm.txt` (56 packages).
+
+| Check | Result |
+| --- | --- |
+| Checksum, `hdiutil verify` | OK / VALID |
+| `codesign --verify --deep --strict --verbose=2` | valid on disk; satisfies its Designated Requirement |
+| Signature | `Signature=adhoc`, `flags=0x10002(adhoc,runtime)` (Hardened Runtime), no Team ID |
+| Entitlements | none |
+| `spctl` app / DMG | rejected (expected: ad-hoc, not notarized) |
+| Bundle | `me.thixpin.stoneql` 0.1.0; LSMinimumSystemVersion 10.13 (Tauri default; minimum macOS not decided) |
+| Content scan | no key/token patterns; 0 home paths (`--remap-path-prefix`); 0 SQLite symbols; 0 test credentials |
+| DMG layout | branded background, StoneQL.app beside Applications shortcut, drag instruction |
+| Install / upgrade | Finder copy over the previous build; installed binary identical to the build; profiles and saved-password references kept (1/1) |
+| Launch from /Applications | runs, 1 window |
+| Cold launch → window, 30 launches | median 1.82 s, p95 2.79 s, max 4.76 s (load avg ~30 from other apps) |
+| Idle RSS (10 s) | host 97 MiB + 3 WebKit processes 93 MiB = 191 MiB |
+| Quarantined first launch (simulated download) | blocked: "“StoneQL” Not Opened — Apple could not verify…", buttons Move to Trash / Done; app did not run. Open Anyway (System Settings) not exercised |
+| `audit:release` | passed: 366 release crates, no advisories |
+| Licences of new GZIP crates | flate2, miniz_oxide, adler2, crc32fast: MIT/Apache-2.0/Zlib/0BSD |
+| Real servers at 970ade2 | test:execution (MySQL/MariaDB/PostgreSQL), test:ssh, test:native-database, test:native-postgres passed |
+| Suites at 970ade2 | rust:test 171, desktop:test 60, npm test 234+22, browser 71, lint/fmt/boundaries/vendor/contracts, build, docs:build |
+
+Not executed: Developer ID signing, notarization, stapling, offline stapled launch (A2 Developer ID blocked); Keychain prompt on this build (each ad-hoc build asks once; user action); uninstall/cleanup drill; 8-connection RSS; sleep/wake and network-change orphan checks; x86_64.
