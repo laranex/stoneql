@@ -8,7 +8,7 @@ import { tmpdir, arch, release, cpus, totalmem } from 'node:os';
 import { resolve, join } from 'node:path';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 import { parseMaximumRss } from './resource-report.mjs';
-import { runRemotely } from './remote-fixture.mjs';
+import { runRemotely, endRemote } from './remote-fixture.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 // `--execution` runs the M006 read-write harness (examples/execution.rs) instead of IPC checks.
@@ -242,3 +242,4 @@ GRANT EXECUTE ON PROCEDURE exec_proc(text) TO stoneql_writer;
     }
   }
 }
+if (remote) endRemote();

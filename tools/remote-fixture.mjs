@@ -33,3 +33,9 @@ export async function runRemotely(env, engine) {
   }
   return String(reply.stdout);
 }
+
+// The reply reader keeps stdin open; a finished harness releases it so the process can exit.
+export function endRemote() {
+  replies?.return?.();
+  process.stdin.destroy();
+}

@@ -6,7 +6,7 @@ import { resolve, join } from 'node:path';
 import { parseMaximumRss } from './resource-report.mjs';
 import { cpus, totalmem, release, arch } from 'node:os';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
-import { runRemotely } from './remote-fixture.mjs';
+import { runRemotely, endRemote } from './remote-fixture.mjs';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
@@ -308,3 +308,4 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
     }
   }
 }
+if (remote) endRemote();

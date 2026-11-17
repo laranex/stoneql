@@ -40,8 +40,9 @@ const secretFile = (name, contents) => {
   writeFileSync(path, contents.replaceAll('\r', '').trimEnd() + '\n', { mode: 0o600 });
   return path;
 };
+// `-F none`: no user ssh_config (its identities or host settings never apply).
 const ssh = [
-  '-i', secretFile('key', process.env.STONEQL_REMOTE_KEY),
+  '-F', 'none', '-i', secretFile('key', process.env.STONEQL_REMOTE_KEY),
   '-o', `UserKnownHostsFile=${secretFile('known_hosts', process.env.STONEQL_REMOTE_KNOWN_HOSTS)}`,
   '-o', 'StrictHostKeyChecking=yes', '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
   '-o', 'ConnectTimeout=20', '-o', 'ServerAliveInterval=15',
