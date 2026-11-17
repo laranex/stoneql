@@ -663,9 +663,10 @@ pub(crate) mod tests {
         assert_eq!(store_impl.get(&foreign), Err(SecretError::Unsupported));
         store_impl.reset().unwrap();
         assert!(!store_impl.status().vault_exists);
+        // After a reset the reference is simply gone; nothing asks to create a new vault.
         assert_eq!(
             resolve(&store_impl, &reference, "scope").unwrap_err().code,
-            stoneql_contracts::v1::ErrorCodeDto::SecretStoreLocked
+            stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
         );
     }
     /// With a Secret Service present, new saves go to it (v4) and the vault directory is never
@@ -687,6 +688,27 @@ pub(crate) mod tests {
         );
         assert_eq!(resolve(&store_impl, &reference, "scope").unwrap(), "value");
         store_impl.delete(&reference).unwrap();
+        assert!(!dir.parent().unwrap().exists());
+    }
+    /// A Secret Service that is on the bus but cannot be used (here: no default collection)
+    /// fails closed: no vault reference is issued and the vault directory is never created.
+    /// Driven by `npm run test:secret-service` against a keyring started without `--unlock`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a disposable Secret Service: npm run test:secret-service"]
+    fn an_unusable_secret_service_fails_closed_without_the_vault() {
+        let dir = std::env::temp_dir()
+            .join(format!("stoneql-no-vault-{}", uuid::Uuid::new_v4()))
+            .join("credentials");
+        let store_impl =
+            OsSecretStore::with_vault_dir("me.thixpin.stoneql.test-unusable", dir.clone());
+        assert_eq!(store_impl.status().kind, SecretStoreKindDto::SecretService);
+        assert_eq!(
+            store(&store_impl, "scope".into(), "value".into())
+                .unwrap_err()
+                .code,
+            stoneql_contracts::v1::ErrorCodeDto::SecretUnavailable
+        );
         assert!(!dir.parent().unwrap().exists());
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]

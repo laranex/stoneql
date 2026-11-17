@@ -34,7 +34,16 @@ try {
   fixture.purge(service);
   await fixture.stop();
 }
+// A present Secret Service without a usable collection must fail closed, never use the vault.
+const unusable = await startSecretService(mkdtempSync(join(tmpdir(), 'stoneql-secret-service-')), process.env, { unlock: false });
+try {
+  const name = 'secrets::tests::an_unusable_secret_service_fails_closed_without_the_vault';
+  const result = spawnSync(binary, ['--ignored', '--exact', name, '--test-threads=1'], { cwd: root, env: unusable.env, encoding: 'utf8', timeout: 120_000 });
+  if (result.status !== 0 || result.error || !/1 passed/.test(result.stdout)) throw Error(`${name} failed\n${(result.stdout + result.stderr).slice(-4000)}`);
+} finally {
+  await unusable.stop();
+}
 const after = existsSync(userKeyrings) ? statSync(userKeyrings).mtimeMs : null;
 if (remaining) throw Error(`${remaining} test item(s) remained`);
 if (before !== after) throw Error('The user keyring directory changed');
-console.log(`test:secret-service passed (round trip, replace, label and attributes, delete, present service never selects the vault; 0 items left; user keyrings ${before === null ? 'absent' : 'unchanged'})`);
+console.log(`test:secret-service passed (round trip, replace, label and attributes, delete, present service never selects the vault, an unusable one fails closed without the vault; 0 items left; user keyrings ${before === null ? 'absent' : 'unchanged'})`);

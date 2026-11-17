@@ -21,8 +21,11 @@ const stop = async child => {
   await new Promise(resolve => exited(child) ? resolve() : child.once('exit', resolve));
 };
 
-/** Starts the bus and keyring under `directory` (a private, empty directory). */
-export async function startSecretService(directory, baseEnv) {
+/**
+ * Starts the bus and keyring under `directory` (a private, empty directory). `unlock: false`
+ * starts the daemon without a login keyring: a Secret Service that is present but unusable.
+ */
+export async function startSecretService(directory, baseEnv, { unlock = true } = {}) {
   const run = join(directory, 'run'), data = join(directory, 'data'), home = join(directory, 'home');
   for (const path of [run, data, home]) mkdirSync(path, { mode: 0o700 });
   const socket = join(directory, 'bus');
@@ -37,8 +40,8 @@ export async function startSecretService(directory, baseEnv) {
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${socket}`,
       XDG_RUNTIME_DIR: run, XDG_DATA_HOME: data, HOME: home,
     };
-    keyring = spawn('gnome-keyring-daemon', ['--foreground', '--unlock', '--components=secrets'], { env, stdio: ['pipe', 'ignore', 'ignore'] });
-    keyring.stdin.end(randomBytes(24).toString('hex'));
+    keyring = spawn('gnome-keyring-daemon', ['--foreground', ...(unlock ? ['--unlock'] : []), '--components=secrets'], { env, stdio: ['pipe', 'ignore', 'ignore'] });
+    keyring.stdin.end(unlock ? randomBytes(24).toString('hex') : '');
     await waitFor(() => exited(keyring) || spawnSync('busctl', [`--address=unix:path=${socket}`, 'status', 'org.freedesktop.secrets'], { stdio: 'ignore' }).status === 0, 'gnome-keyring-daemon');
     if (exited(keyring)) throw Error('gnome-keyring-daemon exited');
     return {

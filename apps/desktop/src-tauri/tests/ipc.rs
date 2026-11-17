@@ -460,7 +460,28 @@ fn the_master_password_vault_is_unlocked_over_ipc_without_echoing_the_password()
         unlocked["payload"],
         json!({"kind":"encrypted_file","vaultExists":true,"unlocked":true})
     );
-    call("store_secret", save, &session).unwrap();
+    let reference = call("store_secret", save, &session).unwrap()["payload"]["reference"].clone();
+    // A connect that needs the locked vault is refused before any network work, and the
+    // renderer's retry after unlocking may reuse the same attempt id.
+    store
+        .unlocked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let connect = json!({"engine":"mysql","host":"192.0.2.1","port":3306,"username":"reader","password":"","database":"app","rootCertificatePem":null,"passwordRef":reference,"attemptId":"vault_attempt"});
+    let started = std::time::Instant::now();
+    assert_eq!(
+        code(call("connect_direct", connect.clone(), &session)),
+        "SECRET_STORE_LOCKED"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    store
+        .unlocked
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut retry = connect;
+    retry["passwordRef"] = json!(uuid::Uuid::new_v4().to_string());
+    assert_eq!(
+        code(call("connect_direct", retry, &session)),
+        "SECRET_UNAVAILABLE"
+    );
     // A later renderer session that sends the wrong password is refused, not locked out.
     store
         .unlocked

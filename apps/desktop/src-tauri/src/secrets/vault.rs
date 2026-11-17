@@ -165,6 +165,9 @@ impl Vault {
     }
 
     pub fn set(&self, service: &str, account: &str, value: &[u8]) -> Result<(), SecretError> {
+        if (value.len() + ITEM_MAGIC.len() + 12 + 16) as u64 > MAX_ITEM_BYTES {
+            return Err(SecretError::Failed);
+        }
         let key = self.key()?;
         let dir = open_dir(&self.dir, false)?;
         let mut file = ITEM_MAGIC.to_vec();
@@ -172,6 +175,10 @@ impl Vault {
         write_atomic(&dir, &item_name(account)?, &file)
     }
     pub fn get(&self, service: &str, account: &str) -> Result<Vec<u8>, SecretError> {
+        // Without a vault (never created, or reset) the item is gone: no point asking to create one.
+        if !self.unlocked() && !self.exists()? {
+            return Err(SecretError::NotFound);
+        }
         let key = self.key()?;
         let dir = open_dir(&self.dir, false)?;
         let file = read_private(&dir, &item_name(account)?, MAX_ITEM_BYTES)?
@@ -401,6 +408,7 @@ mod tests {
             vault.set(SERVICE, &reference(), b"v"),
             Err(SecretError::Locked)
         );
+        assert_eq!(vault.get(SERVICE, &reference()), Err(SecretError::NotFound));
         assert_eq!(vault.unlock("too short", true), Err(UnlockError::Invalid));
         assert_eq!(vault.unlock(PASSWORD, false), Err(UnlockError::Invalid));
         vault.unlock(PASSWORD, true).unwrap();
@@ -417,6 +425,11 @@ mod tests {
         assert_eq!(vault.get(SERVICE, &reference()), Err(SecretError::NotFound));
         assert_eq!(
             vault.get("other.service", &account),
+            Err(SecretError::Failed)
+        );
+        let too_large = vec![b'x'; MAX_ITEM_BYTES as usize];
+        assert_eq!(
+            vault.set(SERVICE, &reference(), &too_large),
             Err(SecretError::Failed)
         );
 
