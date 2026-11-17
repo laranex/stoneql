@@ -34,7 +34,8 @@ for (const theme of ['light', 'dark']) test(`${theme}: live column and database 
         if (sql.includes('information_schema.SCHEMATA')) payload = result([col('name')], w.databases.map((d: string) => [d]));
         else if (sql.includes('information_schema.TABLES')) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE']]);
         else if (sql.includes('information_schema.COLUMNS')) payload = result(['name', 'type', 'nullable', 'ckey', 'dflt', 'extra'].map((n) => col(n)), [['id', 'int', 'NO', 'PRI', null as any, 'auto_increment'], ['name', 'varchar(40)', 'YES', '', null as any, '']]);
-        else if (sql.includes('STATISTICS') || sql.includes('KEY_COLUMN_USAGE') || sql.includes('REFERENTIAL')) payload = result([col('name')], []);
+        else if (sql.includes('STATISTICS')) payload = result([col('name'), col('nonunique'), col('col'), col('type')], [['PRIMARY', '0', 'id', 'BTREE'], ['name_ix', '1', 'name', 'BTREE']]);
+        else if (sql.includes('KEY_COLUMN_USAGE') || sql.includes('REFERENTIAL')) payload = result([col('name')], []);
         else if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [['0']]);
         else payload = result([col('id', 'INT'), col('name')], []);
       } else throw { code: 'INVALID_REQUEST' };
@@ -96,8 +97,25 @@ for (const theme of ['light', 'dark']) test(`${theme}: live column and database 
   await page.getByRole('button', { name: 'Add column', exact: true }).click();
   await dialog.getByRole('textbox', { name: 'Column name' }).fill('blocked');
   await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toHaveText('The server denied this account the change (it needs the ALTER privilege). Nothing was changed.');
+  await expect(dialog.getByRole('alert')).toHaveText('The server denied this account the change (it needs the ALTER or INDEX privilege). Nothing was changed.');
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+
+  // Indexes: add with columns in the order picked; PRIMARY cannot be dropped here.
+  await page.getByRole('button', { name: 'Add index', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Index name' }).fill('ix_pair');
+  await dialog.getByLabel('Unique').check();
+  const indexColumns = dialog.getByRole('group', { name: 'Index columns' });
+  await indexColumns.getByRole('checkbox', { name: 'name', exact: true }).click();
+  await indexColumns.getByRole('checkbox', { name: 'id', exact: true }).click();
+  await expect(preview).toHaveText('ALTER TABLE `accounts` ADD UNIQUE INDEX `ix_pair` (`name`, `id`);');
+  await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await jobs()).at(-1)).toBe('ALTER TABLE `accounts` ADD UNIQUE INDEX `ix_pair` (`name`, `id`);');
+  await expect(page.getByRole('button', { name: 'Drop index PRIMARY' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Drop index name_ix' }).click();
+  await expect(confirm).toContainText('ALTER TABLE `accounts` DROP INDEX `name_ix`;');
+  await confirm.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect.poll(async () => (await jobs()).at(-1)).toBe('ALTER TABLE `accounts` DROP INDEX `name_ix`;');
 
   // Create database: previewed, run, and listed in Explorer.
   await page.getByRole('button', { name: 'Create database', exact: true }).click();
@@ -106,4 +124,63 @@ for (const theme of ['light', 'dark']) test(`${theme}: live column and database 
   await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator('.database-tree .database-row strong')).toHaveText(['acme_store', 'shop']);
+});
+
+// PostgreSQL: structured column edits alter only what changed; constraint indexes stay.
+test('PostgreSQL column and index changes alter only what changed', async ({ page }) => {
+  await page.addInitScript(() => {
+    const w = window as any;
+    w.jobs = [];
+    const col = (name: string, databaseType = 'VARCHAR') => ({ name, databaseType });
+    const result = (columns: any[], rows: (string | null)[][]) => ({ index: 0, affectedRows: '0', truncated: false, columns, rows: rows.map((r) => r.map((text) => (text === null ? { kind: 'null' } : { kind: 'text', text }))) });
+    w.__TAURI__ = { core: { invoke: async (command: string, args: { message: string }) => {
+      const request = JSON.parse(args.message), p = request.payload;
+      let payload: any;
+      if (command === 'host_info') payload = { runtime: 'desktop', appVersion: '0.1.0', sessionId: 's', nonce: p.nonce, simulated: true, readWriteSql: true };
+      else if (command === 'contract_probe') payload = { values: p.values, simulated: true };
+      else if (command === 'list_unresolved_outcomes') payload = { outcomes: [], limit: 16 };
+      else if (command === 'connect_direct') payload = { handle: '00000000-0000-0000-0000-0000000000ee', engineVersion: 'PostgreSQL 17.6', database: p.database, expiresAfterSeconds: 3600, access: 'read_write' };
+      else if (command === 'database_status') payload = { connected: true };
+      else if (command === 'submit_job') { w.jobs.push(p.sql); payload = { jobId: `job_${w.jobs.length}`, statementCount: 1 }; }
+      else if (command === 'fetch_job') payload = { jobId: p.jobId, state: 'finished', outcome: 'succeeded', cancellation: 'none', serverCancelSent: false, deadlineExceeded: false, statements: [{ index: 0, status: 'succeeded', inTransaction: false, affectedRows: '0', resultSets: 0, failure: null, resultsWithheld: false }], batch: null, lease: null, done: true };
+      else if (command === 'read_only_query') {
+        const sql: string = p.sql;
+        if (sql.includes('information_schema.tables')) payload = result([col('name'), col('kind')], [['accounts', 'BASE TABLE']]);
+        else if (sql.includes('information_schema.columns')) payload = result(['name', 'type', 'udt', 'len', 'prec', 'scale', 'dprec', 'nullable', 'dflt', 'ident', 'pk'].map((n) => col(n)), [['id', 'integer', 'int4', null, '32', '0', null, 'NO', null, 'YES', '1'], ['name', 'character varying', 'varchar', '40', null, null, null, 'YES', "'x'::character varying", 'NO', '0']]);
+        else if (sql.includes('pg_catalog.pg_indexes')) payload = result([col('name'), col('definition'), col('owned')], [['accounts_pkey', 'CREATE UNIQUE INDEX accounts_pkey ON public.accounts USING btree (id)', '1'], ['name_ix', 'CREATE INDEX name_ix ON public.accounts USING btree (name)', '0']]);
+        else if (sql.includes('pg_constraint')) payload = result([col('name')], []);
+        else if (sql.startsWith('SELECT COUNT(*)')) payload = result([col('total', 'BIGINT')], [['0']]);
+        else payload = result([col('id', 'INT')], []);
+      } else throw { code: 'INVALID_REQUEST' };
+      return { version: 1, requestId: request.requestId, payload };
+    } } };
+  });
+  await page.goto('/');
+  await newLiveConnection(page);
+  await page.getByLabel('Database engine', { exact: true }).selectOption('PostgreSQL');
+  await page.getByPlaceholder('e.g. Local development').fill('PG schema');
+  await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
+  await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
+  await page.getByRole('tab', { name: 'Structure', exact: true }).click();
+  const dialog = page.getByTestId('live-ddl-dialog'), preview = dialog.getByTestId('ddl-preview');
+  const jobs = () => page.evaluate(() => (window as any).jobs as string[]);
+  await page.getByRole('button', { name: 'Change column name' }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Column type' })).toHaveValue('character varying(40)');
+  await expect(dialog.getByRole('textbox', { name: 'Default expression' })).toHaveValue("'x'::character varying");
+  await expect(preview).toHaveText('Nothing has changed.');
+  await dialog.getByLabel('NULL allowed').uncheck();
+  await dialog.getByRole('textbox', { name: 'Column name' }).fill('full_name');
+  await expect(preview).toHaveText('ALTER TABLE "accounts" ALTER COLUMN "name" SET NOT NULL;\nALTER TABLE "accounts" RENAME COLUMN "name" TO "full_name";');
+  await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect((await jobs()).at(-1)).toBe('ALTER TABLE "accounts" ALTER COLUMN "name" SET NOT NULL;\nALTER TABLE "accounts" RENAME COLUMN "name" TO "full_name";');
+  await page.getByRole('button', { name: 'Add column', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Column name' }).fill('score');
+  await dialog.getByRole('textbox', { name: 'Column type' }).fill('integer');
+  await dialog.getByRole('textbox', { name: 'Default expression' }).fill('0');
+  await expect(preview).toHaveText('ALTER TABLE "accounts" ADD COLUMN "score" integer DEFAULT 0;');
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Drop index accounts_pkey' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Drop index name_ix' }).click();
+  await expect(page.getByRole('alertdialog')).toContainText('DROP INDEX "name_ix";');
 });

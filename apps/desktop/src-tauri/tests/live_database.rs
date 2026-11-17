@@ -358,6 +358,30 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             "succeeded"
         );
         assert!(!show(&admin).contains("`note`"));
+        // Indexes: the restricted writer is denied; the privileged account adds a unique
+        // index with columns in the chosen order and drops it.
+        let (update, _) = run(
+            &writer,
+            "ALTER TABLE `ddl_probe` ADD INDEX `blocked_ix` (`title`);",
+        );
+        assert_eq!(
+            update["statements"][0]["failure"]["denied"], true,
+            "{update}"
+        );
+        assert_eq!(
+            run(
+                &admin,
+                "ALTER TABLE `ddl_probe` ADD UNIQUE INDEX `title_ix` (`title`, `id`);"
+            )
+            .0["outcome"],
+            "succeeded"
+        );
+        assert!(show(&admin).contains("UNIQUE KEY `title_ix` (`title`,`id`)"));
+        assert_eq!(
+            run(&admin, "ALTER TABLE `ddl_probe` DROP INDEX `title_ix`;").0["outcome"],
+            "succeeded"
+        );
+        assert!(!show(&admin).contains("title_ix"));
         // Create database, then switch to it as the account that made it.
         assert_eq!(
             run(

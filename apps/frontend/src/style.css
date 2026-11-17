@@ -2888,3 +2888,6 @@ label svg {
 .unresolved-age {
   color: var(--muted);
 }
+/* Live Structure panels: the action sits at the end of the heading row. */
+.panel h3:has(.panel-action) { display: flex; align-items: center; gap: 8px; }
+.panel h3 .panel-action { margin-left: auto; }

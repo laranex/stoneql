@@ -302,6 +302,114 @@ fn postgres_commands_use_owned_tls_fixture() {
             json!({"sessionId":session,"handle":handle,"sql":sql}),
         )
     };
+    // Live schema edits as the renderer builds them (PostgreSQL): the owner adds, redefines,
+    // renames and drops columns and adds/drops an index, altering only what changed; an
+    // account that does not own the table is refused with `denied` and nothing changes.
+    {
+        let connect = |user: &str| {
+            let mut payload = config.clone();
+            payload["username"] = json!(user);
+            payload["access"] = json!("read_write");
+            invoke("connect_direct", payload).unwrap()["payload"]["handle"].clone()
+        };
+        let run = |handle: &Value, sql: &str| {
+            let accepted = invoke(
+                "submit_job",
+                json!({"sessionId":session,"handle":handle,"sql":sql}),
+            )
+            .unwrap();
+            let id = accepted["payload"]["jobId"].clone();
+            let mut rows = Vec::new();
+            loop {
+                let mut update = invoke(
+                    "fetch_job",
+                    json!({"sessionId":session,"jobId":id,"waitMs":1000}),
+                )
+                .unwrap()["payload"]
+                    .clone();
+                if let Some(batch) = update["batch"].as_object() {
+                    rows.extend(batch["rows"].as_array().unwrap().iter().cloned());
+                }
+                if update["done"] == json!(true) {
+                    update["collected"] = json!(rows);
+                    return update;
+                }
+            }
+        };
+        let ok = |handle: &Value, sql: &str| {
+            let update = run(handle, sql);
+            assert_eq!(update["outcome"], "succeeded", "{sql}: {update}");
+        };
+        let owner = connect("stoneql_owner");
+        let editor = connect("stoneql_editor");
+        let describe = |column: &str| {
+            let sql = format!(
+                "SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = current_schema AND table_name = 'ddl_probe' AND column_name = '{column}'"
+            );
+            let reply = read(&owner, &sql).unwrap();
+            let row = reply["payload"]["rows"].get(0)?.clone();
+            let cell = |i: usize| row[i]["text"].as_str().unwrap_or("").to_owned();
+            Some(format!("{}|{}|{}", cell(0), cell(1), cell(2)))
+        };
+        ok(
+            &owner,
+            "CREATE TABLE \"ddl_probe\" (\"id\" integer PRIMARY KEY, \"label\" character varying(40) DEFAULT 'x');\nCOMMENT ON COLUMN \"ddl_probe\".\"label\" IS 'kept';\nGRANT SELECT, INSERT ON \"ddl_probe\" TO stoneql_editor;",
+        );
+        for sql in [
+            "ALTER TABLE \"ddl_probe\" ADD COLUMN \"blocked\" integer;",
+            "CREATE INDEX \"blocked_ix\" ON \"ddl_probe\" (\"label\");",
+        ] {
+            let update = run(&editor, sql);
+            assert_eq!(update["outcome"], "failed", "{sql}");
+            assert_eq!(
+                update["statements"][0]["failure"]["denied"], true,
+                "{sql}: {update}"
+            );
+        }
+        assert_eq!(describe("blocked"), None);
+        ok(
+            &owner,
+            "ALTER TABLE \"ddl_probe\" ADD COLUMN \"score\" integer NOT NULL DEFAULT 0;",
+        );
+        ok(
+            &owner,
+            "ALTER TABLE \"ddl_probe\" ALTER COLUMN \"label\" SET NOT NULL, ALTER COLUMN \"label\" SET DEFAULT 'y';\nALTER TABLE \"ddl_probe\" RENAME COLUMN \"label\" TO \"title\";",
+        );
+        assert_eq!(
+            describe("title").as_deref(),
+            Some("character varying|NO|'y'::character varying")
+        );
+        let comment = run(
+            &owner,
+            "SELECT col_description('ddl_probe'::regclass, 2) AS note;",
+        );
+        assert_eq!(comment["outcome"], "succeeded", "{comment}");
+        let rows = comment["collected"].clone();
+        assert_eq!(
+            rows[0][0]["text"], "kept",
+            "an edit must not drop the comment: {comment}"
+        );
+        ok(
+            &owner,
+            "ALTER TABLE \"ddl_probe\" ALTER COLUMN \"score\" TYPE bigint USING score::bigint;",
+        );
+        assert_eq!(describe("score").as_deref(), Some("bigint|NO|0"));
+        ok(
+            &owner,
+            "CREATE UNIQUE INDEX \"title_ix\" ON \"ddl_probe\" (\"title\", \"id\");",
+        );
+        ok(&owner, "DROP INDEX \"title_ix\";");
+        ok(&owner, "ALTER TABLE \"ddl_probe\" DROP COLUMN \"score\";");
+        assert_eq!(describe("score"), None);
+        ok(&owner, "DROP TABLE \"ddl_probe\";");
+        for handle in [&owner, &editor] {
+            invoke(
+                "disconnect_database",
+                json!({"sessionId":session,"handle":handle}),
+            )
+            .unwrap();
+        }
+    }
     // A8 backend-message limit (vendored driver): a 3 MiB DataRow is refused from its header
     // (2 MiB limit) and the next query on a fresh connection works.
     assert_eq!(

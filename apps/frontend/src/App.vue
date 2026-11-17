@@ -81,7 +81,7 @@ import { dialog as vDialog } from './directives/dialog';
 import EnumEditor from './components/EnumEditor.vue';
 import LiveExport from './components/LiveExport.vue';
 import LiveDdlDialog from './components/LiveDdlDialog.vue';
-import { showCreateTableSql, columnDefinitions, dropColumnSql } from './services/liveDdl';
+import { showCreateTableSql, columnDefinitions, dropColumnSql, dropIndexSql, type PgColumnState } from './services/liveDdl';
 import LiveSqlImport from './components/LiveSqlImport.vue';
 import { liveCsvImportPlan, MAX_IMPORT_BYTES } from './services/liveImport';
 import { gridResize as vGridResize } from './directives/gridResize';
@@ -802,9 +802,9 @@ function askConfirm(request: { title: string; message: string; acceptLabel: stri
 }
 /** Live MySQL/MariaDB schema changes need a read-write session; the server enforces privileges. */
 const liveDdlAvailable = computed(() => isLive.value && liveReadWrite.value && (store.connection.engine === 'MySQL' || store.connection.engine === 'MariaDB'));
-/** Column changes apply to base tables (any table, with or without a primary key). */
-const liveStructureEditable = computed(() => liveDdlAvailable.value && !!table.value && (table.value.kind ?? 'table') === 'table');
-const liveDdl = ref<null | { mode: 'add-column' | 'edit-column' | 'create-database'; column?: string; definition?: string; error?: string }>(null);
+/** Column and index changes apply to base tables (with or without a primary key); PostgreSQL too. */
+const liveStructureEditable = computed(() => isLive.value && liveReadWrite.value && ['MySQL', 'MariaDB', 'PostgreSQL'].includes(store.connection.engine) && !!table.value && (table.value.kind ?? 'table') === 'table');
+const liveDdl = ref<null | { mode: 'add-column' | 'edit-column' | 'create-database' | 'add-index'; column?: string; definition?: string; pg?: PgColumnState; error?: string }>(null);
 const liveDdlBusy = ref(false);
 const LIVE_DDL_IN_TRANSACTION = 'Commit or roll back the open transaction first: a schema change ends it.';
 /** The server's exact column definitions, from SHOW CREATE TABLE (run as a job). */
@@ -818,6 +818,11 @@ async function openLiveColumn(column?: Column) {
   if (!table.value) return;
   if (liveLease.value) return notify(LIVE_DDL_IN_TRANSACTION, 'error');
   if (!column) { liveDdl.value = { mode: 'add-column' }; return; }
+  // PostgreSQL: the catalog state; only changed parts are altered, nothing is restated.
+  if (store.connection.engine === 'PostgreSQL') {
+    liveDdl.value = { mode: 'edit-column', column: column.name, pg: { type: column.type, nullable: !!column.nullable, default: column.defaultKind === 'custom' ? column.default ?? '' : '' } };
+    return;
+  }
   try {
     const definition = (await liveColumnDefinitions(table.value.name)).get(column.name);
     if (definition === undefined) throw new Error(`Column ${column.name} was not found in the table definition. Refresh and try again.`);
@@ -827,6 +832,15 @@ async function openLiveColumn(column?: Column) {
 function openCreateDatabase() {
   if (liveLease.value) return notify(LIVE_DDL_IN_TRANSACTION, 'error');
   liveDdl.value = { mode: 'create-database' };
+}
+function openLiveIndex() {
+  if (liveLease.value) return notify(LIVE_DDL_IN_TRANSACTION, 'error');
+  liveDdl.value = { mode: 'add-index' };
+}
+async function dropLiveIndex(name: string) {
+  if (!table.value) return;
+  const sql = dropIndexSql(store.connection.engine, table.value.name, name);
+  await applyLiveDdl(sql, true, `Drop index ${name} on ${table.value.name}? Queries that use it may become slower; a unique index stops enforcing uniqueness.`);
 }
 async function dropLiveColumn(column: Column) {
   if (!table.value) return;
@@ -849,7 +863,7 @@ async function applyLiveDdl(sql: string, destructive: boolean, warning?: string)
     if (job.outcome !== 'succeeded') {
       const failed = job.statements.find((s) => s.failure);
       return fail(failed?.failure?.denied
-        ? `The server denied this account the change (it needs the ${creating ? 'CREATE' : 'ALTER'} privilege). Nothing was changed.`
+        ? `The server denied this account the change (${creating ? 'it needs the CREATE privilege' : store.connection.engine === 'PostgreSQL' ? 'it must own the table' : 'it needs the ALTER or INDEX privilege'}). Nothing was changed.`
         : describeJob(job, false).text);
     }
     liveDdl.value = null;
@@ -2127,15 +2141,16 @@ onBeforeUnmount(() => {
             <template v-if="isLive">
               <p v-if="table.live?.error" class="notice error" role="alert">Indexes and foreign keys could not be read: {{ table.live.error }}</p>
               <div class="panel" data-testid="live-indexes">
-                <h3><SchemaIcon kind="index" detail="Indexes" /> Indexes</h3>
+                <h3><SchemaIcon kind="index" detail="Indexes" /> Indexes<button v-if="liveStructureEditable" type="button" class="button panel-action" @click="openLiveIndex"><Plus :size="13" /> Add index</button></h3>
                 <table class="data-grid">
-                  <thead><tr><th>Name</th><th>Unique</th><th>{{ store.connection.engine === 'PostgreSQL' ? 'Definition' : 'Columns' }}</th><th v-if="store.connection.engine !== 'PostgreSQL'">Type</th></tr></thead>
+                  <thead><tr><th>Name</th><th>Unique</th><th>{{ store.connection.engine === 'PostgreSQL' ? 'Definition' : 'Columns' }}</th><th v-if="store.connection.engine !== 'PostgreSQL'">Type</th><th v-if="liveStructureEditable">Actions</th></tr></thead>
                   <tbody>
                     <tr v-for="index in table.live?.indexes || []" :key="index.name">
                       <td class="mono">{{ index.name }}</td><td>{{ index.unique ? 'Yes' : 'No' }}</td>
                       <td class="mono">{{ index.definition ?? index.columns.join(', ') }}</td><td v-if="store.connection.engine !== 'PostgreSQL'">{{ index.type }}</td>
+                      <td v-if="liveStructureEditable"><button v-if="!index.constraint" class="delete-link" :aria-label="`Drop index ${index.name}`" @click="dropLiveIndex(index.name)"><Trash2 :size="12" />Drop</button><span v-else class="muted" title="Dropped only with its primary key or constraint">Constraint</span></td>
                     </tr>
-                    <tr v-if="!table.live?.indexes.length"><td :colspan="store.connection.engine === 'PostgreSQL' ? 3 : 4" class="muted">No indexes visible to this account.</td></tr>
+                    <tr v-if="!table.live?.indexes.length"><td :colspan="(store.connection.engine === 'PostgreSQL' ? 3 : 4) + (liveStructureEditable ? 1 : 0)" class="muted">No indexes visible to this account.</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -3127,6 +3142,7 @@ onBeforeUnmount(() => {
       :columns="table?.columns.map((c) => c.name)"
       :column="liveDdl.column"
       :definition="liveDdl.definition"
+      :pg="liveDdl.pg"
       :busy="liveDdlBusy"
       :error="liveDdl.error"
       @close="liveDdl = null"

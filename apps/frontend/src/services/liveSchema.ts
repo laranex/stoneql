@@ -211,13 +211,13 @@ export function liveBrowseQuery(input: {
 }
 
 /** A live table's index as the server reports it; `definition` is PostgreSQL's own text. */
-export interface LiveIndex { name: string; unique: boolean; columns: string[]; type: string; definition?: string }
+export interface LiveIndex { name: string; unique: boolean; columns: string[]; type: string; definition?: string; /** Backs a primary key or constraint: dropped only with that constraint. */ constraint?: boolean }
 /** A live foreign key; `onDelete`/`onUpdate` are the server's rule names. */
 export interface LiveForeignKey { name: string; columns: string[]; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }
 
 export function liveIndexesSql(engine: Engine, database: string, table: string): string {
   if (!mysqlFamily(engine))
-    return `SELECT indexname AS name, indexdef AS definition FROM pg_catalog.pg_indexes WHERE schemaname = current_schema AND tablename = ${literal(table, 'A table name', engine)} ORDER BY indexname;`;
+    return `SELECT i.indexname AS name, i.indexdef AS definition, (SELECT COUNT(*) FROM pg_catalog.pg_constraint k JOIN pg_catalog.pg_class x ON x.oid = k.conindid JOIN pg_catalog.pg_namespace s ON s.oid = x.relnamespace WHERE x.relname = i.indexname AND s.nspname = i.schemaname) AS owned FROM pg_catalog.pg_indexes i WHERE i.schemaname = current_schema AND i.tablename = ${literal(table, 'A table name', engine)} ORDER BY i.indexname;`;
   return `SELECT INDEX_NAME AS name, NON_UNIQUE AS nonunique, COLUMN_NAME AS col, INDEX_TYPE AS type FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ${literal(database, 'A database name')} AND TABLE_NAME = ${literal(table, 'A table name')} ORDER BY INDEX_NAME, SEQ_IN_INDEX;`;
 }
 
@@ -239,12 +239,12 @@ export function toLiveIndexes(result: SqlResult, engine: Engine): LiveIndex[] {
   if (!mysqlFamily(engine))
     return rows.map((row) => {
       const definition = text(row.definition);
-      return { name: text(row.name), unique: /^CREATE UNIQUE INDEX /.test(definition), columns: [], type: /USING (\w+)/.exec(definition)?.[1] ?? '', definition };
+      return { name: text(row.name), unique: /^CREATE UNIQUE INDEX /.test(definition), columns: [], type: /USING (\w+)/.exec(definition)?.[1] ?? '', definition, constraint: Number(row.owned) > 0 };
     });
   const indexes = new Map<string, LiveIndex>();
   for (const row of rows) {
     const name = text(row.name);
-    const index = indexes.get(name) ?? { name, unique: text(row.nonunique) === '0', columns: [], type: text(row.type) };
+    const index = indexes.get(name) ?? { name, unique: text(row.nonunique) === '0', columns: [], type: text(row.type), constraint: name === 'PRIMARY' };
     index.columns.push(text(row.col));
     indexes.set(name, index);
   }

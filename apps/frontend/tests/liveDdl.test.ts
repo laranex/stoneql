@@ -32,3 +32,20 @@ test('a definition cannot end the statement or hide text; quoted text may contai
   assert.notEqual(charsetProblem('utf8mb4; DROP'), '');
   assert.equal(charsetProblem('utf8mb4_bin'), '');
 });
+
+import { pgEditColumnSql, pgAddColumnSql, addIndexSql, dropIndexSql } from '../src/services/liveDdl.ts';
+test('PostgreSQL edits alter only what changed, atomically, then rename', () => {
+  const before = { type: 'character varying(40)', nullable: true, default: "'x'::character varying" };
+  assert.equal(pgEditColumnSql('t', 'c', 'c', before, { ...before }), '');
+  assert.equal(pgEditColumnSql('t', 'c', 'd', before, { ...before }), 'ALTER TABLE "t" RENAME COLUMN "c" TO "d";');
+  assert.equal(pgEditColumnSql('t', 'c', 'c', before, { type: 'integer', nullable: false, default: '', using: 'c::integer' }),
+    'ALTER TABLE "t" ALTER COLUMN "c" TYPE integer USING c::integer, ALTER COLUMN "c" SET NOT NULL, ALTER COLUMN "c" DROP DEFAULT;');
+  assert.equal(pgEditColumnSql('t', 'c', 'e', before, { ...before, default: "'y'" }), 'ALTER TABLE "t" ALTER COLUMN "c" SET DEFAULT \'y\';\nALTER TABLE "t" RENAME COLUMN "c" TO "e";');
+  assert.equal(pgAddColumnSql('t', 'n', { type: 'integer', nullable: false, default: '0' }), 'ALTER TABLE "t" ADD COLUMN "n" integer NOT NULL DEFAULT 0;');
+});
+test('index statements per engine', () => {
+  assert.equal(addIndexSql('MySQL', 't', 'ix', ['b', 'a'], true), 'ALTER TABLE `t` ADD UNIQUE INDEX `ix` (`b`, `a`);');
+  assert.equal(addIndexSql('PostgreSQL', 't', 'ix', ['a'], false), 'CREATE INDEX "ix" ON "t" ("a");');
+  assert.equal(dropIndexSql('MariaDB', 't', 'ix'), 'ALTER TABLE `t` DROP INDEX `ix`;');
+  assert.equal(dropIndexSql('PostgreSQL', 't', 'i"x'), 'DROP INDEX "i""x";');
+});

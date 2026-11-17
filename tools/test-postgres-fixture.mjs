@@ -113,6 +113,12 @@ GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_reader;
 GRANT USAGE ON SCHEMA public TO stoneql_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO stoneql_reader;
 GRANT USAGE ON SEQUENCE trust_seq TO stoneql_reader;
+CREATE ROLE stoneql_owner LOGIN PASSWORD '${password}';
+GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_owner;
+GRANT USAGE, CREATE ON SCHEMA public TO stoneql_owner;
+CREATE ROLE stoneql_editor LOGIN PASSWORD '${password}';
+GRANT CONNECT ON DATABASE stoneql_m001_fixture TO stoneql_editor;
+GRANT USAGE ON SCHEMA public TO stoneql_editor;
 `);
   // Created before 001's grants so the reader can SELECT it; 1 KiB payloads like the MySQL profile.
   if (resourceEvaluation) writeFileSync(join(init, '000-resource.sql'), `CREATE TABLE resource_rows(id int PRIMARY KEY, payload varchar(1024) NOT NULL);

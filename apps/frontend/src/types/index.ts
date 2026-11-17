@@ -97,7 +97,7 @@ export interface Table {
   rows: Row[];
   /** Live catalog only: indexes and foreign keys exactly as the server reports them. */
   live?: {
-    indexes: { name: string; unique: boolean; columns: string[]; type: string; definition?: string }[];
+    indexes: { name: string; unique: boolean; columns: string[]; type: string; definition?: string; constraint?: boolean }[];
     foreignKeys: { name: string; columns: string[]; refTable: string; refColumns: string[]; onDelete: string; onUpdate: string }[];
     error?: string;
   };

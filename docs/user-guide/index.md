@@ -22,7 +22,7 @@ Browsers show and report every line break in a text box as LF, so StoneQL rebuil
 
 ## Structure and database objects
 
-In the desktop app, Table → Structure shows a live table's columns, indexes and foreign keys exactly as the server's catalog reports them. On a read-write MySQL or MariaDB connection you can **Add column**, and use **Change** (rename or edit the definition) and **Drop** on any column of a base table. Change starts from the server's own column definition (`SHOW CREATE TABLE`), so collation, comment, `ON UPDATE` and other attributes are kept unless you edit them; a rename alone uses `RENAME COLUMN`. Every change shows the exact SQL before **Apply**; dropping a column or changing a definition asks for confirmation (and PROD connections always confirm). The server enforces privileges: an account without `ALTER` is refused and nothing changes. Schema changes are refused while a transaction is open, because the server would commit it. In the browser demo you can also manage columns and indexes, and database-level navigation exposes views, routines, triggers and events; engine capabilities determine available operations. See [database object management](../database-objects.md) for the demo's precise behavior and limitations.
+In the desktop app, Table → Structure shows a live table's columns, indexes and foreign keys exactly as the server's catalog reports them. On a read-write MySQL, MariaDB or PostgreSQL connection you can **Add column**, use **Change** (rename or edit) and **Drop** on any column of a base table, and **Add index** (unique or not, columns in the order you pick) or drop a secondary index (a primary key or constraint-backed index is dropped only with its constraint). On MySQL/MariaDB, Change starts from the server's own column definition (`SHOW CREATE TABLE`), so collation, comment, `ON UPDATE` and other attributes are kept unless you edit them; a rename alone uses `RENAME COLUMN`. On PostgreSQL, Change edits the type (with an optional `USING` expression), NULL allowed and the default, and alters only what you changed, so comments, collation, identity and constraints stay as they are. Every change shows the exact SQL before **Apply**; dropping a column or changing a definition asks for confirmation (and PROD connections always confirm). The server enforces privileges: an account without `ALTER`/`INDEX` (MySQL/MariaDB), or that does not own the table (PostgreSQL), is refused and nothing changes. Schema changes are refused while a transaction is open, because the server would commit it. In the browser demo you can also manage columns and indexes, and database-level navigation exposes views, routines, triggers and events; engine capabilities determine available operations. See [database object management](../database-objects.md) for the demo's precise behavior and limitations.
 
 ## Databases in the Explorer
 
@@ -34,7 +34,6 @@ These features are hidden for live connections rather than simulated:
 
 - the Search tab and bulk Copy of selected rows;
 - table Operations (rename, copy, truncate, drop);
-- index changes in Structure, and column changes on PostgreSQL;
 - database objects: managing views, routines, triggers and events;
 - the database-level Structure overview;
 - CSV import at database level, and SQL import for PostgreSQL;

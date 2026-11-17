@@ -89,3 +89,34 @@ export function createDatabaseSql(engine: Engine, name: string, charset = '', co
 export function charsetProblem(value: string): string {
   return value && !/^[A-Za-z0-9_]{1,64}$/.test(value) ? 'Use a character set or collation name such as utf8mb4 or utf8mb4_0900_ai_ci.' : '';
 }
+
+/** PostgreSQL column state as the catalog reports it; `default` is an expression ('' = none). */
+export interface PgColumnState { type: string; nullable: boolean; default: string }
+/**
+ * PostgreSQL has no single "change column": only the parts that differ are altered, so
+ * comments, collation, identity and constraints are never restated. Type, NOT NULL and default
+ * changes form one ALTER TABLE (atomic); a rename follows as its own statement. '' = no change.
+ */
+export function pgEditColumnSql(table: string, column: string, name: string, before: PgColumnState, after: PgColumnState & { using?: string }): string {
+  const t = quoteIdentifier(table, 'PostgreSQL'), c = quoteIdentifier(column, 'PostgreSQL');
+  const actions: string[] = [];
+  if (after.type.trim() !== before.type.trim()) actions.push(`ALTER COLUMN ${c} TYPE ${after.type.trim()}${after.using?.trim() ? ` USING ${after.using.trim()}` : ''}`);
+  if (after.nullable !== before.nullable) actions.push(`ALTER COLUMN ${c} ${after.nullable ? 'DROP NOT NULL' : 'SET NOT NULL'}`);
+  if (after.default.trim() !== before.default.trim()) actions.push(after.default.trim() ? `ALTER COLUMN ${c} SET DEFAULT ${after.default.trim()}` : `ALTER COLUMN ${c} DROP DEFAULT`);
+  const statements = actions.length ? [`ALTER TABLE ${t} ${actions.join(', ')};`] : [];
+  if (name !== column) statements.push(`ALTER TABLE ${t} RENAME COLUMN ${c} TO ${quoteIdentifier(name, 'PostgreSQL')};`);
+  return statements.join('\n');
+}
+export function pgAddColumnSql(table: string, name: string, column: PgColumnState): string {
+  return `ALTER TABLE ${quoteIdentifier(table, 'PostgreSQL')} ADD COLUMN ${quoteIdentifier(name, 'PostgreSQL')} ${column.type.trim()}${column.nullable ? '' : ' NOT NULL'}${column.default.trim() ? ` DEFAULT ${column.default.trim()}` : ''};`;
+}
+/** A secondary index on columns in the given order (MySQL/MariaDB ALTER TABLE, PostgreSQL CREATE INDEX). */
+export function addIndexSql(engine: Engine, table: string, name: string, columns: string[], unique: boolean): string {
+  const cols = columns.map((c) => quoteIdentifier(c, engine)).join(', ');
+  if (engine === 'PostgreSQL') return `CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${quoteIdentifier(name, engine)} ON ${quoteIdentifier(table, engine)} (${cols});`;
+  return `ALTER TABLE ${quoteIdentifier(table, engine)} ADD ${unique ? 'UNIQUE ' : ''}INDEX ${quoteIdentifier(name, engine)} (${cols});`;
+}
+export function dropIndexSql(engine: Engine, table: string, name: string): string {
+  if (engine === 'PostgreSQL') return `DROP INDEX ${quoteIdentifier(name, engine)};`;
+  return `ALTER TABLE ${quoteIdentifier(table, engine)} DROP INDEX ${quoteIdentifier(name, engine)};`;
+}
