@@ -17,7 +17,7 @@ for (const theme of ['light', 'dark'])
     await dialog.getByRole('button', { name: 'Save column', exact: true }).click();
     const row = page.locator('.structure-grid tbody tr').filter({ hasText: 'nickname' });
     await expect(row).toContainText('varchar(100)');
-    await row.getByRole('button', { name: 'Change', exact: true }).click();
+    await row.getByRole('button', { name: 'Change column nickname', exact: true }).click();
     const edit = page.getByRole('dialog', { name: 'Edit column', exact: true });
     await expect(edit.getByLabel('Length', { exact: true })).toHaveValue('100');
     await edit.getByLabel('Length', { exact: true }).fill('120');

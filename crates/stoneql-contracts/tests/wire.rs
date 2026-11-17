@@ -308,7 +308,7 @@ fn execution_requests_decode_strictly_and_omit_absent_options() {
 fn execution_replies_keep_outcomes_cancellation_and_exact_values_distinct() {
     let update = json!({"jobId":"j","state":"finished","outcome":"unknown","cancellation":"confirmed","serverCancelSent":true,"deadlineExceeded":false,
         "statements":[{"index":0,"status":"succeeded","inTransaction":true,"affectedRows":"18446744073709551615","resultSets":1,"failure":null,"resultsWithheld":true},
-                      {"index":1,"status":"failed","inTransaction":true,"affectedRows":"0","resultSets":0,"failure":{"constraint":"foreign_key","sqlState":"23503"},"resultsWithheld":false},
+                      {"index":1,"status":"failed","inTransaction":true,"affectedRows":"0","resultSets":0,"failure":{"constraint":"foreign_key","sqlState":"23503","denied":false},"resultsWithheld":false},
                       {"index":2,"status":"not_run","inTransaction":true,"affectedRows":"0","resultSets":0,"failure":null,"resultsWithheld":false}],
         "batch":{"statement":0,"result":0,"columns":[{"name":"n","databaseType":"NUMERIC","nullable":null}],"rows":[[{"kind":"decimal","text":"123456789012345678901234567890.4500"}]],"last":true,"truncated":false},
         "lease":"rollback_only","done":false});

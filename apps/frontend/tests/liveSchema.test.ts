@@ -97,11 +97,13 @@ test('PostgreSQL columns keep catalog spelling, keys, identity and expression de
 test('indexes group per name in column order; PostgreSQL keeps the server definition', async () => {
   const { toLiveIndexes, toLiveForeignKeys, RULE_NOT_VISIBLE } = await import('../src/services/liveSchema.ts');
   assert.deepEqual(toLiveIndexes(result(['name', 'nonunique', 'col', 'type'], [['PRIMARY', '0', 'id', 'BTREE'], ['ab', '1', 'a', 'BTREE'], ['ab', '1', 'b', 'BTREE']]), 'MySQL'), [
-    { name: 'PRIMARY', unique: true, columns: ['id'], type: 'BTREE' },
-    { name: 'ab', unique: false, columns: ['a', 'b'], type: 'BTREE' },
+    { name: 'PRIMARY', unique: true, columns: ['id'], type: 'BTREE', constraint: true },
+    { name: 'ab', unique: false, columns: ['a', 'b'], type: 'BTREE', constraint: false },
   ]);
-  const [pg] = toLiveIndexes(result(['name', 'definition'], [['t_xy', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)']]), 'PostgreSQL');
-  assert.deepEqual([pg!.unique, pg!.type, pg!.definition], [true, 'btree', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)']);
+  const [pg, owned] = toLiveIndexes(result(['name', 'definition', 'owned'], [['t_xy', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)', '0'], ['t_pkey', 'CREATE UNIQUE INDEX t_pkey ON public.t USING btree (id)', '1']]), 'PostgreSQL');
+  assert.deepEqual([pg!.unique, pg!.type, pg!.definition, pg!.constraint], [true, 'btree', 'CREATE UNIQUE INDEX t_xy ON public.t USING btree (x, y)', false]);
+  // An index that backs a primary key or constraint is flagged (it is dropped only with it).
+  assert.equal(owned!.constraint, true);
   // PostgreSQL composite key rows are a product; each column is kept once, rules named.
   const [key] = toLiveForeignKeys(result(['name', 'col', 'ref_table', 'ref_col', 'on_delete', 'on_update'], [
     ['k', 'x', 'p', 'a', 'n', 'a'], ['k', 'x', 'p', 'b', 'n', 'a'], ['k', 'y', 'p', 'a', 'n', 'a'], ['k', 'y', 'p', 'b', 'n', 'a'],
