@@ -18,6 +18,8 @@ jobs:
       matrix:
         os: [windows-2025]
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_FIXTURE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST != '' }}
     steps:
       - uses: actions/checkout@v4
         continue-on-error: ${{ runner.os == 'Windows' }}
@@ -42,6 +44,17 @@ jobs:
         continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:test
         continue-on-error: ${{ runner.os == 'Windows' }}
+      # Windows runners cannot run the Docker fixtures: the real-database tests run here against
+      # disposable fixtures on the project's test-only fixture host, reached over a restricted SSH
+      # tunnel (tools/test-remote-fixture.mjs, tools/ci-fixture-host/). Skipped without the secrets.
+      - name: Real databases (remote fixture host)
+        if: runner.os == 'Windows' && env.HAS_FIXTURE_HOST == 'true'
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        run: node tools/test-remote-fixture.mjs
+        env:
+          STONEQL_REMOTE_HOST: ${{ secrets.STONEQL_FIXTURE_HOST }}
+          STONEQL_REMOTE_KEY: ${{ secrets.STONEQL_FIXTURE_KEY }}
+          STONEQL_REMOTE_KNOWN_HOSTS: ${{ secrets.STONEQL_FIXTURE_KNOWN_HOSTS }}
       - run: npm run rust:boundaries
         continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run contracts:check
