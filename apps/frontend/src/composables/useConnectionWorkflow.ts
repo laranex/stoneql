@@ -1,6 +1,6 @@
 import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
-import { openLive, closeLive, queryLive, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
+import { openLive, closeLive, queryLive, readWriteRoute, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState, mockConnectionsAvailable } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { connectionColors } from '../services/connectionPreferences';
@@ -306,10 +306,10 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     if (!test && !draft.database.trim()) return 'Choose or enter the default database. Test connection lists the databases you can use.';
     return '';
   }
-  /** Read-write for a Direct profile not marked read-only, when this host enables read-write. */
+  /** Read-write for a profile not marked read-only on a read-write route, when the host allows it. */
   function liveAccess(draft: Connection): Connection['access'] {
     const enabled = nativeHostState.kind === 'desktop' && nativeHostState.info.readWriteSql === true;
-    return enabled && draft.transport.type !== 'ssh' && !draft.readOnly ? 'read_write' : undefined;
+    return enabled && readWriteRoute(draft) && !draft.readOnly ? 'read_write' : undefined;
   }
   /** A verified-TLS failure to this computer says how to connect without TLS; never automatic. */
   function withTlsHint(error: unknown, draft?: Connection): string {
@@ -360,7 +360,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const old=store.connections.find(c=>c.id===draft.id);
     if(old&&old.mode!=='live'&&store.workspaces[draft.id]?.queries.some(q=>q.sql!==q.saved)&&!(await askDiscard('Changing connection mode clears this workspace. Discard its unsaved queries?')))return;
     if((connectNow||store.activeId===draft.id)&&!(await discard()))return;
-    // A15: read-write unless the profile is read-only; SSH stays read-only until approved (D025-9).
+    // A15: read-write unless the profile is read-only; PostgreSQL over SSH stays read-only.
     const access=liveAccess(draft);
     if(connectNow&&access==='read_write'&&draft.environment==='Production'&&!(await confirmReadWrite(draft.name)))return;
     if(old?.mode==='live'&&!(await confirmLeaseDiscard(draft.id)))return;

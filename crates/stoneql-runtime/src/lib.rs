@@ -385,10 +385,14 @@ impl Connections {
     ) -> Result<ConnectionId, LifecycleError> {
         config.validate()?;
         let engine = config.engine;
-        // Gate (D025-9): read-write over SSH stays unavailable until the user enables it
-        // separately; tunnelled cancellation under forwarding-slot exhaustion is fixture-tested
-        // (`execution::ssh_fixture`). Refused before any network access.
-        if tunnel.is_some() && access == Access::ReadWrite {
+        // Gate (D025-9): read-write over SSH is enabled for MySQL/MariaDB (A15, approved
+        // 2026-11-17; tunnelled cancellation under forwarding-slot exhaustion is fixture-tested
+        // in `execution::ssh_fixture`). PostgreSQL over SSH stays read-only. Refused before any
+        // network access.
+        if tunnel.is_some()
+            && access == Access::ReadWrite
+            && !matches!(engine, Engine::MySql | Engine::MariaDb)
+        {
             return Err(LifecycleError::Unsupported);
         }
         if let Some(tunnel) = &tunnel {
@@ -1209,9 +1213,12 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn read_write_over_ssh_is_refused_before_network_access() {
+    async fn postgres_read_write_over_ssh_is_refused_before_network_access() {
         let connections =
             Connections::new(1, Duration::from_secs(1), Duration::from_secs(60)).unwrap();
+        let mut postgres = config();
+        postgres.engine = Engine::PostgreSql;
+        postgres.port = 5432;
         let tunnel = SshConfig {
             host: "192.0.2.1".into(),
             port: 22,
@@ -1223,7 +1230,7 @@ mod tests {
             connections
                 .connect_with_access(
                     OwnerId::new(),
-                    config(),
+                    postgres,
                     Some(tunnel),
                     None,
                     Access::ReadWrite

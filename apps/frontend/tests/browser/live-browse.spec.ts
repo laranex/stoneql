@@ -63,6 +63,15 @@ for (const [engine, theme] of [['MySQL', 'light'], ['MySQL', 'dark'], ['PostgreS
 
     const tree = page.locator('.table-tree button');
     await expect(tree).toHaveText([/accounts/, /active_accounts\s*view/]);
+    // The database row is one toggle: clicking the name collapses, then shows the live tables again.
+    const databaseRow = page.locator('.database-group').getByRole('button', { name: /, 2 tables$/ });
+    await expect(databaseRow).toHaveAttribute('aria-expanded', 'true');
+    await databaseRow.locator('strong').click();
+    await expect(databaseRow).toHaveAttribute('aria-expanded', 'false');
+    await expect(tree).toHaveCount(0);
+    await databaseRow.locator('strong').click();
+    await expect(databaseRow).toHaveAttribute('aria-expanded', 'true');
+    await expect(tree).toHaveText([/accounts/, /active_accounts\s*view/]);
     await tree.filter({ hasText: /^accounts/ }).click();
     await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['Browse', 'Structure', 'SQL', 'Export']);
     await expect(page.getByText('9007199254740993', { exact: true })).toBeVisible();

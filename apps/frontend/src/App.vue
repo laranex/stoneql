@@ -61,7 +61,7 @@ import {
   Sun,
   Square,
 } from 'lucide-vue-next';
-import { cancelLiveJob, tlsOptional, usesTls, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
+import { cancelLiveJob, readWriteRoute, tlsOptional, usesTls, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -594,13 +594,22 @@ async function openDatabaseContext(name?: string) {
   } else w.value.scope = 'server';
   w.value.view = 'Structure';
 }
+/** Explorer row: collapse an open list; otherwise open the database and show its tables. */
+async function toggleDatabase(name: string) {
+  if (expanded.value.includes(name) && !treeSearch.value) {
+    expanded.value = expanded.value.filter((n) => n !== name);
+    return;
+  }
+  await openDatabaseContext(name);
+  if (!expanded.value.includes(name)) expanded.value.push(name);
+}
 async function openOverviewTable(database: string, name: string, view: View) {
   await chooseTable(database,name);
   if (w.value.scope === 'table' && w.value.database === database && w.value.table === name) await navigate(view);
 }
 const visibleTabs = computed(() => {
   // A live SQL file imports into the database, so read-write MySQL/MariaDB offer Import there too.
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (w.value.scope==='database' && tab.name==='Import' && liveReadWrite.value && ['MySQL','MariaDB'].includes(store.connection.engine)) || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (w.value.scope==='database' && tab.name==='Export' && liveCatalog.value) || (w.value.scope==='database' && tab.name==='Import' && liveReadWrite.value && ['MySQL','MariaDB'].includes(store.connection.engine)) || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -802,6 +811,8 @@ function runConfirmation() {
   }
 }
 function copySelected() {
+  // Mock-only (local rows); a live table must never report a copy that did not happen.
+  if (isLive.value) return notify('Not available for live tables yet; nothing was changed on the server.', 'error');
   try {
     const count = store.copyRows(selected.value).length;
     selected.value = [];
@@ -1294,6 +1305,7 @@ function changeColumnType() {
 }
 function saveColumn() {
   if (!table.value) return;
+  if (isLive.value) return notify('Not available for live tables yet; nothing was changed on the server.', 'error');
   const errors = validateColumn(
     columnDraft.value,
     store.connection.engine,
@@ -1314,6 +1326,7 @@ function saveColumn() {
   }
 }
 function dropColumn(column: Column) {
+  if (isLive.value) return notify('Not available for live tables yet; nothing was changed on the server.', 'error');
   if (column.primary)
     return notify('Primary key columns cannot be removed in this prototype.', 'error');
   confirmation.value = {
@@ -1525,10 +1538,16 @@ onBeforeUnmount(() => {
         </div>
         <nav class="database-tree">
           <div v-for="db in treeDatabases" :key="db.name" class="database-group">
-            <div class="database-row">
-              <button class="icon-button" :aria-label="`${expanded.includes(db.name) ? 'Collapse' : 'Expand'} ${db.name}`" :aria-expanded="expanded.includes(db.name)" @click="expanded.includes(db.name) ? expanded = expanded.filter(n => n !== db.name) : expanded.push(db.name)"><ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" /><ChevronRight v-else :size="12" /></button>
-              <button class="database-context-link" @click="openDatabaseContext(db.name)"><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" /><strong>{{ db.name }}</strong><span :title="isLive && !liveCatalog ? 'Schema discovery is not available for this engine yet' : ''">{{ isLive && !liveCatalog ? '—' : db.tables.length }}</span></button>
-            </div>
+            <!-- One control: arrow, icon, name and count toggle the table list (Enter/Space too). -->
+            <button
+              type="button"
+              class="database-row database-context-link"
+              :aria-expanded="expanded.includes(db.name) || !!treeSearch"
+              :aria-label="`${db.name}, ${isLive && !liveCatalog ? 'tables not listed' : `${db.tables.length} tables`}`"
+              @click="toggleDatabase(db.name)"
+            >
+              <ChevronDown v-if="expanded.includes(db.name) || treeSearch" :size="12" aria-hidden="true" /><ChevronRight v-else :size="12" aria-hidden="true" /><Database :size="15" :class="{ 'accent-icon': db.name === w.database }" aria-hidden="true" /><strong>{{ db.name }}</strong><span :title="isLive && !liveCatalog ? 'Schema discovery is not available for this engine yet' : ''">{{ isLive && !liveCatalog ? '—' : db.tables.length }}</span>
+            </button>
             <div v-if="expanded.includes(db.name) || treeSearch" class="table-tree">
               <button
                 v-for="t in db.tables"
@@ -1689,7 +1708,7 @@ onBeforeUnmount(() => {
                   <X :size="12" />
                 </button>
               </div>
-              <button class="button filter-button" @click="navigate('Search')">
+              <button v-if="!isLive" class="button filter-button" @click="navigate('Search')">
                 <ListFilter :size="13" /> Search
               </button>
             </div>
@@ -1910,7 +1929,7 @@ onBeforeUnmount(() => {
                     : 'Check all'
                 }}</button
               ><span class="muted">With selected:</span
-              ><button :disabled="!selected.length" @click="copySelected()">
+              ><button v-if="!isLive" :disabled="!selected.length" @click="copySelected()">
                 <Copy :size="12" /> Copy</button
               ><button
                 :disabled="!selected.length"
@@ -1977,7 +1996,7 @@ onBeforeUnmount(() => {
           <template v-else-if="table && w.view === 'Structure'"
             ><div v-if="isMockView" class="panel"><div class="workspace-toolbar"><span>{{table.kind==='materialized-view'?'Materialized view':'View'}} · read-only mock snapshot</span><div class="row-actions"><button @click="objectManager?.openView(table)">Definition / Edit</button><button @click="refreshBrowse">{{table.kind==='materialized-view'?'Refresh materialized view (mock)':'Refresh snapshot (mock)'}}</button><button class="danger-text" @click="objectManager?.dropView(table)">Drop view</button></div></div><pre class="object-definition"><SqlText :text="table.definition || ''" :engine="store.connection.engine" /></pre><div v-if="viewError" class="notice error" role="alert">{{viewError}}</div></div><div class="workspace-toolbar">
               <span class="muted">{{ table.columns.length }} columns</span
-              ><button v-if="!isReadOnly" class="button" @click="editColumn()"><Plus :size="13" /> Add column</button>
+              ><button v-if="!isReadOnly && !isLive" class="button" @click="editColumn()"><Plus :size="13" /> Add column</button>
             </div>
             <div class="data-grid-wrap schema-grid-wrap">
               <table class="data-grid structure-grid">
@@ -1998,7 +2017,7 @@ onBeforeUnmount(() => {
                     <th>Null</th>
                     <th>Default</th>
                     <th>Extra</th>
-                    <th v-if="!isReadOnly">Actions</th>
+                    <th v-if="!isReadOnly && !isLive">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2014,7 +2033,7 @@ onBeforeUnmount(() => {
                       {{ c.defaultKind === 'null' ? 'NULL' : (c.default ?? 'None') }}
                     </td>
                     <td>{{ (c.autoIncrement) ? columnCap.autoLabel : '' }}</td>
-                    <td v-if="!isReadOnly">
+                    <td v-if="!isReadOnly && !isLive">
                       <div class="inline-actions">
                         <button @click="editColumn(c)"><Pencil :size="12" />Change</button
                         ><button class="delete-link" @click="dropColumn(c)">
@@ -2425,7 +2444,7 @@ onBeforeUnmount(() => {
               </div>
             </form></template
           >
-          <LiveExport v-else-if="w.view === 'Export' && isLive" :key="store.activeId + w.table" /><ExportWorkflow
+          <LiveExport v-else-if="w.view === 'Export' && isLive" :key="store.activeId + w.scope + w.table" :whole="w.scope === 'database'" /><ExportWorkflow
             v-else-if="w.view === 'Export'"
             :key="store.activeId + w.database + w.scope"
           /><div v-else-if="isLive && w.scope === 'database' && w.view === 'Import'" class="panel transfer-panel" data-testid="database-import">
@@ -2782,7 +2801,7 @@ onBeforeUnmount(() => {
         <form @submit.prevent="saveConnection()">
           <div class="modal-body">
             <label v-if="demo" class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
-            <div v-if="connectionDraft.mode==='live'" class="form-label" data-testid="access-option"><label class="compact-choice"><input type="checkbox" :disabled="testing || !readWriteAvailable || connectionDraft.transport.type==='ssh'" :checked="!readWriteAvailable || connectionDraft.transport.type==='ssh' || connectionDraft.readOnly === true" @change="connectionDraft.readOnly = ($event.target as HTMLInputElement).checked ? true : undefined" /> Read-only connection</label><span class="muted">{{ !readWriteAvailable ? 'This build runs live connections read-only.' : connectionDraft.transport.type==='ssh' ? 'SSH tunnel connections are read-only for now.' : connectionDraft.readOnly ? 'Engine-enforced read-only SELECT subset. Saved with this connection.' : `Read-write: scripts, transactions and row edits can change data.${connectionDraft.environment==='Production' ? ' PROD asks for confirmation when connecting.' : ''}` }}</span></div>
+            <div v-if="connectionDraft.mode==='live'" class="form-label" data-testid="access-option"><label class="compact-choice"><input type="checkbox" :disabled="testing || !readWriteAvailable || !readWriteRoute(connectionDraft)" :checked="!readWriteAvailable || !readWriteRoute(connectionDraft) || connectionDraft.readOnly === true" @change="connectionDraft.readOnly = ($event.target as HTMLInputElement).checked ? true : undefined" /> Read-only connection</label><span class="muted">{{ !readWriteAvailable ? 'This build runs live connections read-only.' : !readWriteRoute(connectionDraft) ? 'PostgreSQL over an SSH tunnel is read-only for now.' : connectionDraft.readOnly ? 'Engine-enforced read-only SELECT subset. Saved with this connection.' : `Read-write: scripts, transactions and row edits can change data.${connectionDraft.environment==='Production' ? ' PROD asks for confirmation when connecting.' : ''}` }}</span></div>
             <div v-if="connectionDraft.mode==='live' && (connectionDraft.engine==='MySQL' || connectionDraft.engine==='MariaDB') && connectionDraft.transport.type==='direct'" class="form-label" data-testid="tls-option">
               <label v-if="tlsOptional(connectionDraft)" class="compact-choice"><input type="checkbox" :disabled="testing" :checked="connectionDraft.tls !== false" @change="connectionDraft.tls = ($event.target as HTMLInputElement).checked ? undefined : false" /> Use TLS</label>
               <span class="muted">{{ !tlsOptional(connectionDraft) ? 'Verified TLS is required for connections to other computers.' : usesTls(connectionDraft) ? 'The server certificate and host name are verified.' : 'TLS off: traffic to this computer is not encrypted. Turn on to verify the certificate and host name.' }}</span>

@@ -38,8 +38,8 @@ for(const theme of ['light','dark'])test(`${theme}: explicit native live connect
  await page.getByRole('button',{name:'Save & connect',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'Connection setup'})).toHaveCount(0);
  await expect(page.locator('.footer-session')).toContainText('Live read-only · connected');
- await expect(page.locator('.view-tabs [role=tab]')).toHaveCount(1);
- await expect(page.locator('.view-tabs [role=tab]')).toHaveText('SQL');
+ // Database level: SQL and a whole-database Export (Import needs a read-write connection).
+ await expect(page.locator('.view-tabs [role=tab]')).toHaveText(['SQL','Export']);
  await expect(page.locator('.table-tree button')).toHaveCount(0);
  await expect(page.locator('.database-context-link')).toContainText('acme_store');
  await expect(page.getByText('No matching tables',{exact:true})).toHaveCount(0);

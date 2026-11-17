@@ -523,14 +523,15 @@ pub struct ExportFileGrant {
     pub grant: Option<String>,
     pub file_name: Option<String>,
 }
-/// Streams one table of a live handle into a granted destination.
+/// Streams one table of a live handle, or (`table: null`, SQL only) every table of its
+/// database, into a granted destination.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StartExportRequest {
     pub session_id: String,
     pub handle: String,
     pub grant: String,
-    pub table: String,
+    pub table: Option<String>,
     pub format: TransferFormatDto,
     pub structure: bool,
     pub data: bool,

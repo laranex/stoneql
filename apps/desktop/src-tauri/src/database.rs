@@ -38,13 +38,13 @@ pub(crate) fn admit(session: &NativeSession) -> Result<RequestSlot<'_>, ErrorDto
         .map_err(|_| ErrorDto::from(CoreError::rejected(ErrorCode::Capacity)))?;
     Ok(RequestSlot(&session.active_requests))
 }
-/// Omitted means read-only; read-write is an explicit per-connection opt-in, refused here
-/// (before credential lookup or network I/O) while the host's read-write gate is off, and over
-/// SSH until the user enables SSH read-write separately (D025-9).
+/// Omitted means read-only; read-write is an explicit per-connection request, refused here
+/// (before credential lookup or network I/O) while the host's read-write gate is off, and for
+/// routes still read-only (`refused_route`: PostgreSQL over SSH, D025-9).
 pub(crate) fn access(
     session: &NativeSession,
     mode: Option<AccessModeDto>,
-    ssh: bool,
+    refused_route: bool,
 ) -> Result<Access, ErrorDto> {
     match mode {
         Some(AccessModeDto::ReadWrite) if !session.read_write_sql => {
@@ -53,7 +53,9 @@ pub(crate) fn access(
                 "Read-write SQL is disabled in this build pending safety approval.".into();
             Err(error)
         }
-        Some(AccessModeDto::ReadWrite) if ssh => Err(lifecycle(LifecycleError::Unsupported)),
+        Some(AccessModeDto::ReadWrite) if refused_route => {
+            Err(lifecycle(LifecycleError::Unsupported))
+        }
         Some(AccessModeDto::ReadWrite) => Ok(Access::ReadWrite),
         _ => Ok(Access::ReadOnly),
     }
@@ -143,7 +145,12 @@ pub async fn connect_direct<R: Runtime>(
     {
         return Err(invalid());
     }
-    let mode = access(&session, input.access, input.ssh.is_some())?;
+    // SSH read-write: MySQL/MariaDB only (A15); PostgreSQL over SSH stays read-only.
+    let mode = access(
+        &session,
+        input.access,
+        input.ssh.is_some() && !matches!(engine, Engine::MySql | Engine::MariaDb),
+    )?;
     // F-01: the trusted key comes only from the native store; an unenrolled endpoint is refused
     // before any secret is resolved, key file read or network I/O.
     let host_key = input

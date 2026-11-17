@@ -156,11 +156,15 @@ for(const theme of ['light','dark'])test(`${theme}: read-write gate, failed-conn
  await page.getByPlaceholder('e.g. Local development').fill('Orders dev');
  await expect(readOnly).toBeEnabled();
  await expect(readOnly).not.toBeChecked();
- // SSH tunnels stay read-only (separate approval); Direct is read-write by default.
+ // A15: MySQL/MariaDB are read-write over Direct and SSH; PostgreSQL over SSH stays read-only.
  await page.getByRole('button',{name:'SSH Tunnel'}).click();
+ await expect(readOnly).toBeEnabled();
+ await expect(readOnly).not.toBeChecked();
+ await page.getByLabel('Database engine',{exact:true}).selectOption('PostgreSQL');
  await expect(readOnly).toBeChecked();
  await expect(readOnly).toBeDisabled();
- await expect(page.getByTestId('access-option')).toContainText('SSH tunnel connections are read-only for now.');
+ await expect(page.getByTestId('access-option')).toContainText('PostgreSQL over an SSH tunnel is read-only for now.');
+ await page.getByLabel('Database engine',{exact:true}).selectOption('MySQL');
  await page.getByRole('button',{name:'Direct',exact:true}).click();
  await expect(readOnly).not.toBeChecked();
  await page.getByRole('button',{name:'Save & connect',exact:true}).click();

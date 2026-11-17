@@ -54,6 +54,10 @@ export function tlsOptional(connection: Connection): boolean {
   return connection.mode === 'live' && (connection.engine === 'MySQL' || connection.engine === 'MariaDB')
     && connection.transport.type === 'direct' && isLoopbackHost(connection.host);
 }
+/** Read-write routes (A15): Direct, and SSH for MySQL/MariaDB; PostgreSQL over SSH is read-only. */
+export function readWriteRoute(connection: Connection): boolean {
+  return connection.transport.type !== 'ssh' || connection.engine === 'MySQL' || connection.engine === 'MariaDB';
+}
 /** Verified TLS unless TLS was explicitly turned off for this computer. */
 export function usesTls(connection: Connection): boolean {
   return !tlsOptional(connection) || connection.tls !== false;
@@ -299,7 +303,7 @@ export function writeKeywords(sql: string): string[] {
 
 /** M007: native save dialog; the renderer receives a one-shot grant, never a path. */
 export const pickExportFile = (suggestedName: string, format: TransferFormatDto) => nativeDatabase<ExportFileGrant>('pick_export_file', { suggestedName, format });
-export const startExport = (handle: string, grant: string, table: string, format: TransferFormatDto, structure: boolean) =>
+export const startExport = (handle: string, grant: string, table: string | null, format: TransferFormatDto, structure: boolean) =>
   nativeDatabase<TransferAccepted>('start_export', { handle, grant, table, format, structure, data: true });
 export const exportStatus = (transferId: string) => nativeDatabase<TransferStatus>('export_status', { transferId });
 export const cancelExport = (transferId: string) => nativeDatabase<TransferStatus>('cancel_export', { transferId });

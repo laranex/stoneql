@@ -570,7 +570,7 @@ async fn sql_import(
             owner,
             handle,
             &ExportRequest {
-                table: "export_values".into(),
+                table: Some("export_values".into()),
                 format: ExportFormat::Sql,
                 structure: true,
                 data: true,
@@ -581,6 +581,52 @@ async fn sql_import(
         .await
         .map_err(|error| format!("export: {error:?}"))?;
     let text = String::from_utf8(exported)?.replace("`export_values`", "`import_values`");
+    // Whole database (table: None): every base table's CREATE TABLE and rows in one snapshot,
+    // foreign-key checks off while importing; CSV is refused for a whole database.
+    let mut whole = Vec::new();
+    connections
+        .export_table(
+            owner,
+            handle,
+            &ExportRequest {
+                table: None,
+                format: ExportFormat::Sql,
+                structure: true,
+                data: true,
+            },
+            &mut whole,
+            &ExportProgress::default(),
+        )
+        .await
+        .map_err(|error| format!("whole-database export: {error:?}"))?;
+    let whole = String::from_utf8(whole)?;
+    ensure(
+        whole.contains("CREATE TABLE `export_values`")
+            && whole.contains("CREATE TABLE `exec_text`")
+            && whole.contains("INSERT INTO `export_values`")
+            && whole.contains("SET FOREIGN_KEY_CHECKS = 0;")
+            && whole.find("SET FOREIGN_KEY_CHECKS = 0;") < whole.find("CREATE TABLE")
+            && whole.trim_end().ends_with("SET FOREIGN_KEY_CHECKS = 1;"),
+        "whole-database export carries every table",
+    )?;
+    ensure(
+        connections
+            .export_table(
+                owner,
+                handle,
+                &ExportRequest {
+                    table: None,
+                    format: ExportFormat::Csv,
+                    structure: false,
+                    data: true,
+                },
+                &mut Vec::new(),
+                &ExportProgress::default(),
+            )
+            .await
+            == Err(stoneql_runtime::TransferError::InvalidRequest),
+        "whole-database CSV export is refused",
+    )?;
     ensure(
         text.contains("CREATE TABLE `import_values`"),
         "export carries structure",

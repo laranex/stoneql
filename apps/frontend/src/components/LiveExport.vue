@@ -5,23 +5,26 @@ import { useWorkspace } from '../stores/workspace';
 import { pickExportFile, startExport, exportStatus, cancelExport } from '../services/liveConnections';
 import type { TransferFormatDto, TransferStatus } from '../../../../contracts/generated/v1';
 /**
- * M007 live export of the open table: the native host streams it inside a read-only snapshot
+ * M007 live export of the open table, or (`whole`) of every table of the database as one SQL
+ * file: the native host streams it inside a read-only snapshot
  * into a file chosen in the native save dialog (written to a temporary file, renamed when
  * complete). SQL or CSV only; GZIP, JSON and XLSX are not offered.
  */
+const props = defineProps<{ whole?: boolean }>();
 const store = useWorkspace();
 const format = ref<TransferFormatDto>('sql'), structure = ref(true);
 const status = ref<TransferStatus | null>(null), error = ref(''), running = ref(false);
 let transferId = '', stopped = false;
 const mysqlFamily = computed(() => store.connection.engine === 'MySQL' || store.connection.engine === 'MariaDB');
 const withStructure = computed(() => format.value === 'sql' && mysqlFamily.value && structure.value);
-watch(() => [store.activeId, store.workspace.table], () => { if (!running.value) { status.value = null; error.value = ''; } });
+const subject = computed(() => props.whole ? store.workspace.database : store.workspace.table);
+watch(() => [store.activeId, store.workspace.table, props.whole], () => { if (props.whole) format.value = 'sql'; if (!running.value) { status.value = null; error.value = ''; } }, { immediate: true });
 async function run() {
-  const handle = store.liveSessions[store.activeId]?.info?.handle, table = store.workspace.table;
-  if (!handle || !table) { error.value = 'Connect this live profile first.'; return; }
+  const handle = store.liveSessions[store.activeId]?.info?.handle, table = props.whole ? null : store.workspace.table;
+  if (!handle || (!props.whole && !table)) { error.value = 'Connect this live profile first.'; return; }
   error.value = ''; status.value = null;
   try {
-    const picked = await pickExportFile(`${table}.${format.value}`, format.value);
+    const picked = await pickExportFile(`${subject.value || 'export'}.${format.value}`, format.value);
     if (!picked.grant) return;
     running.value = true; stopped = false;
     transferId = (await startExport(handle, picked.grant, table, format.value, withStructure.value)).transferId;
@@ -41,17 +44,18 @@ onBeforeUnmount(() => { stopped = true; });
 </script>
 <template>
   <div class="export-workflow" data-testid="live-export">
-    <div class="notice info"><Download :size="15" /><span><strong>Live export</strong> of <code>{{ store.workspace.table }}</code>: rows are read in one read-only snapshot and written to the file you choose. The file appears only when the export is complete.</span></div>
+    <div class="notice info"><Download :size="15" /><span><strong>Live export</strong> of <template v-if="whole">every table of </template><code>{{ subject }}</code>: rows are read in one read-only snapshot and written to the file you choose. The file appears only when the export is complete.<template v-if="whole"> Views, routines, triggers and events are not included.</template></span></div>
     <section class="export-section">
       <h3>Format</h3>
       <div class="export-body">
         <div class="export-line">
           <label><input type="radio" v-model="format" value="sql" :disabled="running" /> SQL</label>
-          <label><input type="radio" v-model="format" value="csv" :disabled="running" /> CSV</label>
+          <label v-if="!whole"><input type="radio" v-model="format" value="csv" :disabled="running" /> CSV</label>
           <label v-if="format === 'sql' && mysqlFamily"><input type="checkbox" v-model="structure" :disabled="running" /> Include CREATE TABLE</label>
+          <span v-if="whole && mysqlFamily && structure" class="muted">Tables are written in name order with foreign-key checks off during import.</span>
         </div>
         <p class="muted" v-if="format === 'csv'">CSV: every value is quoted; NULL is the unquoted word NULL, so an empty string stays distinct. Binary columns cannot be exported as CSV.</p>
-        <p class="muted" v-else-if="!mysqlFamily">PostgreSQL: data only (table structure needs pg_dump).</p>
+        <p class="muted" v-else-if="!mysqlFamily">PostgreSQL: data only (table structure needs pg_dump){{ whole ? '; tables are written in name order, so referenced rows may come after the rows that reference them' : '' }}.</p>
       </div>
     </section>
     <div class="export-actions">

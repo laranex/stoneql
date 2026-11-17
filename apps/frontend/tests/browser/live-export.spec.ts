@@ -41,6 +41,17 @@ test('live export streams through a native grant and reports refusals without cr
   await newLiveConnection(page);
   await page.getByPlaceholder('e.g. Local development').fill('Live export');
   await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
+  // Database level: one SQL file with every table (table: null); CSV is not offered.
+  await page.getByRole('tab', { name: 'Export', exact: true }).click();
+  const whole = page.getByTestId('live-export');
+  await expect(whole).toContainText('every table of acme_store');
+  await expect(whole.getByLabel('CSV')).toHaveCount(0);
+  await whole.getByRole('button', { name: 'Choose file and export' }).click();
+  await expect(whole).toContainText('Exported 40 rows');
+  const first = await page.evaluate(() => (window as any).calls.filter((c: any) => ['pick_export_file', 'start_export'].includes(c.command)).map((c: any) => c.payload));
+  expect(first[0]).toEqual({ suggestedName: 'acme_store.sql', format: 'sql', sessionId: 's' });
+  expect(first[1]).toMatchObject({ table: null, format: 'sql', structure: true, data: true });
+  await page.evaluate(() => { (window as any).calls.length = 0; });
   await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
   await page.getByRole('tab', { name: 'Export', exact: true }).click();
   const panel = page.getByTestId('live-export');

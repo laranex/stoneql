@@ -1,4 +1,5 @@
-//! M007 streaming export of one table to SQL or CSV (alpha slice, D022). Rows stream on one
+//! M007 streaming export of one table to SQL or CSV, or of every table of a database to SQL
+//! (alpha slice, D022). Rows stream on one
 //! dedicated connection inside an engine-enforced read-only snapshot transaction; nothing is held
 //! beyond one INSERT batch. Values are written exactly: no type is reinterpreted, NULL and the
 //! empty string stay distinct, and a value that cannot be written exactly fails the export and
@@ -20,7 +21,8 @@ pub enum ExportFormat {
 }
 #[derive(Debug, Clone)]
 pub struct ExportRequest {
-    pub table: String,
+    /// One table, or `None` for every base table of the connection's database (SQL only).
+    pub table: Option<String>,
     pub format: ExportFormat,
     /// SQL only: include `CREATE TABLE` (MySQL/MariaDB `SHOW CREATE TABLE`).
     pub structure: bool,
@@ -233,9 +235,10 @@ fn valid_table(table: &str) -> bool {
 }
 
 impl Connections {
-    /// Streams one table to `out`. The caller owns the destination (temporary file, atomic
-    /// rename, removal on any error). Read-write handles are refused while they run other work,
-    /// like reads (one physical session of work per handle).
+    /// Streams one table, or (`table: None`, SQL only) every base table of the connection's
+    /// database, to `out` inside one read-only snapshot. The caller owns the destination
+    /// (temporary file, atomic rename, removal on any error). Read-write handles are refused
+    /// while they run other work, like reads (one physical session of work per handle).
     pub async fn export_table<W: AsyncWrite + Unpin + Send>(
         &self,
         owner: OwnerId,
@@ -244,7 +247,11 @@ impl Connections {
         out: &mut W,
         progress: &ExportProgress,
     ) -> Result<ExportSummary, TransferError> {
-        if !valid_table(&request.table)
+        if request
+            .table
+            .as_deref()
+            .is_some_and(|table| !valid_table(table))
+            || (request.table.is_none() && request.format != ExportFormat::Sql)
             || (!request.data && !request.structure)
             || (request.format == ExportFormat::Csv && (request.structure || !request.data))
         {
@@ -253,6 +260,7 @@ impl Connections {
         let pool = self.owned_pool(owner, id).ok_or(TransferError::Forbidden)?;
         let _exclusive = self.exclusive_read(owner, id)?;
         let mut sink = Sink { out, progress };
+        let whole = request.table.is_none();
         let columns = match pool {
             EnginePool::MySql(pool) => {
                 let mut connection = pool.acquire().await.map_err(driver_error)?;
@@ -262,52 +270,38 @@ impl Connections {
                     .execute(&mut *connection)
                     .await
                     .map_err(driver_error)?;
-                let table = quote_identifier(true, &request.table);
-                if request.format == ExportFormat::Sql {
-                    sink.write(&format!(
-                        "-- StoneQL export of {} (data in a read-only consistent snapshot).\nSET NAMES utf8mb4;\nSET SESSION sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n",
-                        table
-                    ))
-                    .await?;
-                }
-                if request.structure {
-                    let row = sqlx::raw_sql(
-                        sqlx::AssertSqlSafe(format!("SHOW CREATE TABLE {table}")).into_sql_str(),
+                let tables = match &request.table {
+                    Some(table) => vec![table.clone()],
+                    None => sqlx::query_scalar(
+                        "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME",
                     )
-                    .fetch_one(&mut *connection)
-                    .await
-                    .map_err(driver_error)?;
-                    let bytes: Vec<u8> = row
-                        .try_get_unchecked(1)
-                        .map_err(|_| TransferError::Read(ReadError::Database))?;
-                    let ddl = String::from_utf8(bytes)
-                        .map_err(|_| TransferError::Read(ReadError::Database))?;
-                    sink.write(&format!("{ddl};\n")).await?;
-                }
-                let columns = if request.data {
-                    // Servers set the BINARY column flag for `_bin` collations too (for example
-                    // MariaDB JSON), so the driver names such text columns binary. The catalog's
-                    // character set is authoritative: a column with one holds text.
-                    let text_columns: Vec<String> = sqlx::query_scalar(
-                        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CHARACTER_SET_NAME IS NOT NULL",
-                    )
-                    .bind(&request.table)
                     .fetch_all(&mut *connection)
                     .await
-                    .map_err(driver_error)?;
-                    stream::<sqlx::MySql, _>(
-                        &mut connection,
-                        &format!("SELECT * FROM {table}"),
-                        mysql::decode_cell,
-                        true,
-                        &text_columns,
-                        request,
-                        &mut sink,
-                    )
-                    .await?
-                } else {
-                    0
+                    .map_err(driver_error)?,
                 };
+                if request.format == ExportFormat::Sql {
+                    let subject = match &request.table {
+                        Some(table) => quote_identifier(true, table),
+                        None => "every table of the current database".into(),
+                    };
+                    sink.write(&format!(
+                        "-- StoneQL export of {subject} (data in a read-only consistent snapshot).\nSET NAMES utf8mb4;\nSET SESSION sql_mode = 'NO_AUTO_VALUE_ON_ZERO';\n"
+                    ))
+                    .await?;
+                    if whole {
+                        // Tables are written in name order; references are checked after import.
+                        sink.write("SET FOREIGN_KEY_CHECKS = 0;\n").await?;
+                    }
+                }
+                let mut columns = 0;
+                for table in &tables {
+                    sink.cancelled()?;
+                    columns +=
+                        mysql_table(&mut connection, table, whole, request, &mut sink).await?;
+                }
+                if whole {
+                    sink.write("SET FOREIGN_KEY_CHECKS = 1;\n").await?;
+                }
                 let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
                 columns
             }
@@ -323,23 +317,44 @@ impl Connections {
                     .execute(&mut *connection)
                     .await
                     .map_err(driver_error)?;
+                let tables = match &request.table {
+                    Some(table) => vec![table.clone()],
+                    None => sqlx::query_scalar(
+                        "SELECT table_name::text FROM information_schema.tables WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' ORDER BY table_name",
+                    )
+                    .fetch_all(&mut *connection)
+                    .await
+                    .map_err(driver_error)?,
+                };
                 if request.format == ExportFormat::Sql {
+                    let subject = match &request.table {
+                        Some(table) => quote_identifier(false, table),
+                        None => "every table of the current schema".into(),
+                    };
                     sink.write(&format!(
-                        "-- StoneQL export of {} (data in a read-only repeatable-read snapshot).\n",
-                        quote_identifier(false, &request.table)
+                        "-- StoneQL export of {subject} (data in a read-only repeatable-read snapshot).\n"
                     ))
                     .await?;
                 }
-                let columns = stream::<sqlx::Postgres, _>(
-                    &mut connection,
-                    &format!("SELECT * FROM {}", quote_identifier(false, &request.table)),
-                    postgres::decode_cell,
-                    false,
-                    &[],
-                    request,
-                    &mut sink,
-                )
-                .await?;
+                let mut columns = 0;
+                for table in &tables {
+                    sink.cancelled()?;
+                    if whole {
+                        sink.write(&format!("\n-- Table {}\n", quote_identifier(false, table)))
+                            .await?;
+                    }
+                    columns += stream::<sqlx::Postgres, _>(
+                        &mut connection,
+                        &format!("SELECT * FROM {}", quote_identifier(false, table)),
+                        postgres::decode_cell,
+                        false,
+                        &[],
+                        table,
+                        request.format,
+                        &mut sink,
+                    )
+                    .await?;
+                }
                 let _ = sqlx::raw_sql("ROLLBACK").execute(&mut *connection).await;
                 columns
             }
@@ -359,15 +374,68 @@ impl Connections {
     }
 }
 
+/// One MySQL/MariaDB table of an export: `CREATE TABLE` (when requested) and its rows.
+async fn mysql_table<W: AsyncWrite + Unpin + Send>(
+    connection: &mut sqlx::MySqlConnection,
+    table: &str,
+    whole: bool,
+    request: &ExportRequest,
+    sink: &mut Sink<'_, W>,
+) -> Result<usize, TransferError> {
+    let quoted = quote_identifier(true, table);
+    if whole {
+        sink.write(&format!("\n-- Table {quoted}\n")).await?;
+    }
+    if request.structure {
+        let row = sqlx::raw_sql(
+            sqlx::AssertSqlSafe(format!("SHOW CREATE TABLE {quoted}")).into_sql_str(),
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(driver_error)?;
+        let bytes: Vec<u8> = row
+            .try_get_unchecked(1)
+            .map_err(|_| TransferError::Read(ReadError::Database))?;
+        let ddl = String::from_utf8(bytes).map_err(|_| TransferError::Read(ReadError::Database))?;
+        sink.write(&format!("{ddl};\n")).await?;
+    }
+    if !request.data {
+        return Ok(0);
+    }
+    // Servers set the BINARY column flag for `_bin` collations too (for example MariaDB JSON),
+    // so the driver names such text columns binary. The catalog's character set is
+    // authoritative: a column with one holds text.
+    let text_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CHARACTER_SET_NAME IS NOT NULL",
+    )
+    .bind(table)
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(driver_error)?;
+    stream::<sqlx::MySql, _>(
+        connection,
+        &format!("SELECT * FROM {quoted}"),
+        mysql::decode_cell,
+        true,
+        &text_columns,
+        table,
+        request.format,
+        sink,
+    )
+    .await
+}
+
 /// Prepares the generated `SELECT *` (identifiers quoted, no request data in values), then
 /// formats each row as it arrives. Returns the column count.
+#[allow(clippy::too_many_arguments)]
 async fn stream<DB, W>(
     connection: &mut DB::Connection,
     sql: &str,
     decode: fn(&DB::Row, usize) -> Result<CellValue, ReadError>,
     mysql_family: bool,
     text_columns: &[String],
-    request: &ExportRequest,
+    table: &str,
+    format: ExportFormat,
     sink: &mut Sink<'_, W>,
 ) -> Result<usize, TransferError>
 where
@@ -387,8 +455,8 @@ where
         .collect();
     let mut writer = Writer {
         mysql_family,
-        format: request.format,
-        table: request.table.clone(),
+        format,
+        table: table.to_owned(),
         columns: columns.clone(),
         batch: Vec::new(),
     };

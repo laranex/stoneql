@@ -1,5 +1,6 @@
-//! R-9 / D025-9: read-write over SSH is refused natively with `UNSUPPORTED_CAPABILITY` before
-//! any Keychain lookup or network access, even in a host whose read-write gate is enabled.
+//! R-9 / D025-9: read-write over SSH is enabled for MySQL/MariaDB (A15, 2026-11-17) and still
+//! refused natively for PostgreSQL with `UNSUPPORTED_CAPABILITY` before any Keychain lookup or
+//! network access.
 //! No Docker: the SSH endpoint is an unroutable documentation address and the secret store
 //! only records lookups.
 mod common;
@@ -84,7 +85,7 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
     };
     let code = |reply: Result<Value, Value>| reply.unwrap_err()["code"].clone();
 
-    for engine in ["mysql", "mariadb", "postgresql"] {
+    for engine in ["postgresql"] {
         let started = Instant::now();
         assert_eq!(
             code(raw("connect_direct", request(engine, "read_write", true))),
@@ -116,4 +117,13 @@ fn ssh_read_write_is_refused_before_keychain_or_network_with_the_gate_enabled() 
         "SSH read-only passes the access check"
     );
     assert_eq!(store.0.load(Ordering::SeqCst), 2);
+    // MySQL/MariaDB read-write over SSH pass the access check (A15) and reach the Keychain.
+    for (engine, lookups) in [("mysql", 3), ("mariadb", 4)] {
+        assert_eq!(
+            code(raw("connect_direct", request(engine, "read_write", true))),
+            json!("SECRET_UNAVAILABLE"),
+            "{engine} SSH read-write passes the gate"
+        );
+        assert_eq!(store.0.load(Ordering::SeqCst), lookups);
+    }
 }
