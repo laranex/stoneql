@@ -1,5 +1,5 @@
 import { chromium } from 'playwright';
-const base = 'https://laranex.github.io/stoneql/';
+const base = 'https://stoneace.github.io/stoneql/';
 const pages = ['architecture/overview', 'architecture/connection-management', 'architecture/roadmap', 'architecture/import-export', 'development/documentation'];
 const browser = await chromium.launch();
 let failed = 0;
