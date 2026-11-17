@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join,resolve,dirname} from 'node:path';
 import {spawnSync} from 'node:child_process';
 
-test('lifecycle fixture waits for final TCP startup after the init-server marker becomes visible',()=>{
+// The Docker fixtures and these executable shims (shebang files on a `:`-separated PATH) are POSIX-only.
+test('lifecycle fixture waits for final TCP startup after the init-server marker becomes visible',{skip:process.platform==='win32'&&'Docker fixtures and their command shims are POSIX-only'},()=>{
   const temp=mkdtempSync(join(tmpdir(),'stoneql-readiness-test-'));
   const workspace=join(temp,'workspace');const scratch=join(temp,'scratch');
   mkdirSync(join(workspace,'tools'),{recursive:true});mkdirSync(scratch);

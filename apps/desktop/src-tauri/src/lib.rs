@@ -77,15 +77,29 @@ impl HostServices {
     pub fn system() -> Self {
         Self {
             secrets: Arc::new(OsSecretStore::new(DEFAULT_SERVICE)),
-            agent_socket: std::env::var_os("SSH_AUTH_SOCK")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute()),
+            agent_socket: agent_socket(),
             read_write_sql: READ_WRITE_SQL_ENABLED,
             outcome_journal: None,
             secret_deadline: Self::SECRET_DEADLINE,
             host_keys: None,
         }
     }
+}
+/// The agent named by `SSH_AUTH_SOCK`. On Windows, where it is usually unset, the built-in
+/// OpenSSH agent's named pipe.
+fn agent_socket() -> Option<PathBuf> {
+    std::env::var_os("SSH_AUTH_SOCK")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(default_agent)
+}
+#[cfg(windows)]
+fn default_agent() -> Option<PathBuf> {
+    Some(PathBuf::from(r"\\.\pipe\openssh-ssh-agent"))
+}
+#[cfg(not(windows))]
+fn default_agent() -> Option<PathBuf> {
+    None
 }
 /// Name of the journal directory inside the app data directory.
 pub const OUTCOME_JOURNAL_DIR: &str = "outcome-journal";

@@ -30,9 +30,14 @@
 //! work whose outcome is now known (`conclude`), which completes with the next successful
 //! write.
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::{
-    fs::{self, File},
-    io::{self, Read, Write},
+    fs,
+    io::{Read, Write},
+};
+use std::{
+    fs::File,
+    io,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
