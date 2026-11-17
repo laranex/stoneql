@@ -2322,7 +2322,12 @@ async fn j7_the_journal_holds_no_sql_values_or_paths() {
     assert_eq!(entries.len(), 2, "{entries:?}");
     let mut bytes = Vec::new();
     for file in std::fs::read_dir(journal_dir(&fixture)).unwrap() {
-        bytes.extend(std::fs::read(file.unwrap().path()).unwrap());
+        let file = file.unwrap();
+        // Windows locks are mandatory: the open journal's (empty) lock file cannot be read.
+        if cfg!(windows) && file.file_name() == journal::LOCK {
+            continue;
+        }
+        bytes.extend(std::fs::read(file.path()).unwrap());
     }
     let text = String::from_utf8_lossy(&bytes).to_lowercase();
     for canary in [

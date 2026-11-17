@@ -53,7 +53,7 @@ use uuid::Uuid;
 
 pub(crate) const FILE: &str = "unknown-outcomes.journal";
 const TEMP: &str = "unknown-outcomes.journal.tmp";
-const LOCK: &str = "unknown-outcomes.lock";
+pub(super) const LOCK: &str = "unknown-outcomes.lock";
 const FORMAT: &str = "stoneql-unknown-outcomes";
 const VERSION: u64 = 1;
 /// Far above any legitimate journal (bounded by the unresolved cap); larger is damage.
