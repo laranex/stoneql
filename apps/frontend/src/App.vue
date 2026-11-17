@@ -609,7 +609,7 @@ async function openOverviewTable(database: string, name: string, view: View) {
 }
 const visibleTabs = computed(() => {
   // A live SQL file imports into the database, so read-write MySQL/MariaDB offer Import there too.
-  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (w.value.scope==='database' && tab.name==='Export' && liveCatalog.value) || (w.value.scope==='database' && tab.name==='Import' && liveReadWrite.value && ['MySQL','MariaDB'].includes(store.connection.engine)) || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
+  if(isLive.value) return tabs.filter(tab=>tab.name==='SQL' || (w.value.scope==='database' && tab.name==='Export' && liveCatalog.value && liveSession.value?.status==='connected') || (w.value.scope==='database' && tab.name==='Import' && liveReadWrite.value && ['MySQL','MariaDB'].includes(store.connection.engine)) || (table.value && w.value.scope==='table' && (['Browse','Structure','Export'].includes(tab.name) || (['Insert','Import'].includes(tab.name) && !isReadOnly.value))));
   if(w.value.scope==='server') return tabs.filter(t=>t.name==='Structure');
   if(w.value.scope==='database') return tabs.filter(t=>['Structure','SQL','Export','Import',...objectSections(store.connection.engine)].includes(t.name) && (table.value || !['SQL','Import'].includes(t.name)));
   return tabs.filter(t=>!['Routines','Triggers','Events'].includes(t.name)&&(!isReadOnly.value||!['Insert','Import','Operations'].includes(t.name)));
@@ -2460,7 +2460,7 @@ onBeforeUnmount(() => {
                 ><Upload :size="16" /><strong>{{
                   importFile?.name || 'Choose a SQL or CSV file'
                 }}</strong
-                ><span>Maximum file size: 2 MB</span
+                ><span>Maximum file size: {{ isLive ? '64 MiB' : '2 MB' }}</span
                 ><input
                   type="file"
                   accept=".csv,.sql"

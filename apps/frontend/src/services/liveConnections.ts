@@ -1,4 +1,4 @@
-import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, ImportFileGrant, SqlImportAccepted, SqlImportStatus, TransferAccepted, TransferStatus, TransferFormatDto, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
+import type { LiveConnection, LiveConnectionStatus, ResultSet, CellValue, SqliteFileGrant, EngineDto, SshAuthRequest, SshTunnelRequest, SshHostKey, SshHostKeyStatus, SshKeyFileGrant, ExportFileGrant, ImportFileGrant, SqlImportAccepted, SqlImportStatus, TransferAccepted, TransferStatus, TransferFormatDto, ExportOptionsDto, SecretPurpose, SecretTarget, SecretReference, CancelConnectResult, AccessModeDto, JobAccepted, JobUpdate, CancelJobResult, TransactionLease, TransactionEnd, TransactionActionDto, UnresolvedOutcome, UnresolvedOutcomes, JournalProblemDto, Column as ColumnDto } from '../../../../contracts/generated/v1';
 import type { Connection, SqlResult } from '../types';
 import { hostState, nativeDatabase, NativeOperationError } from './nativeHost.ts';
 const networkEngines: Partial<Record<Connection['engine'], EngineDto>> = { MySQL: 'mysql', MariaDB: 'mariadb', PostgreSQL: 'postgresql' };
@@ -302,9 +302,11 @@ export function writeKeywords(sql: string): string[] {
 }
 
 /** M007: native save dialog; the renderer receives a one-shot grant, never a path. */
-export const pickExportFile = (suggestedName: string, format: TransferFormatDto) => nativeDatabase<ExportFileGrant>('pick_export_file', { suggestedName, format });
-export const startExport = (handle: string, grant: string, table: string | null, format: TransferFormatDto, structure: boolean) =>
-  nativeDatabase<TransferAccepted>('start_export', { handle, grant, table, format, structure, data: true });
+export const pickExportFile = (suggestedName: string, format: TransferFormatDto, compressed = false) =>
+  nativeDatabase<ExportFileGrant>('pick_export_file', { suggestedName, format, ...(compressed ? { compressed } : {}) });
+/** `tables: null` exports every base table of the connection's database. */
+export const startExport = (handle: string, grant: string, tables: string[] | null, format: TransferFormatDto, structure: boolean, data = true, options?: ExportOptionsDto) =>
+  nativeDatabase<TransferAccepted>('start_export', { handle, grant, tables, format, structure, data, ...(options ? { options } : {}) });
 export const exportStatus = (transferId: string) => nativeDatabase<TransferStatus>('export_status', { transferId });
 export const cancelExport = (transferId: string) => nativeDatabase<TransferStatus>('cancel_export', { transferId });
 /** M007 d5 SQL import (MySQL/MariaDB read-write sessions): native open grant, then the host reads,

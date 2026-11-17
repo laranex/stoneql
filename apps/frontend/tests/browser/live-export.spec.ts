@@ -41,27 +41,54 @@ test('live export streams through a native grant and reports refusals without cr
   await newLiveConnection(page);
   await page.getByPlaceholder('e.g. Local development').fill('Live export');
   await page.getByRole('button', { name: 'Save & connect', exact: true }).click();
-  // Database level: one SQL file with every table (table: null); CSV is not offered.
-  await page.getByRole('tab', { name: 'Export', exact: true }).click();
-  const whole = page.getByTestId('live-export');
-  await expect(whole).toContainText('every table of acme_store');
-  await expect(whole.getByLabel('CSV')).toHaveCount(0);
-  await whole.getByRole('button', { name: 'Choose file and export' }).click();
-  await expect(whole).toContainText('Exported 40 rows');
-  const first = await page.evaluate(() => (window as any).calls.filter((c: any) => ['pick_export_file', 'start_export'].includes(c.command)).map((c: any) => c.payload));
-  expect(first[0]).toEqual({ suggestedName: 'acme_store.sql', format: 'sql', sessionId: 's' });
-  expect(first[1]).toMatchObject({ table: null, format: 'sql', structure: true, data: true });
-  await page.evaluate(() => { (window as any).calls.length = 0; });
-  await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
+  // Database level, Quick: one SQL file with every table (tables: null), FK checks off; CSV
+  // needs exactly one table.
   await page.getByRole('tab', { name: 'Export', exact: true }).click();
   const panel = page.getByTestId('live-export');
+  await expect(panel).toContainText('every table of acme_store');
+  await expect(panel.getByRole('combobox', { name: 'Export format' }).locator('option[value="csv"]')).toBeDisabled();
   await panel.getByRole('button', { name: 'Choose file and export' }).click();
-  await expect(panel).toContainText('Exported 40 rows (4096 bytes) to accounts.sql.');
+  await expect(panel).toContainText('Exported 40 rows');
   const calls = () => page.evaluate(() => (window as any).calls as { command: string; payload: any }[]);
-  const start = (await calls()).find((c) => c.command === 'start_export')!.payload;
-  expect(start).toEqual({ handle: '00000000-0000-0000-0000-00000000000e', grant: 'grant_sql', table: 'accounts', format: 'sql', structure: true, data: true, sessionId: 's' });
-  expect((await calls()).find((c) => c.command === 'pick_export_file')!.payload).toEqual({ suggestedName: 'accounts.sql', format: 'sql', sessionId: 's' });
-  await panel.getByLabel('CSV').check();
+  const last = async (command: string) => (await calls()).filter((c) => c.command === command).at(-1)!.payload;
+  expect(await last('pick_export_file')).toEqual({ suggestedName: 'acme_store.sql', format: 'sql', sessionId: 's' });
+  expect(await last('start_export')).toMatchObject({ tables: null, format: 'sql', structure: true, data: true, options: { dropTable: false, rowsPerInsert: 500, insertVerb: 'insert', disableForeignKeys: true, compress: false } });
+
+  // Custom: chosen tables, Data only, one row per INSERT, REPLACE, transaction, GZIP.
+  await panel.getByLabel(/^Custom/).check();
+  await panel.getByRole('combobox', { name: 'Export content' }).selectOption('data');
+  await expect(panel.getByLabel('Add DROP TABLE statement')).toBeDisabled();
+  await panel.getByRole('button', { name: 'Deselect all' }).click();
   await panel.getByRole('button', { name: 'Choose file and export' }).click();
-  await expect(panel.getByRole('alert')).toContainText('Export failed: column b holds binary data, which CSV cannot represent exactly; export as SQL. No file was created or replaced.');
+  await expect(panel.getByRole('alert')).toContainText('Select at least one table.');
+  await panel.getByLabel('Tables to export').getByLabel('accounts').check();
+  await panel.getByRole('combobox', { name: 'INSERT statement style' }).selectOption('replace');
+  await panel.getByLabel('Enclose data in a transaction').check();
+  await panel.getByLabel('GZIP').check();
+  const starts = async () => (await calls()).filter((c) => c.command === 'start_export').length;
+  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  await expect.poll(starts).toBe(2);
+  await expect(panel.getByRole('status')).toContainText('Exported 40 rows');
+  expect(await last('pick_export_file')).toEqual({ suggestedName: 'acme_store.sql.gz', format: 'sql', compressed: true, sessionId: 's' });
+  expect(await last('start_export')).toMatchObject({ tables: ['accounts'], structure: false, data: true, options: { rowsPerInsert: 500, insertVerb: 'replace', transaction: true, compress: true } });
+  await page.screenshot({ path: 'test-results/live-export-custom.png', fullPage: true });
+  // Back to Quick: the Custom content choice no longer applies (structure and data).
+  await panel.getByLabel(/^Quick/).check();
+  await panel.getByRole('button', { name: 'Choose file and export' }).click();
+  await expect.poll(starts).toBe(3);
+  expect(await last('start_export')).toMatchObject({ tables: null, structure: true, data: true, options: { insertVerb: 'insert', transaction: false } });
+
+  // Table level: CSV with custom separator, enclosure and NULL text; a refusal is shown verbatim.
+  await page.locator('.table-tree button').filter({ hasText: /^accounts/ }).click();
+  await page.getByRole('tab', { name: 'Export', exact: true }).click();
+  const table = page.getByTestId('live-export');
+  await expect(table).toContainText('Live export of accounts');
+  await table.getByLabel(/^Custom/).check();
+  await table.getByRole('combobox', { name: 'Export format' }).selectOption('csv');
+  await table.getByLabel('CSV delimiter').fill(';');
+  await table.getByRole('combobox', { name: 'CSV enclosure' }).selectOption('');
+  await table.getByLabel('CSV null value').fill('\\N');
+  await table.getByRole('button', { name: 'Choose file and export' }).click();
+  await expect(table.getByRole('alert')).toContainText('Export failed: column b holds binary data, which CSV cannot represent exactly; export as SQL. No file was created or replaced.');
+  expect(await last('start_export')).toMatchObject({ tables: ['accounts'], format: 'csv', structure: false, options: { csvDelimiter: ';', csvEnclosure: null, csvNull: '\\N', csvHeader: true } });
 });

@@ -19,7 +19,8 @@ use stoneql_contracts::v1::{
 };
 use stoneql_core::{CoreError, ErrorCode};
 use stoneql_runtime::{
-    ConnectionId, ExportFormat, ExportProgress, ExportRequest, ReadError, TransferError,
+    ConnectionId, ExportFormat, ExportOptions, ExportProgress, ExportRequest, ReadError,
+    TransferError,
 };
 use tauri::{AppHandle, Manager, Runtime, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
@@ -107,9 +108,11 @@ pub async fn pick_export_file<R: Runtime>(
     if !valid_file_name(&request.payload.suggested_name) {
         return Err(invalid());
     }
-    let (label, extension) = match request.payload.format {
-        TransferFormatDto::Csv => ("CSV", "csv"),
-        TransferFormatDto::Sql => ("SQL", "sql"),
+    let (label, extension) = match (request.payload.format, request.payload.compressed) {
+        (_, Some(true)) => ("GZIP", "gz"),
+        (TransferFormatDto::Csv, _) => ("CSV", "csv"),
+        (TransferFormatDto::Sql, _) => ("SQL", "sql"),
+        (TransferFormatDto::Json, _) => ("JSON", "json"),
     };
     let dialog = window
         .app_handle()
@@ -176,6 +179,11 @@ pub async fn start_export<R: Runtime>(
     let format = match input.format {
         TransferFormatDto::Csv => ExportFormat::Csv,
         TransferFormatDto::Sql => ExportFormat::Sql,
+        TransferFormatDto::Json => ExportFormat::Json,
+    };
+    let (options, compress) = match &input.options {
+        None => (ExportOptions::default(), false),
+        Some(dto) => (options(dto)?, dto.compress),
     };
     let (directory, name) = session
         .transfers
@@ -220,10 +228,11 @@ pub async fn start_export<R: Runtime>(
     let connections = session.connections.clone();
     let owner = session.owner;
     let export = ExportRequest {
-        table: input.table,
+        tables: input.tables,
         format,
         structure: input.structure,
         data: input.data,
+        options,
     };
     let destination = directory.join(&name);
     tauri::async_runtime::spawn(async move {
@@ -232,6 +241,9 @@ pub async fn start_export<R: Runtime>(
             .export_table(owner, handle, &export, &mut out, &transfer.progress)
             .await;
         let finished = match result {
+            Ok(_) if compress => gzip_finish(out, &temporary, &destination)
+                .await
+                .map_err(|_| TransferError::Io),
             Ok(_) => finish(out, &temporary, &destination)
                 .await
                 .map_err(|_| TransferError::Io),
@@ -294,6 +306,74 @@ async fn finish(
         return Err(std::io::Error::other("destination is not a regular file"));
     }
     tokio::fs::rename(temporary, destination).await
+}
+
+/// Renderer options, checked here (one character each for CSV) and again by the runtime.
+fn options(dto: &stoneql_contracts::v1::ExportOptionsDto) -> Result<ExportOptions, ErrorDto> {
+    let one = |text: &str| {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(c), None) => Ok(c),
+            _ => Err(invalid()),
+        }
+    };
+    Ok(ExportOptions {
+        drop_table: dto.drop_table,
+        if_exists: dto.if_exists,
+        rows_per_insert: usize::try_from(dto.rows_per_insert).map_err(|_| invalid())?,
+        insert_verb: match dto.insert_verb {
+            stoneql_contracts::v1::InsertVerbDto::Insert => stoneql_runtime::InsertVerb::Insert,
+            stoneql_contracts::v1::InsertVerbDto::InsertIgnore => {
+                stoneql_runtime::InsertVerb::InsertIgnore
+            }
+            stoneql_contracts::v1::InsertVerbDto::Replace => stoneql_runtime::InsertVerb::Replace,
+        },
+        auto_increment: dto.auto_increment,
+        transaction: dto.transaction,
+        disable_foreign_keys: dto.disable_foreign_keys,
+        csv_delimiter: one(&dto.csv_delimiter)?,
+        csv_enclosure: dto.csv_enclosure.as_deref().map(one).transpose()?,
+        csv_null: dto.csv_null.clone(),
+        csv_header: dto.csv_header,
+    })
+}
+/// GZIP output: the plain export in `temporary` is compressed into a second private temporary
+/// file, which alone is renamed over the destination; both temporaries are removed.
+async fn gzip_finish(
+    mut out: tokio::io::BufWriter<tokio::fs::File>,
+    temporary: &Path,
+    destination: &Path,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    out.flush().await?;
+    drop(out);
+    let compressed = temporary.with_extension("gz.part");
+    let (source, target) = (temporary.to_owned(), compressed.clone());
+    let written = tauri::async_runtime::spawn_blocking(move || -> std::io::Result<()> {
+        let mut input = std::fs::File::open(&source)?;
+        let file = create_private(&target)?;
+        let mut encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        std::io::copy(&mut input, &mut encoder)?;
+        encoder.finish()?.sync_all()
+    })
+    .await
+    .map_err(std::io::Error::other)
+    .and_then(|result| result);
+    let _ = tokio::fs::remove_file(temporary).await;
+    if let Err(error) = written {
+        let _ = tokio::fs::remove_file(&compressed).await;
+        return Err(error);
+    }
+    let renamed = match std::fs::symlink_metadata(destination) {
+        Ok(existing) if !existing.file_type().is_file() => {
+            Err(std::io::Error::other("destination is not a regular file"))
+        }
+        _ => tokio::fs::rename(&compressed, destination).await,
+    };
+    if renamed.is_err() {
+        let _ = tokio::fs::remove_file(&compressed).await;
+    }
+    renamed
 }
 
 fn status(id: &str, transfer: &Transfer) -> TransferStatus {

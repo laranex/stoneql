@@ -342,7 +342,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .unwrap();
         let accepted = invoke(
             "start_export",
-            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"table":table,"format":format,"structure":structure,"data":true}),
+            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"tables":[table],"format":format,"structure":structure,"data":true}),
         )
         .unwrap();
         let id = accepted["payload"]["transferId"].clone();

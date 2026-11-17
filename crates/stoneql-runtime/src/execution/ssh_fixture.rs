@@ -2,9 +2,10 @@
 //! through `npm run test:ssh`: disposable OpenSSH/database containers and generated secrets;
 //! prints only timings and codes.
 //!
-//! Read-write over SSH stays refused by both production gates (D025-9). This in-crate test
-//! (compiled only under `cfg(test)`) connects read-only, then marks its own registry entry
-//! read-write so the job/lease/cancel path can run through a real tunnel.
+//! This in-crate test (compiled only under `cfg(test)`) connects read-only, then marks its own
+//! registry entry read-write so the job/lease/cancel path can run through a real tunnel for
+//! every engine (production allows SSH read-write for MySQL/MariaDB only, A15; the host-path
+//! check is `apps/desktop/src-tauri/tests/live_ssh.rs`).
 use super::*;
 use serde_json::json;
 use std::path::Path;

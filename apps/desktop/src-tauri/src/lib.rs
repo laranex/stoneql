@@ -42,8 +42,8 @@ pub use transfer::authorize_export_file;
 use transfer::{cancel_export, export_status, pick_export_file, start_export};
 
 /// M006 gate for unrestricted read-write SQL (jobs and transactions). ON since the user approved
-/// A15 (2026-11-17) after the execution safety tests. Direct connections may then request
-/// `access: read_write`; SSH read-write stays refused until approved separately (D025-9). When
+/// A15 (2026-11-17) after the execution safety tests. Connections may then request
+/// `access: read_write`, except PostgreSQL over SSH (still refused, D025-9). When
 /// off, the host refuses read-write before any credential lookup or network I/O. Only trusted
 /// host code can change it (tests through [`app_builder_with`]); never renderer input or the
 /// environment.

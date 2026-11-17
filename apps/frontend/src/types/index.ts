@@ -44,7 +44,7 @@ export interface Connection {
   access?: 'read_only' | 'read_write';
   /**
    * Live only, saved with the profile: `true` opens engine-enforced read-only sessions.
-   * Omitted means read-write (A15) for Direct connections; SSH tunnels are always read-only.
+   * Omitted means read-write (A15); PostgreSQL over an SSH tunnel is always read-only.
    */
   readOnly?: boolean;
   /** Opaque native SQLite file grant; session-only, never persisted. */

@@ -995,7 +995,7 @@ fn host_key_and_transfer_commands_refuse_forged_sessions() {
         ),
         (
             "start_export",
-            json!({"handle":"00000000-0000-4000-8000-000000000000","grant":"g","table":"t","format":"sql","structure":false,"data":true}),
+            json!({"handle":"00000000-0000-4000-8000-000000000000","grant":"g","tables":["t"],"format":"sql","structure":false,"data":true}),
         ),
         ("export_status", json!({"transferId":"t"})),
         ("cancel_export", json!({"transferId":"t"})),
@@ -1043,7 +1043,7 @@ fn export_grants_are_native_one_shot_and_refuse_unsafe_destinations() {
         invoke(
             &main,
             "start_export",
-            json!({"version":1,"requestId":"start","payload":{"sessionId":session,"handle":"00000000-0000-4000-8000-000000000000","grant":grant,"table":"t","format":"sql","structure":false,"data":true}}),
+            json!({"version":1,"requestId":"start","payload":{"sessionId":session,"handle":"00000000-0000-4000-8000-000000000000","grant":grant,"tables":["t"],"format":"sql","structure":false,"data":true}}),
             "tauri://localhost",
         )
     };

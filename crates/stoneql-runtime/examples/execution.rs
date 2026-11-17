@@ -20,9 +20,9 @@ use stoneql_contracts::v1::{
 use stoneql_core::{Engine, Outcome};
 use stoneql_runtime::{
     Access, ConnectionId, Connections, DirectServer, EndReason, ExecutionError, ExecutionLimits,
-    ExportFormat, ExportProgress, ExportRequest, ImportError, JobId, JobOptions, LeaseId,
-    OutcomeId, OwnerId, QueryLimits, ReadError, ScriptError, TransactionEnd, mysql_state_matches,
-    postgres_commit, postgres_state_matches,
+    ExportFormat, ExportOptions, ExportProgress, ExportRequest, ImportError, JobId, JobOptions,
+    LeaseId, OutcomeId, OwnerId, QueryLimits, ReadError, ScriptError, TransactionEnd,
+    mysql_state_matches, postgres_commit, postgres_state_matches,
 };
 
 type Failure = Box<dyn std::error::Error>;
@@ -572,10 +572,15 @@ async fn whole_database_export(
                 owner,
                 handle,
                 &ExportRequest {
-                    table: None,
+                    tables: None,
                     format,
                     structure: format == ExportFormat::Sql,
                     data: true,
+                    options: ExportOptions {
+                        disable_foreign_keys: true,
+                        drop_table: true,
+                        ..Default::default()
+                    },
                 },
                 &mut out,
                 &ExportProgress::default(),
@@ -614,9 +619,45 @@ async fn whole_database_export(
             && text.find("CREATE TABLE `a_child`") < text.find("CREATE TABLE `z_parent`")
             && text.contains("INSERT INTO `a_child`")
             && text.contains("INSERT INTO `z_parent`")
+            && text.contains("DROP TABLE IF EXISTS `a_child`;")
             && text.trim_end().ends_with("SET FOREIGN_KEY_CHECKS = 1;"),
         "whole-database export carries every table",
     )?;
+    // JSON of chosen tables: an object keyed by table, values as exact strings, NULL as null;
+    // a binary column has no exact JSON form and is refused by name.
+    let json_of = |tables: Vec<&'static str>| async move {
+        let mut out = Vec::new();
+        connections
+            .export_table(
+                owner,
+                handle,
+                &ExportRequest {
+                    tables: Some(tables.into_iter().map(Into::into).collect()),
+                    format: ExportFormat::Json,
+                    structure: false,
+                    data: true,
+                    options: ExportOptions::default(),
+                },
+                &mut out,
+                &ExportProgress::default(),
+            )
+            .await
+            .map(|_| out)
+    };
+    let parsed: serde_json::Value = serde_json::from_slice(
+        &json_of(vec!["z_parent"])
+            .await
+            .map_err(|error| format!("json export: {error:?}"))?,
+    )?;
+    ensure(
+        parsed == json!([{"id": "1"}, {"id": "2"}]),
+        "JSON export of one table",
+    )?;
+    match json_of(vec!["z_parent", "a_child"]).await {
+        Err(stoneql_runtime::TransferError::Unsupported(message))
+            if message.contains("column b") => {}
+        other => return Err(format!("JSON binary column: {:?}", other.map(|_| "exported")).into()),
+    }
     script("DROP TABLE a_child; DROP TABLE z_parent;").await?;
     let (id, count) = connections
         .start_sql_import(owner, handle, text.into_bytes())
@@ -637,9 +678,17 @@ async fn whole_database_export(
                 == 2,
         "re-imported rows equal the source exactly",
     )?;
+    // No export snapshot (finished or failed) may outlive its export on the server.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let open = observer
+        .scalar("SELECT COUNT(*) FROM information_schema.INNODB_TRX t JOIN information_schema.PROCESSLIST p ON p.ID = t.trx_mysql_thread_id WHERE p.USER = 'stoneql_writer'".into())
+        .await?;
+    if open != 0 {
+        return Err(format!("export transactions left open: {open}").into());
+    }
     report.insert(
         "wholeDatabaseExport".into(),
-        json!({"roundTrip": true, "oversizedRowNamesTable": true, "csvRefused": true}),
+        json!({"roundTrip": true, "dropTableIfExists": true, "json": true, "jsonBinaryRefused": true, "oversizedRowNamesTable": true, "csvRefused": true}),
     );
     Ok(())
 }
@@ -661,10 +710,11 @@ async fn sql_import(
             owner,
             handle,
             &ExportRequest {
-                table: Some("export_values".into()),
+                tables: Some(vec!["export_values".into()]),
                 format: ExportFormat::Sql,
                 structure: true,
                 data: true,
+                options: Default::default(),
             },
             &mut exported,
             &progress,
@@ -2352,7 +2402,7 @@ async fn harness() -> Result<(), Failure> {
     if mysql {
         // The newest open InnoDB transaction is this lease (the expiry lease started first).
         let session = observer
-            .scalar_i64("SELECT CAST(trx_mysql_thread_id AS SIGNED) FROM information_schema.INNODB_TRX ORDER BY trx_started DESC LIMIT 1")
+            .scalar_i64("SELECT CAST(trx_mysql_thread_id AS SIGNED) FROM information_schema.INNODB_TRX ORDER BY trx_started DESC, CAST(trx_id AS UNSIGNED) DESC LIMIT 1")
             .await?;
         observer.execute(format!("KILL {session}")).await?;
     } else {

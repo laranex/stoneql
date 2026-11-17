@@ -36,8 +36,8 @@ use tokio::{
     time::Instant,
 };
 pub use transfer::{
-    ExportFormat, ExportProgress, ExportRequest, ExportSummary, SQL_BATCH_ROWS, TransferError,
-    quote_identifier, string_literal,
+    ExportFormat, ExportOptions, ExportProgress, ExportRequest, ExportSummary, InsertVerb,
+    MAX_EXPORT_TABLES, SQL_BATCH_ROWS, TransferError, quote_identifier, string_literal,
 };
 use uuid::Uuid;
 

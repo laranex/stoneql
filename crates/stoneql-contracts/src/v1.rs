@@ -500,12 +500,14 @@ pub struct SshTrustedHostKey {
 pub struct SshHostKeyStatus {
     pub trusted: Option<SshTrustedHostKey>,
 }
-/// M007 transfer formats (alpha slice). GZIP, JSON and XLSX are not offered (D008 unapproved).
+/// M007 transfer formats. JSON (and GZIP output, `compress`) approved 2026-11-17 (A20); ZIP and
+/// XLSX are not offered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TransferFormatDto {
     Csv,
     Sql,
+    Json,
 }
 /// Asks the host to show its native save dialog. The renderer suggests a file name only; the
 /// chosen path never crosses IPC.
@@ -515,6 +517,10 @@ pub struct ExportFileRequest {
     pub session_id: String,
     pub suggested_name: String,
     pub format: TransferFormatDto,
+    // GZIP output: the dialog offers `.gz` files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub compressed: Option<bool>,
 }
 /// One-shot, session-scoped destination grant; `fileName` is display-only. `None` = cancelled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -523,18 +529,50 @@ pub struct ExportFileGrant {
     pub grant: Option<String>,
     pub file_name: Option<String>,
 }
-/// Streams one table of a live handle, or (`table: null`, SQL only) every table of its
-/// database, into a granted destination.
+/// Streams the named tables of a live handle (`tables: null`: every base table of its database)
+/// into a granted destination. CSV takes exactly one table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct StartExportRequest {
     pub session_id: String,
     pub handle: String,
     pub grant: String,
-    pub table: Option<String>,
+    pub tables: Option<Vec<String>>,
     pub format: TransferFormatDto,
     pub structure: bool,
     pub data: bool,
+    // Omitted: the quick-export defaults.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub options: Option<ExportOptionsDto>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InsertVerbDto {
+    Insert,
+    InsertIgnore,
+    Replace,
+}
+/// Custom export options (phpMyAdmin-style). Every field is checked natively.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportOptionsDto {
+    pub drop_table: bool,
+    pub if_exists: bool,
+    // 1 = one row per INSERT; up to 500 rows per extended INSERT.
+    pub rows_per_insert: u32,
+    // MySQL/MariaDB: "insert" | "insert_ignore" | "replace".
+    pub insert_verb: InsertVerbDto,
+    pub auto_increment: bool,
+    pub transaction: bool,
+    pub disable_foreign_keys: bool,
+    // One character each; enclosure null = values written bare.
+    pub csv_delimiter: String,
+    pub csv_enclosure: Option<String>,
+    pub csv_null: String,
+    pub csv_header: bool,
+    // GZIP the file (the destination grant must have been asked for with `compressed`).
+    pub compress: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -1036,6 +1074,8 @@ pub fn typescript() -> String {
         ExportFileRequest::decl(&config),
         ExportFileGrant::decl(&config),
         StartExportRequest::decl(&config),
+        ExportOptionsDto::decl(&config),
+        InsertVerbDto::decl(&config),
         TransferAccepted::decl(&config),
         TransferRequest::decl(&config),
         TransferStateDto::decl(&config),

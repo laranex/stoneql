@@ -503,7 +503,7 @@ WHERE LOWER(CONCAT("id")) LIKE '%5!_%' ESCAPE '!' OR LOWER(CONCAT("nn")) LIKE '%
             .unwrap();
         let accepted = invoke(
             "start_export",
-            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"table":table,"format":format,"structure":structure,"data":true}),
+            json!({"sessionId":session,"handle":first["handle"],"grant":grant,"tables":[table],"format":format,"structure":structure,"data":true}),
         )
         .unwrap();
         let id = accepted["payload"]["transferId"].clone();
