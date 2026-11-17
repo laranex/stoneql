@@ -238,15 +238,21 @@ mod tests {
         let file = root.join("dump.sql");
         std::fs::write(&file, b"SELECT 1;").unwrap();
         assert_eq!(read_snapshot(&file).unwrap(), b"SELECT 1;");
-        // A later symlink swap no longer resolves to the granted path.
-        let target = root.join("other.sql");
-        std::fs::write(&target, b"SELECT 2;").unwrap();
-        std::fs::remove_file(&file).unwrap();
-        std::os::unix::fs::symlink(&target, &file).unwrap();
-        assert_eq!(
-            read_snapshot(&file).unwrap_err().code,
-            stoneql_contracts::v1::ErrorCodeDto::Forbidden
-        );
+        // A later symlink swap no longer resolves to the granted path (symlinks need privileges
+        // on Windows, so this part runs on Unix).
+        #[cfg(unix)]
+        {
+            let target = root.join("other.sql");
+            std::fs::write(&target, b"SELECT 2;").unwrap();
+            std::fs::remove_file(&file).unwrap();
+            std::os::unix::fs::symlink(&target, &file).unwrap();
+            assert_eq!(
+                read_snapshot(&file).unwrap_err().code,
+                stoneql_contracts::v1::ErrorCodeDto::Forbidden
+            );
+            std::fs::remove_file(&file).unwrap();
+            std::fs::write(&file, b"SELECT 1;").unwrap();
+        }
         // Oversize is refused from the file's size, before reading (sparse file).
         let big = root.join("big.sql");
         std::fs::File::create(&big)

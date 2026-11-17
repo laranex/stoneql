@@ -1,3 +1,7 @@
+//! Read-write sessions need the durable outcome journal, which is Unix-only until its Windows
+//! port gives the same guarantees (no reparse-point following, single-process lock, atomic
+//! replace); on other platforms read-write is refused and these tests do not apply.
+#![cfg(unix)]
 //! M006 blocker 2: the native reload/navigation guard decides from the runtime registry only.
 //! MockRuntime never runs navigation handlers, so these tests drive the decision function the
 //! guard calls against real host state (actual IPC handlers, temporary SQLite file). The hook

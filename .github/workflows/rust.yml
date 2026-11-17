@@ -8,34 +8,51 @@ permissions:
   contents: read
 jobs:
   foundation:
-    # macOS (Apple Silicon) is the only supported desktop platform. Add Windows and Linux back to
-    # this matrix when each is supported and its checks pass.
+    # macOS (Apple Silicon) is the only supported desktop platform. windows-2025 is being ported on
+    # the windows-support branch: its steps keep going after a failure so one run lists every gap,
+    # and it does not gate anything until Windows is supported.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15]
+        os: [macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - uses: actions/setup-node@v4
+        continue-on-error: ${{ runner.os == 'Windows' }}
         with:
           node-version: '26'
           cache: npm
       - run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm ci
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run build
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:vendor
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:fmt
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:build
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:lint
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:test
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run rust:boundaries
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm run contracts:check
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: node --test tests/workspace.test.mjs tests/driver-fixtures.test.mjs
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: npm test
+        continue-on-error: ${{ runner.os == 'Windows' }}
       - run: cargo install cargo-audit --version 0.22.2 --locked
+        continue-on-error: ${{ runner.os == 'Windows' }}
       # The shipped graph (macOS release targets) must be advisory-free; this gates the build.
       - run: npm run audit:release
+        continue-on-error: ${{ runner.os == 'Windows' }}
       # The full graph also covers development-only SQLite and the unreleased Linux GTK stack.
       # Its advisories stay visible here (A4: never ignored) without blocking.
       - continue-on-error: true
