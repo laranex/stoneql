@@ -69,3 +69,21 @@ test('repository links are explicit and do not invent an owner', () => {
     }
   }
 });
+
+test('unsafe code stays forbidden everywhere except the reviewed DPAPI crate', async () => {
+  const text = path => readFile(new URL(`../${path}`, import.meta.url), 'utf8');
+  const root = await text('Cargo.toml');
+  assert.match(root, /\[workspace\.lints\.rust\]\nunsafe_code = "forbid"/);
+  const members = JSON.parse(root.match(/^members = (\[.*\])$/m)[1]);
+  for (const member of members) {
+    const manifest = await text(`${member}/Cargo.toml`);
+    if (member === 'crates/stoneql-dpapi') {
+      assert.match(manifest, /\[lints\.rust\]\nunsafe_code = "deny"/);
+      assert.match(manifest, /undocumented_unsafe_blocks = "deny"/);
+      assert.match(await text(`${member}/src/lib.rs`), /^#!\[cfg\(windows\)\]$/m);
+    } else {
+      assert.match(manifest, /\[lints\]\nworkspace = true/, `${member} must inherit the workspace lints`);
+      assert.doesNotMatch(manifest, /unsafe_code/, `${member} must not relax unsafe_code`);
+    }
+  }
+});

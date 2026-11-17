@@ -8,18 +8,12 @@ use std::{
     fs, io,
     io::Write,
     path::{Path, PathBuf},
-    ptr, slice,
 };
-use windows_sys::Win32::{
-    Foundation::LocalFree,
-    Security::Cryptography::{
-        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
-    },
-};
+use stoneql_dpapi::{protect, unprotect};
 
 pub(super) fn set(service: &str, account: &str, value: &[u8]) -> Result<(), SecretError> {
     let path = item_path(service, account)?;
-    let sealed = protect(value, &entropy(service, account))?;
+    let sealed = protect(value, &entropy(service, account)).map_err(|_| SecretError::Failed)?;
     let dir = path.parent().ok_or(SecretError::Failed)?;
     fs::create_dir_all(dir).map_err(|_| SecretError::Failed)?;
     let temp = dir.join(format!("{account}.tmp"));
@@ -43,7 +37,7 @@ pub(super) fn set(service: &str, account: &str, value: &[u8]) -> Result<(), Secr
 
 pub(super) fn get(service: &str, account: &str) -> Result<Vec<u8>, SecretError> {
     let sealed = fs::read(item_path(service, account)?).map_err(not_found_or_failed)?;
-    unprotect(&sealed, &entropy(service, account))
+    unprotect(&sealed, &entropy(service, account)).map_err(|_| SecretError::Failed)
 }
 
 pub(super) fn delete(service: &str, account: &str) -> Result<(), SecretError> {
@@ -82,75 +76,6 @@ fn item_path(service: &str, account: &str) -> Result<PathBuf, SecretError> {
 /// does not decrypt.
 fn entropy(service: &str, account: &str) -> Vec<u8> {
     format!("stoneql-secret-v1\0{service}\0{account}").into_bytes()
-}
-
-fn blob(bytes: &[u8]) -> Result<CRYPT_INTEGER_BLOB, SecretError> {
-    Ok(CRYPT_INTEGER_BLOB {
-        cbData: u32::try_from(bytes.len()).map_err(|_| SecretError::Failed)?,
-        pbData: bytes.as_ptr().cast_mut(),
-    })
-}
-
-fn protect(value: &[u8], entropy: &[u8]) -> Result<Vec<u8>, SecretError> {
-    let input = blob(value)?;
-    let entropy = blob(entropy)?;
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: the input blobs borrow live slices for the call; DPAPI allocates `output` with
-    // LocalAlloc, which `take` copies and frees.
-    let ok = unsafe {
-        CryptProtectData(
-            &input,
-            ptr::null(),
-            &entropy,
-            ptr::null(),
-            ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(SecretError::Failed);
-    }
-    Ok(take(output))
-}
-
-fn unprotect(sealed: &[u8], entropy: &[u8]) -> Result<Vec<u8>, SecretError> {
-    let input = blob(sealed)?;
-    let entropy = blob(entropy)?;
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    // SAFETY: as in `protect`; no description is requested.
-    let ok = unsafe {
-        CryptUnprotectData(
-            &input,
-            ptr::null_mut(),
-            &entropy,
-            ptr::null(),
-            ptr::null(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(SecretError::Failed);
-    }
-    Ok(take(output))
-}
-
-/// Copies a DPAPI output buffer, wipes it and releases it.
-fn take(output: CRYPT_INTEGER_BLOB) -> Vec<u8> {
-    if output.pbData.is_null() {
-        return Vec::new();
-    }
-    // SAFETY: DPAPI returned `cbData` initialised bytes at `pbData`, owned by us until LocalFree.
-    unsafe {
-        let bytes = slice::from_raw_parts_mut(output.pbData, output.cbData as usize);
-        let copy = bytes.to_vec();
-        bytes
-            .iter_mut()
-            .for_each(|byte| ptr::write_volatile(byte, 0));
-        LocalFree(output.pbData.cast());
-        copy
-    }
 }
 
 #[cfg(test)]
