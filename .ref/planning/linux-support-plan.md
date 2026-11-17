@@ -28,9 +28,9 @@ Unix code paths are already shared with macOS (`cfg(unix)`). Linux builds, and e
 2. **Renderer crash recovery — Approved.** Implemented; macOS handler unchanged in behaviour (now shares `recover_renderer`).
 3. **Packaging — Approved:** `.deb` first, AppImage later. No signing, no publishing.
 4. **Oldest supported distros — Approved:** Ubuntu 22.04 / Debian 12. Verified facts (package metadata, fetched 2026-11-17):
-   - Ubuntu 22.04: `libwebkit2gtk-4.1-0` 2.50.4-0ubuntu0.22.04.1 in jammy-security/updates (universe) on amd64/i386; the release pocket and other architectures have **2.36.0-2ubuntu1**, below wry's `v2_38` feature (WebKitGTK ≥ 2.38). glibc 2.35-0ubuntu3.15. Sources: https://packages.ubuntu.com/jammy/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy/libc6
+   - Ubuntu 22.04: `libwebkit2gtk-4.1-0` 2.50.4-0ubuntu0.22.04.1 in jammy-updates (universe; arm64 is listed there too, the page gives one version for all architectures) and in jammy-security on amd64/i386; the release pocket has **2.36.0-2ubuntu1**, below wry's `v2_38` feature (WebKitGTK ≥ 2.38). glibc 2.35-0ubuntu3.15 (amd64). Sources: https://packages.ubuntu.com/jammy/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy-updates/libwebkit2gtk-4.1-0, https://packages.ubuntu.com/jammy/libc6
    - Debian 12: `libwebkit2gtk-4.1-0` 2.50.6-1~deb12u2 (mipsel 2.42.2), glibc 2.36-9+deb12u14. Sources: https://packages.debian.org/bookworm/libwebkit2gtk-4.1-0, https://packages.debian.org/bookworm/libc6
-   - Consequences: the floor is amd64 with security updates applied (the versioned `libwebkit2gtk-4.1-0 (>= 2.38)` Depends makes apt pull them); arm64 22.04 is below the floor. The 26.04-built binary needs `GLIBC_2.39` (`objdump -T`), above both floors: **release gate — build the `.deb` on Ubuntu 22.04** (for example a 22.04 container on the build server) and smoke it on 22.04 and Debian 12. Not done yet.
+   - Consequences: 22.04 needs its updates applied (the versioned `libwebkit2gtk-4.1-0 (>= 2.38)` Depends makes apt pull them; an un-updated 22.04 has 2.36). Only amd64 is built so far. The 26.04-built binary needs `GLIBC_2.39` (`objdump -T`), above both floors: **release gate — build the `.deb` on Ubuntu 22.04** (for example a 22.04 container on the build server) and smoke it on 22.04 and Debian 12. Not done yet.
 5. **Verification standard — Approved.** The build server runs every check, real-window tests under `dbus-run-session -- xvfb-run`. **Pending (user's step, before release):** a manual check in a real GNOME session (dialogs, clipboard, HiDPI, Wayland, GNOME Keyring unlock prompt, crash recovery).
 
 ## Phase 2 results (2026-11-17)
@@ -45,11 +45,13 @@ Build server (Ubuntu 26.04.1), clean checkout of `5155a3c`, then `b12c40b` for t
 | `npm test` | 239 + 22 passed |
 | `npm run build`, `docs:build` | pass |
 | `test:browser` | 73 passed, including the new master-password spec in both themes |
-| `test:secret-service` (new; disposable bus + gnome-keyring 50.0 unlocked with a generated password piped on stdin) | pass: round trip, replace, label, attributes, delete, a present service never selects the vault; 0 items left; `~/.local/share/keyrings` absent before and after |
+| `test:secret-service` (new; disposable bus + gnome-keyring 50.0 unlocked with a generated password piped on stdin) | pass: round trip, replace, label, attributes, delete, a present service never selects the vault, and a second keyring started without a login keyring (present but unusable) fails closed with `SECRET_UNAVAILABLE` and no vault directory; 0 items left; `~/.local/share/keyrings` absent before and after |
 | `real_window_reload` under `dbus-run-session -- xvfb-run` | pass, including the F-2 `WebKitWebProcess` kill and reload |
 | `desktop:smoke` under the same | pass, `startupMs` 1690 |
 | `test:ssh` | pass on MySQL, MariaDB, PostgreSQL with saved references (3 created and deleted per engine, 0 left) |
 | `desktop:deb` | `StoneQL_0.1.0_amd64.deb`, 9.3 MB; installed with apt, alive after 12 s with a "StoneQL" 1280×860 window under Xvfb; then removed |
+
+New direct dependencies (Linux only unless noted; all already in `Cargo.lock`, licences from `cargo metadata`): `dbus` 0.9.12 (Apache-2.0/MIT), `webkit2gtk` 2.0.2 (MIT), `aes-gcm` 0.11.1 (Apache-2.0 OR MIT), `argon2` 0.6.0 (MIT OR Apache-2.0), `getrandom` 0.4.3 (MIT OR Apache-2.0), `nix` 0.31.3 (MIT), and `zeroize` 1.9.1 (Apache-2.0 OR MIT, all platforms). `unsafe_code` stays forbidden.
 
 Argon2id cost (m=64 MiB, t=3, p=1): 0.154 s release, 2.78 s debug.
 
@@ -57,7 +59,7 @@ Server changes this phase: installed `gnome-keyring`, `libsecret-tools` (test fi
 
 Mac (macOS, shared code): `rust:fmt`, `rust:lint`, `contracts:check`, `rust:boundaries` pass; `desktop:test` 62 passed, 0 failed; `npm test` 239 + 22; `test:browser` 73 passed. `real_window_reload` was not re-run on the Mac (needs the desktop session); the macOS handler now calls the shared `recover_renderer` with the same body.
 
-Not verified: the Secret Service unlock prompt (no prompter on the headless server); KWallet/KeePassXC; the master-password flow in the real app window (covered by unit, IPC-double and browser tests, not end to end in WebKitGTK).
+Not verified: the Secret Service unlock prompt and its dismissal (no prompter on the headless server); KWallet/KeePassXC; the master-password flow in the real app window (covered by unit, IPC-double and browser tests, not end to end in WebKitGTK).
 
 ## Remaining before any Linux release
 
@@ -66,3 +68,4 @@ Not verified: the Secret Service unlock prompt (no prompter on the headless serv
 - The manual GNOME session check (user).
 - Not yet run on Linux: `test:resources`, `test:receive-limit`, `test:journal-crash`, `audit:release`.
 - Docs, README and release notes stay free of Linux claims until then; `docs/development/ssh-credentials.md` describes the Linux stores as in development and unreleased.
+- Known UI gaps: removal-failure messages still name the Keychain; the "Saved in…" placeholder shows the store for new saves, not the store of that reference. `test:secret-service` and its prerequisites (`dbus-daemon`, `gnome-keyring`, `libsecret-tools`) are not yet in the contributor/verification docs.
