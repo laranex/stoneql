@@ -481,15 +481,23 @@ test('a lease that ends during a job reports its recorded reason', async () => {
   assert.equal(store.liveSessions[id].lease, undefined);
   assert.equal(store.liveSessions[id].error, 'The transaction ended during this job. Transaction outcome unknown. Its connection was lost. Neither COMMIT nor ROLLBACK was sent or confirmed. Verify on the server; StoneQL never retries.');
 });
-/** A native fixture whose delete_secret fails (locked or denied Keychain), and optionally store_secret too. */
-function failingDeletes(failStoreAfter = Infinity, enrolled = false) {
+/**
+ * A native fixture whose delete_secret fails (locked or denied store), and optionally store_secret
+ * too. `kind` is where new saves go (the host's secret_store_status); `version` the references' UUID version.
+ */
+function failingDeletes(failStoreAfter = Infinity, enrolled = false, kind = 'keychain', version = '4') {
   const native = nativeFixture(false, false, { enrolled });
   const invoke = native.global.__TAURI__.core.invoke;
   let stores = 0;
   native.global.__TAURI__.core.invoke = async (command: string, args: { message: string }) => {
     const request = JSON.parse(args.message);
+    if (command === 'secret_store_status') return { version: 1, requestId: request.requestId, payload: { kind, vaultExists: false, unlocked: false } };
     if (command === 'delete_secret') { native.calls.push({ command, payload: request.payload }); throw { code: 'SECRET_UNAVAILABLE', message: 'keychain locked' }; }
-    if (command === 'store_secret' && ++stores > failStoreAfter) { native.calls.push({ command, payload: request.payload }); throw { code: 'SECRET_UNAVAILABLE', message: 'keychain locked' }; }
+    if (command === 'store_secret') {
+      native.calls.push({ command, payload: request.payload });
+      if (++stores > failStoreAfter) throw { code: 'SECRET_UNAVAILABLE', message: 'keychain locked' };
+      return { version: 1, requestId: request.requestId, payload: { reference: `00000000-0000-${version}000-8000-${String(stores).padStart(12, '0')}` } };
+    }
     return invoke(command, args);
   };
   return native;
@@ -505,10 +513,29 @@ test('F-10: a failed credential deletion on removal keeps the profile and offers
   await remove();
   assert.equal(store.connections.some((c: any) => c.id === id), true, 'profile kept');
   assert.equal(lastConfirmation.acceptLabel, 'Remove anyway');
-  assert.match(lastConfirmation.message, /1 saved credential could not be removed from the Keychain \(service me\.thixpin\.stoneql\.credentials\)/);
+  assert.equal(lastConfirmation.message, '1 saved credential could not be removed from the Keychain (service me.thixpin.stoneql.credentials). Remove the profile anyway? The item stays in the Keychain until you delete it there.');
   await lastConfirmation.action();
   assert.equal(store.connections.some((c: any) => c.id === id), false);
   assert.equal(notices.at(-1), 'success:Connection removed.');
+});
+for (const [kind, version, expected] of [
+  ['secret_service', '4', '1 saved credential could not be removed from the desktop keyring (Secret Service, service me.thixpin.stoneql.credentials). Remove the profile anyway? The item stays in the desktop keyring until you delete it there.'],
+  // Saved in the encrypted file before a keyring was running: the reference still names the file.
+  ['secret_service', '8', '1 saved credential could not be removed from StoneQL’s encrypted file. Remove the profile anyway? The item stays in the encrypted file until you reset saved passwords.'],
+  ['encrypted_file', '8', '1 saved credential could not be removed from StoneQL’s encrypted file. Remove the profile anyway? The item stays in the encrypted file until you reset saved passwords.'],
+  // No known store (Windows has none): never claims the Keychain.
+  ['unavailable', '4', '1 saved credential could not be removed from the system credential store (service me.thixpin.stoneql.credentials). Remove the profile anyway? The item stays there until you delete it.'],
+] as const) test(`F-10: a failed removal names the store holding the reference (${kind}, v${version})`, async () => {
+  const native = failingDeletes(Infinity, false, kind, version);
+  const { store, flow } = await setup(native.global);
+  liveDraft(flow);
+  flow.connectionDraft.value.rememberPassword = true;
+  await flow.saveConnection(false);
+  const id = flow.connectionDraft.value.id;
+  await (await setupRemoval(flow, id))();
+  assert.equal(store.connections.some((c: any) => c.id === id), true, 'profile kept');
+  assert.equal(lastConfirmation.message, expected);
+  assert.doesNotMatch(lastConfirmation.message, /Keychain/);
 });
 test('F-10: a save whose old credential cannot be deleted stands but warns with the count', async () => {
   const native = failingDeletes();

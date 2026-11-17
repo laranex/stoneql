@@ -3057,7 +3057,7 @@ onBeforeUnmount(() => {
                     v-model="connectionDraft.password"
                     type="password"
                     autocomplete="new-password"
-                    :placeholder="connectionDraft.mode==='live' && connectionDraft.passwordRef ? savedPlaceholder(secretStoreKind) : 'Optional'"
+                    :placeholder="connectionDraft.mode==='live' && connectionDraft.passwordRef ? savedPlaceholder(connectionDraft.passwordRef, secretStoreKind) : 'Optional'"
                 /></label></div>
               <label v-if="connectionDraft.mode==='live'" class="checkbox-label"
                 ><input :disabled="testing" type="checkbox" v-model="connectionDraft.rememberPassword" /> Remember database password</label
@@ -3109,7 +3109,7 @@ onBeforeUnmount(() => {
                     v-model="connectionDraft.transport.password"
                     type="password"
                     autocomplete="new-password"
-                    :placeholder="connectionDraft.transport.passwordRef ? savedPlaceholder(secretStoreKind) : ''" /></label
+                    :placeholder="connectionDraft.transport.passwordRef ? savedPlaceholder(connectionDraft.transport.passwordRef, secretStoreKind) : ''" /></label
                 ><label v-if="connectionDraft.transport.auth === 'password'" class="checkbox-label"
                   ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassword" /> Remember SSH password</label
                 ><template v-if="connectionDraft.transport.auth === 'private-key'"
@@ -3119,7 +3119,7 @@ onBeforeUnmount(() => {
                       v-model="connectionDraft.transport.passphrase"
                       type="password"
                       autocomplete="new-password"
-                      :placeholder="connectionDraft.transport.passphraseRef ? savedPlaceholder(secretStoreKind) : 'If the key is encrypted'" /></label
+                      :placeholder="connectionDraft.transport.passphraseRef ? savedPlaceholder(connectionDraft.transport.passphraseRef, secretStoreKind) : 'If the key is encrypted'" /></label
                   ><label class="checkbox-label"
                     ><input :disabled="testing" type="checkbox" v-model="connectionDraft.transport.rememberPassphrase" /> Remember key passphrase</label
                 ></template>

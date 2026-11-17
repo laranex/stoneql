@@ -152,6 +152,7 @@ for(const theme of ['light','dark'])test(`${theme}: live SSH requires explicit h
    else if(command==='ssh_host_key_status')payload={trusted:enrolled?{algorithm:'ssh-ed25519',fingerprint}:null};
    else if(command==='trust_ssh_host_key'){if(p.fingerprint!==fingerprint)throw{code:'INVALID_REQUEST'};enrolled=true;payload={trusted:{algorithm:'ssh-ed25519',fingerprint}};}
    else if(command==='forget_ssh_host_key'){enrolled=false;payload={trusted:null};}
+   else if(command==='secret_store_status')payload={kind:'keychain',vaultExists:false,unlocked:false};
    else if(command==='store_secret')payload={reference:`00000000-0000-4000-8000-${String(++references).padStart(12,'0')}`};
    else if(command==='delete_secret')payload={reference:p.reference};
    else if(command==='connect_direct'){

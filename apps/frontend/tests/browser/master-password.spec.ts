@@ -45,7 +45,7 @@ for(const theme of ['light','dark'])test(`${theme}: master password create, unlo
  await page.getByRole('textbox',{name:'Default database'}).fill('shop');
  await page.getByLabel('Password',{exact:true}).fill('synthetic-db-password');
  await expect(page.getByRole('checkbox',{name:'Remember database password'})).toBeChecked();
- await expect(page.getByTestId('secret-store')).toHaveText('Saved in StoneQL’s encrypted file (master password): no desktop keyring is running.');
+ await expect(page.getByTestId('secret-store')).toHaveText('New passwords are saved in StoneQL’s encrypted file (master password): no desktop keyring is running.');
 
  // First save: no vault yet, so the user sets a master password (twice, at least 8 characters).
  await page.getByRole('button',{name:'Save',exact:true}).click();
