@@ -1,11 +1,12 @@
 # M004 — PostgreSQL and SQLite adapters
 
 ## Status
-**Blocked — all unblocked work done (2026-11-16).** Scope narrowed by the user on 2026-11-16 to PostgreSQL (with MySQL/MariaDB); SQLite criteria are out of scope (code and regressions kept). Remaining PostgreSQL criteria need decisions A3, A9, A10 (A1 run, A8 adopted 2026-11-16) in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+**In progress — not closable (reviewed 2026-11-17; record "Acceptance record — 2026-11-17" at the end).** Scope: PostgreSQL (with MySQL/MariaDB regressions); SQLite out of scope since 2026-11-16 (code and regressions kept). Met: contracts and MySQL/MariaDB regressions. Not met, engineering only: native GUI to PostgreSQL in a real window. Blocked: G1/G2 sign-off (A9: D011–D013), G3 matrix and G4/G5 budgets (A3), alpha admission (A10). Open tension: the 2026-11-17 RC ships PostgreSQL Direct (read-write per A15) while A10 go/no-go is still Pending. The 2026-11-16 line "Blocked — all unblocked work done" is superseded. Earlier status text follows.
 
 Local implementation and evidence recorded (2026-10-26, under the user's continuation instruction); not complete. Open gates: approved engine/version/OS matrix (only PostgreSQL 17.6 and bundled SQLite 3.51.3 on macOS ARM were executed; Windows/Linux, including Windows verbatim SQLite paths, unverified); real native file-picker and graphical WebView-to-database interaction (tests use Tauri MockRuntime and a trusted grant); approved G4/G5 lifecycle/basic-query numerical budgets and the 100,000-row resource profile for the new engines; PostgreSQL/SQLite per-message allocation bounds (the receive-limit patch is MySQL-only); SQLite WAL files in read-only directories and network filesystems; same-user SQLite path-replacement race; PostgreSQL extensions/arrays/ranges/interval text (explicit unknown today); hostile database definitions/operators; review of decisions D011–D015. No push, publication or deployment is authorized.
 
 ## v0.1.0 Alpha treatment (D022, Approved product decision 2026-10-26)
+*2026-11-17 note: PostgreSQL browse, CRUD (Direct read-write, A15) and SQL/CSV/JSON export are now implemented and offered in the RC, beyond the "not planned" wording below; alpha admission still awaits A10. See "Acceptance record — 2026-11-17".*
 - **PostgreSQL — optional.** Admitted to the alpha only if, by the feature freeze, it passes the same alpha gates as MySQL/MariaDB for the capabilities it would advertise (read-only SQL at minimum; browse/CRUD/transfers are not planned for PostgreSQL in the alpha) on the signed artifact, including SSH parity and D011–D013 review. Otherwise it is capability-gated off in the alpha build and listed as an omission. It never blocks the alpha. Go/no-go: Proposed, decision pending.
 - **SQLite — Deferred.** Implemented code, grants (D014/D015) and fixtures stay and must keep passing as regressions; the adapter is outside alpha support claims. The alpha UI must hide or clearly label it (Proposed: hidden behind a non-default flag). No writable-SQLite policy (M006 prerequisite 5) is needed for the alpha.
 - Nothing here is complete; the open gates above remain for the release that ships each engine.
@@ -47,6 +48,8 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 - Safe evidence: `.ref/planning/m004-evidence/`; decisions D011–D015 in `.ref/planning/architecture-decisions.md`; public page `docs/development/postgres-sqlite.md`.
 
 ## Acceptance record — 2026-11-16 (PostgreSQL 17.6, macOS arm64; SQLite out of scope)
+*Statuses in this table are superseded by "Acceptance record — 2026-11-17" at the end of this file; kept as history.*
+
 | Criterion | Evidence (executed) | Status |
 |---|---|---|
 | G1 PostgreSQL TLS/privilege boundaries, mutation refused | `npm run test:native-postgres` on `6b3a464` (2026-11-16): passed, 100 verified-TLS lifecycle samples, plus the 2026-10-26 untrusted-CA/hostname/28P01/42501/25006 evidence. **New risk found:** hostile-server backend header panics the driver (length < 4) and buffers unbounded (1 GiB declared → +411 MiB RSS) — `.ref/planning/m004-pg-message-limit/findings.md`; patch prototyped (4/4 adversarial tests). **A8 adopted 2026-11-16:** `vendor/sqlx-postgres` (provenance checked by `rust:vendor`), runtime 2 MiB limit → `PACKET_TOO_LARGE`; driver library suite 163/163; `test:native-postgres` (PostgreSQL 17.6): a 3 MiB value is refused and the next query on a fresh connection works. | Verified (TLS, privileges, message bound) |
@@ -56,3 +59,17 @@ Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement
 | Generated contracts and MySQL/MariaDB regressions still pass | `test:native-database` both engines on `2cf6676`; desktop:test 24 passed (2026-11-16). | Verified |
 | Native GUI to PostgreSQL | MockRuntime + real SQLx only. | Blocked (A1) |
 | SQLite rows (canonical paths, WAL, path race, busy lock, Windows paths) | Out of scope per user 2026-11-16; existing regressions retained (desktop:test sqlite_* passed 2026-11-16). | Out of scope |
+
+## Acceptance record — 2026-11-17 (supersedes the 2026-11-16 statuses above; PostgreSQL 17.6, macOS arm64)
+Evidence base: working tree on `b0bfea3` plus uncommitted export changes; `npm run test:native-postgres` passed on 2026-11-17 with 100 verified-TLS lifecycle samples (`artifacts/m004/native-postgresql.json`, 12:39, untracked); `npm run test:execution` PostgreSQL passed (`artifacts/m006/execution-postgresql.json`, 12:38).
+
+| Criterion | Status | Evidence or gap |
+|---|---|---|
+| G1 PostgreSQL TLS/privilege boundaries; mutation refused on read-only handles | Blocked on A9 (evidence executed) | 2026-11-17 run above; 2026-10-26 untrusted-CA/hostname/28P01/42501/25006 evidence; A8 message limit adopted 2026-11-16. D011 (TLS/env refusal) and D012 (read-only boundary) await review (A9). Since A15, PostgreSQL Direct is read-write by default; over SSH it is refused read-write before Keychain/network (runtime `postgres_read_write_over_ssh_is_refused_before_network_access`). |
+| G2 ENUM/unknown types, temporal text, NULL/default | Blocked on A9 (evidence executed) | Fixture evidence unchanged; arrays/ranges/interval/inet/extensions are explicit `unknown` by D013 (review A9). |
+| G3 approved engine/version/OS matrix; unsupported capabilities rejected | Blocked on A3, A9 (evidence executed) | PostgreSQL 17.6 on macOS arm64 only; `CALL`/casts/dollar quoting refused. |
+| G4/G5 lifecycle/basic-query budgets; bounded resources | Blocked on A3 (evidence executed) | 100,000-row resource profile 2026-11-16 (`.ref/planning/m004-evidence/resource-postgresql.json`); message bound adopted (A8). Budgets Proposed. |
+| Generated contracts and MySQL/MariaDB regressions | Met | `contracts:check` and `test:native-database` both engines, 2026-11-17. |
+| Native GUI to PostgreSQL | Not met (engineering) | MockRuntime with real SQLx only; a real-window run is unblocked (A1 approved, A2 closed) but not done. |
+| Alpha admission (D022: optional; SSH parity and D011–D013 review required) | Blocked on A10 | No go/no-go recorded. The RC (`b0bfea3`) offers PostgreSQL Direct read-write, and PostgreSQL over SSH is read-only; D022 asks for SSH parity for the capabilities advertised. The user must decide go (and whether PostgreSQL SSH read-write is needed; no ledger id) or no-go (gate PostgreSQL off). Not inferred from A15. |
+| SQLite rows | Out of scope (user, 2026-11-16) | Regressions kept (`desktop:test` with the `sqlite` feature). |

@@ -1,7 +1,7 @@
 # M006 — Advanced SQL, schema metadata and integrity
 
 ## Status
-**Blocked — all unblocked work done (2026-11-16).** Schema/metadata/browse/CRUD half implemented and verified on real MySQL 8.4.6, MariaDB 11.4.8 and PostgreSQL 17.6 fixtures (record below). Live CRUD is reachable only with the read-write gate, which stays OFF (A15). Remaining criteria need decisions A1, A2, A6, A8, A15–A17 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+**In progress — not closable (reviewed 2026-11-17; record "Acceptance record — 2026-11-17" at the end).** Read-write is enabled in builds since 2026-11-17 (A15: MySQL/MariaDB Direct + SSH, PostgreSQL Direct; PostgreSQL over SSH stays read-only; saved per-profile Read-only option). Met: G1, G2, M003 path, read-write enablement, physical reload protection. Not met, engineering only: live Structure column/index changes, Operations and Search (controls hidden for live; not deferred by D022); graphical row editing against a real server in the packaged app; release-build cancel/bounded-result measurement. Blocked: G3 version matrix (A3), G4/G5 limits and D025-11/12/13 (A16), CRUD design sign-off (A17). The 2026-11-16 line "Blocked — all unblocked work done" is superseded. Earlier status text follows.
 
 **In progress. Not complete; no acceptance criterion is signed off.** (Updated 2026-10-29.)
 
@@ -81,6 +81,8 @@ Raw SQL can mutate session state; pool reset/discard must be proved. Engine canc
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
 
 ## Acceptance record — 2026-11-16 (macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+*Statuses in this table are superseded by "Acceptance record — 2026-11-17" at the end of this file; kept as history.*
+
 Increments (all committed, not pushed):
 | Increment | Commits | Executed evidence |
 |---|---|---|
@@ -100,3 +102,18 @@ Increments (all committed, not pushed):
 | G4/G5 bounded results, cancel profile, no dirty connections, stale metadata cannot cross generations | Verified at characterization level (cancel p95 MySQL 72.6 / MariaDB 23.3 / PostgreSQL 55.1 ms, 100 fault cycles, browse/catalog generation guards). Limits approval A16; release-build measurements need A1/A2. |
 | Read-write enabled in builds | Blocked (A15): `READ_WRITE_SQL_ENABLED = false`. |
 | Physical Cmd+R / context-menu / Web Inspector reload with open work | Verified 2026-11-16 (A1, macOS arm64): `journal_window reload` — all three paths refused while a lease and a job were held; after confirming, reload rolled the lease back and both unknown outcomes were listed natively and in the UI; `real_window_reload` passed (see `.ref/planning/approvals-ledger.md` Results). |
+
+## Acceptance record — 2026-11-17 (supersedes the 2026-11-16 statuses above; macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+Evidence base: working tree on `b0bfea3` plus uncommitted export changes. `npm run test:execution` passed all three engines on 2026-11-17 (cancel p95 113.6 / 121.0 / 59.0 ms; `artifacts/m006/execution-{mysql,mariadb,postgresql}.json`, 12:32–12:38, untracked); `test:ssh` (A15 extension, ledger); suite counts as in M002's 2026-11-17 record.
+
+| Criterion | Status | Evidence or gap |
+|---|---|---|
+| G1 owner-scoped handles/jobs/leases/caches; unauthorized refused; SQL-free diagnostics | Met | Runtime/IPC/fixture evidence (2026-11-16) re-run in `desktop:test` and `test:execution` 2026-11-17. |
+| G2 constraints authoritative; documented atomicity; raw values; partial/unknown outcomes | Met | 2026-11-17 reports: `rendererCrud` (4 statements, `exactText`, stale row 0 affected), `constraintFailures`, `ddlPartialOutcome`, `commitRefused` → unknown, lost COMMIT/ROLLBACK n=50 → unknown, `journalRestart` restored; SQL import stops at statement 3 / SQLSTATE 23000 (MySQL/MariaDB). |
+| G3 object/routine/index/materialized-view workflows on approved versions; multiple results; contracts | Blocked on A3 (version matrix); Not met (engineering) | Index/FK listing and DDL through the SQL tab verified; multiple results and `contracts:check` pass. Advanced objects (routines/triggers/events/materialized views) deferred by D022. Not deferred and not implemented for live: Structure column/index changes, Operations, Search, bulk Copy (controls hidden). D003-M006 contract versioning is still Proposed (no ledger id). |
+| G4/G5 bounded-result/cancel profile; no dirty connections; best-effort vs confirmed cancel; no stale cross-generation replies | Blocked on A16 (evidence executed); release-build measurement and silent-drop sample size are engineering | Cancel 100/100 confirmed on each of the three engines, fault cycles 100 with 0 dirty reuses / 0 session-state leaks, backpressure, kill-failure → unknown within 2.5 s (2026-11-17 reports). Debug build only; A1/A2 no longer block a release-build profile. Silent-drop lost COMMIT/ROLLBACK (`commit_drop_s2c`, `rollback_drop_s2c`) is still n=3 per engine in the 2026-11-17 reports — preliminary per the 2026-10-29 user decision (D025) and listed as a remaining release measurement. |
+| Basic M003 read-only queries via the same contracts; no Tauri/Axum in shared crates | Met | `test:native-database` 2026-11-17 (read-only handles); `rust:boundaries` pass. |
+| Read-write enabled in builds | Met (A15, 2026-11-17) | `READ_WRITE_SQL_ENABLED = true` (`apps/desktop/src-tauri/src/lib.rs:50`); gate-off refusal still tested (`ipc.rs`); PostgreSQL over SSH refused (`postgres_read_write_over_ssh_is_refused_before_network_access`, `tests/ssh_read_write.rs`); SSH read-write jobs and rollback for MySQL/MariaDB (`native.sshReadWrite`). PostgreSQL read-write over SSH: not approved (no ledger id). |
+| Physical Cmd+R / context-menu / Web Inspector reload with open work | Met | `journal_window reload`, 2026-11-16 (A1 Results). |
+| Live CRUD design sign-off | Blocked on A17 | Implemented and fixture-verified (above). |
+| Graphical row editing against a real server in the packaged app | Not met (engineering) | Browser specs use the stubbed host (ledger A15 "Not yet"). |

@@ -1,7 +1,7 @@
 # M003 — MySQL/MariaDB lifecycle and read-only SQL
 
 ## Status
-**Blocked — all unblocked work done (2026-11-16).** Remaining criteria need user decisions A3, A7 (A1 run, A6 adopted 2026-11-16) in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+**In progress — not closable (reviewed 2026-11-17; record "Acceptance record — 2026-11-17" at the end).** Met: M003-L, scope boundary to M006. Not met, engineering only: G2 `_bin`-collation text shown as hex in the SQL tab (finding 2026-11-16, still open); native SQL UI workflow against a real server in a real window (A1 approved, not run). Blocked: G1 sign-off (A7), G3 version matrix and G4/G5 budgets (A3). D026 (approved 2026-11-17) allows TLS off for loopback MySQL/MariaDB only. The 2026-11-16 line "Blocked — all unblocked work done" is superseded. Earlier status text follows.
 
 Authorized continuation; in progress. Shared lifecycle and restricted read-only adapter verified against local disposable fixtures. Native Direct MySQL/MariaDB SQL binding is implemented; complete native GUI/OS, memory and trust acceptance gates remain pending.
 
@@ -98,6 +98,8 @@ Verified local record: `.ref/planning/m003-renderer-reload/` (checks executed202
 Safe executed report: `.ref/planning/m003-resource-profile/` (2026-10-26). Both profiles passed; local debug runtime+JSON p95 MySQL14.583ms/MariaDB14.252ms, peak standalone RSS23.375/22.875MiB.157 JS/33 Rust tests and build/lint/contracts/boundaries/vendor/docs checks passed. Numerical budgets remain proposed and full native/aggregate-memory acceptance is open.
 
 ## Acceptance record — 2026-11-16 (scope: macOS; MySQL 8.4.6 / MariaDB 11.4.8 fixtures)
+*Statuses in this table are superseded by "Acceptance record — 2026-11-17" at the end of this file; kept as history.*
+
 | Criterion | Evidence (executed) | Status |
 |---|---|---|
 | M003-L lifecycle checkpoint | Lifecycle hardening + 100-cycle samples (2026-10-25/26, above). | Verified (earlier evidence) |
@@ -108,3 +110,16 @@ Safe executed report: `.ref/planning/m003-resource-profile/` (2026-10-26). Both 
 | Native SQL UI workflow on supported runner | Simulated bridge + MockRuntime with real SQLx only; real-window GUI not run. | Blocked (A1) |
 
 - Finding 2026-11-16 (open, M003 G2): the vendored driver names a column's type from its BINARY flag, which servers also set for `_bin` collations (MariaDB `JSON` = `LONGTEXT … utf8mb4_bin`), so such text columns are delivered as binary cells and the SQL tab shows them as hex. Export corrects this from the catalog's `CHARACTER_SET_NAME`; a general fix needs either catalog lookup for arbitrary query columns or a driver change (vendor patch → approval).
+
+## Acceptance record — 2026-11-17 (supersedes the 2026-11-16 statuses above; macOS arm64; MySQL 8.4.6 / MariaDB 11.4.8)
+Evidence base: working tree on `b0bfea3` plus uncommitted export changes; `npm run test:native-database` passed both engines on 2026-11-17 (`artifacts/m003/native-{mysql,mariadb}.json`, 12:38, untracked).
+
+| Criterion | Status | Evidence or gap |
+|---|---|---|
+| M003-L lifecycle checkpoint | Met | Lifecycle hardening and 100-cycle verified-TLS samples, 2026-10-25/26 (`.ref/planning/m003-lifecycle-hardening/`). |
+| G1 TLS/target rejection; DML/DDL/CALL/stacked refusal; engine read-only enforcement | Blocked on A7 (evidence executed) | `test:native-database` 2026-11-17 (`readOnlyRefusal`, `indirectWritesRejected`, `nonTransactionalWritesRejected`, `tlsModes` — D026 loopback TLS-off cases added by `0900641`); certificate/target rejections from 2026-10-25/26 fixtures. D026 (approved 2026-11-17) is the only exception to "TLS always": loopback MySQL/MariaDB, explicit, never a retry. Since A15 (2026-11-17) read-write is the default; the read-only boundary applies to profiles saved as **Read-only connection** and is unchanged. Residual trust limits (`docs/development/read-only-safety.md`) need A7. |
+| G2 exact values; unknown types explicit; explicit truncation | Not met (engineering) | Exactness and truncation Met (`exactValues`, `defaultQueryLimits` true on 2026-11-17; value list — BIGINT UNSIGNED max, DECIMAL(38,4), zero date, NULL, duplicate labels, 1000-row / 1 MiB truncation — as recorded 2026-11-16). Open: `_bin`-collated text (e.g. MariaDB `JSON`) arrives with the BINARY flag and the SQL tab shows it as hex; no fix found in `mysql.rs`, `read_only.rs` or `liveSchema.ts` on 2026-11-17. A catalog-lookup fix is engineering; a driver change would need a D002-class vendor-patch approval (no ledger id). |
+| G3 separate MySQL/MariaDB evidence; contract/UI compatibility | Blocked on A3 (evidence executed) | Both engines separately in the 2026-11-17 run; `contracts:check` and browser suite (66) pass. Version matrix 8.4.6 / 11.4.8 on macOS arm64 is Proposed. |
+| G4/G5 budgets; fail closed; no automatic retry | Blocked on A3 (evidence executed) | Resource profile 2026-10-26; metadata bound adopted (A6; 4,096 columns returned, 4,097 refused, 2026-11-16; `packetRecovery` true 2026-11-17). Budgets Proposed. |
+| Native SQL UI workflow on the supported runner | Not met (engineering) | Only the simulated bridge and MockRuntime with real SQLx. A1 is approved and A2 closed with the ad-hoc app, so a real-window run against a real server is unblocked but not done. |
+| Full schema discovery, jobs, transactions, cancellation stay in M006 | Met | Scope boundary held; those features are recorded in M006. |

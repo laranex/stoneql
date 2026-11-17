@@ -1,7 +1,7 @@
 # M005 — SSH and secure credentials
 
 ## Status
-**Blocked — all unblocked work done (2026-11-16).** The five approved alpha release blockers F-01, F-02, F-03, F-04 and F-10 (deletion) are implemented and verified (record below); their mechanisms and limits remain Proposed (A11). Remaining criteria need decisions A1, A2, A3, A4, A11–A14 in `.ref/planning/approvals-ledger.md`. Earlier status text follows.
+**In progress — not closable (reviewed 2026-11-17; record "Acceptance record — 2026-11-17" at the end).** Alpha blockers F-01–F-04 and F-10 deletion implemented and verified (2026-11-16); MySQL/MariaDB read-write over SSH approved (A15 extension) and fixture-verified 2026-11-17. Met: G2, 100-cycle/0-orphan part of G4/G5, Teleport/SSM boundary. Not met, engineering only: real-window native trust dialog and graphical WebView → SSH → database run on the ad-hoc app; quit/crash-relaunch/sleep-wake orphan checks; release-build transport measurement; `audit:release` re-run after `flate2`. Blocked: G1 mechanism sign-off (A11, A13), G3 auth-method matrix (A3, A12, A13), transport budget (A3). Keychain prompts and native E2E on a Developer ID build are open M009 items by the A2 closure. A4 and A14 are done. The 2026-11-16 line "Blocked — all unblocked work done" is superseded. Earlier status text follows.
 
 Local implementation and evidence recorded (2026-10-26, under the user's continuation instruction); not complete. Implemented: desktop SSH tunnels (agent, password, native key-file grant; verified enrolled host keys; private Unix-socket endpoint per handle; original hostname kept for TLS) owned by the runtime registry with cancellable, bounded setup, and macOS Keychain secret references bound to target and route (D016–D020, awaiting review). Executed evidence: `.ref/planning/m005-evidence/` (MySQL 8.4.6 full matrix including 100 mixed cycles with zero orphan tunnels/handles; MariaDB 11.4.8 and PostgreSQL 17.6 parity; actual command handlers with Keychain references; server-side no sessions/agent forwarding; trust-all mutation fails).
 
@@ -17,6 +17,8 @@ Independent review of commit `e908c49`: `.ref/planning/m005-security-review.md`.
 - F-01, F-02, F-03, F-04 and secret-deletion error handling (the deletion part of F-10) are v0.1.0 Alpha release blockers.
 - These controls stay as they are: explicit host-key enrollment, changed-key refusal, TLS hostname verification and credential isolation. No control may be weakened.
 - Rust core and contracts gain no macOS host API. The native store lives in the desktop host behind a trait.
+
+*2026-11-17 note: the five blockers below were implemented and verified on 2026-11-16 ("Acceptance record — 2026-11-16"); current status is in "Acceptance record — 2026-11-17". Text kept as history.*
 
 **Unresolved alpha release blockers (not implemented, none executed).** Plan: `.ref/planning/m005-alpha-fix-plan.md`.
 
@@ -42,6 +44,8 @@ Recommended non-blocking fixes (F-05..F-19) and the deferred and unsupported aut
 
 ## Platform scope for v0.1.0 Alpha (D021)
 Approved product decision (user, 2026-10-26): StoneQL v0.1.0 Alpha is macOS-only — Apple Silicon (arm64) primary, Intel (x86_64) optional pending verification; Windows and Linux desktop deferred; Axum server a separate future release. Windows/Linux-specific implementation and testing must not block the alpha; shared crates gain no macOS dependency.
+
+*2026-11-17 note: several items in the next paragraph have since been executed or re-scoped (F-01–F-04/F-10 done; key-file picker run; Keychain prompts on a Developer ID build moved to M009 by the A2 closure); see "Acceptance record — 2026-11-17".*
 
 Required for the macOS alpha (Unresolved release blockers, none executed): the review blockers F-01–F-04 and F-10 deletion above; real macOS Keychain access prompts on the signed release build (first save, first use, after upgrade), including a prompt arriving within — or a reviewed change to — the renderer's 8 s connect timeout, and denial/cancel handling; the real native SSH key-file picker; graphical WebView → SSH tunnel → MySQL/MariaDB end-to-end on the signed artifact (agent, password, key file with passphrase, host-key enrollment and changed-key refusal, TLS refusal through the tunnel); surfaced (not ignored) secret-deletion failures and no orphan tunnels after quit/crash relaunch/sleep-wake; an approved G4/G5 transport budget measured on arm64 (x86_64 if shipped) with the release build; an approved macOS auth-method matrix; review of D005/D006 and D016–D020. Existing macOS ARM fixture evidence (100 mixed cycles, Keychain command-handler tests) is Implemented and verified input, not release evidence.
 
@@ -76,6 +80,8 @@ Agent/keyring differences and host-key enrollment require human policy decisions
 Public context: `docs/architecture/roadmap.md` (G1–G6 and proposed measurement profile). Approval records: `.ref/planning/architecture-decisions.md`. No acceptance criterion is satisfied by this planning edit; record executed evidence before marking complete.
 
 ## Acceptance record — 2026-11-16 (macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+*Statuses in this table are superseded by "Acceptance record — 2026-11-17" at the end of this file; kept as history.*
+
 Alpha fix plan tasks (`.ref/planning/m005-alpha-fix-plan.md`) — all executed:
 | Task | Commits | Executed evidence |
 |---|---|---|
@@ -97,3 +103,19 @@ Alpha fix plan tasks (`.ref/planning/m005-alpha-fix-plan.md`) — all executed:
 | Dependency audit 0 vulnerabilities (plan T7) | Release graph verified 2026-11-16: russh upgraded to 0.65.1 (A4); `npm run audit:release` → 0 vulnerabilities, 0 warnings (366 packages, arm64+x86_64). Full `cargo audit` still reports RUSTSEC-2026-0459 (SQLite, test-only graph, deliberately not ignored) (see `.ref/planning/approvals-ledger.md` Results) | Verified for the release graph |
 
 - 2026-11-16 re-run: `npm run test:ssh` passed on `ecb28b5` (includes `b0e5786` F-4/session-end changes): MySQL full matrix 190 forwarded channels, MariaDB/PostgreSQL parity 41 each, dead-tunnel cases passed again.
+
+## Acceptance record — 2026-11-17 (supersedes the 2026-11-16 statuses above; macOS arm64; MySQL 8.4.6, MariaDB 11.4.8, PostgreSQL 17.6)
+Evidence base: `npm run test:ssh` 2026-11-17 on the working tree (`b0bfea3` and its predecessors): MySQL full matrix 195 forwarded channels and 0 session channels, MariaDB 46, PostgreSQL 41; `secretsInOutput` 0, `reportSecrets` 0 and Keychain items remaining 0 for all three engines (`artifacts/m005/ssh-{mysql,mariadb}.json` 12:42, `ssh-postgresql.json` 11:07, untracked); ledger A15 extension.
+
+| Criterion | Status | Evidence or gap |
+|---|---|---|
+| G1 host keys, certificates, no secrets in profile/logs, no agent forwarding | Blocked on A11, A13 (evidence executed); one engineering gap | Fixture/IPC evidence 2026-11-16 re-run 2026-11-17; verified TLS required through the tunnel (D026 keeps TLS mandatory for SSH routes); key-file picker in a real window (A1, 2026-11-16). Mechanisms (app-data host-key file, trust dialog, 60 s / 75 s, "Remove anyway", per-endpoint trust, limits) need A11; D005/D006/D016–D020 need A13. Engineering gap: the native trust confirmation dialog has not been exercised in a real window. Keychain prompts on a Developer ID build: not performed; open for M009 by the A2 closure (2026-11-16). |
+| G2 identity unchanged, credential isolation, interrupted setup leaves no handle | Met | T1/T2/T4 tests and fixtures (2026-11-16). 2026-11-17 host-path SSH read-write check (`live_ssh.rs`): `stoneql_writer` connects read-write through the tunnel, DDL/DML jobs succeed, a transaction rolls back (`native.sshReadWrite` in the MySQL and MariaDB reports). |
+| G3 approved OS/auth-method matrix; unsupported pairs rejected | Blocked on A3, A12, A13 (evidence executed) | Agent/password/key file on macOS arm64 for all three engines. Unsupported pairs rejected: PostgreSQL read-write over SSH refused before network access (runtime test above; `tests/ssh_read_write.rs`); RSA and keyboard-interactive unsupported pending A12. |
+| G4/G5 100 cycles, 0 orphans; SSH overhead measured; transport budget approved | Part Met; budget Blocked on A3 | 100 mixed cycles (20 each connected/cancelled/changed host key/TLS mismatch/wrong password), `registeredTunnelsAfter` 0, endpoint directories 0, descriptors 7 → 7 (`artifacts/m005/ssh-mysql.json` `runtime.full.cycles`, 2026-11-17); dead-tunnel release bounded (2026-11-16). Overhead characterized in debug only; a release-build measurement is engineering work. |
+| Teleport/SSM unimplemented; owned endpoint/expiry interfaces | Met | No Teleport/SSM code; tunnels are owned by the runtime registry with expiry and a single close path (D018–D020, review A13). |
+| Alpha: graphical WebView → SSH tunnel → MySQL/MariaDB end-to-end | Not met (engineering) | Not run on the ad-hoc app (agent, password, key file with passphrase, enrollment and changed-key refusal, TLS refusal through the tunnel). Developer ID-signed run is M009 (A2 closure). |
+| Alpha: no orphan tunnels after quit / crash relaunch / sleep-wake | Not met (engineering) | Dead-tunnel release verified; quit, crash-relaunch and sleep-wake cases not recorded. |
+| Alpha: secret-deletion failures surfaced | Met | T6 (`0020a35`), 2026-11-16. |
+| Alpha: dependency audit | Not met (engineering) | Release graph clean 2026-11-16 (A4, russh 0.65.1); `flate2` added to the shipped binary 2026-11-17 without a recorded `audit:release` re-run. |
+| Windows/Linux, Pageant, other credential stores | Deferred (D021) | Not run. |
