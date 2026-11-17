@@ -35,7 +35,7 @@ Choose **Export**. The desktop app shows its own save dialog; the window never s
 - The checked file is then run from that same copy, one statement at a time with autocommit, on its own connection. It stops at the first failing statement and names it (number, line, SQLSTATE); statements before it stay committed, statements after it are not run. Data definition statements commit implicitly as usual.
 - **Cancel import** stops before the next statement. A statement that was running when you cancelled, or when the connection was lost, has an unknown outcome: the server may or may not have applied it. It is listed under unknown outcomes and survives a restart.
 - Result sets returned by statements in the file are not shown.
-- Limits (Proposed, benchmarked): file up to 1024 MiB, a statement up to 16 MiB, up to 1,000,000 statements. The server's own `max_allowed_packet` also applies to each statement.
+- Limits in v0.1.0-beta.1: file up to 1024 MiB, a statement up to 16 MiB, up to 1,000,000 statements. Later builds may lower the statement limits. The server's own `max_allowed_packet` also applies to each statement.
 - Uncompressed StoneQL SQL exports import as they are (verified on MySQL 8.4 and MariaDB 11.4), except an export made with *Enclose data in a transaction*: its `START TRANSACTION`/`COMMIT` lines are refused like any transaction statement. Files from other tools import only when every statement is accepted; a file with `USE`, `START TRANSACTION` or `SET autocommit` is refused before anything runs. Other tools' dumps have not been tested.
 - Not offered: SQL import for PostgreSQL, GZIP/ZIP and XLSX import.
 

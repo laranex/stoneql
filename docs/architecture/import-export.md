@@ -11,16 +11,18 @@ Basic **SQL and CSV import/export for MySQL/MariaDB** is part of the approved al
 | CSV export (table or query result) | Required; streaming, explicit encoding/delimiter/quote/header and a NULL marker distinct from the empty string |
 | SQL export | Required; logical exporter (table structure plus batched inserts), no dependency on a native dump tool; InnoDB exported from a consistent read-only snapshot, non-transactional tables labelled as not snapshot-consistent; views, routines, triggers and events listed as omitted |
 | CSV import into an existing table | Required; validated against live metadata, parameterized batches inside an owned transaction, stop on first error, truthful committed/rejected/unknown counts |
-| SQL import | Required; statements run one at a time through the safe execution path, no whole-file rollback promise, implicit DDL commits stated; waits for the gate that enables unrestricted read-write SQL |
+| SQL import | Required; statements run one at a time through the safe execution path, no whole-file rollback promise, implicit DDL commits stated; implemented for MySQL/MariaDB read-write sessions since read-write was enabled (A15) |
 | GZIP | Proposed: export kept (no expansion risk; GZIP export is implemented); import deferred unless quotas apply to decompressed bytes with a tested expansion-ratio cap |
 | XLSX import | **Deferred** (approved deferral) |
 | XLSX and JSON export, ZIP | Proposed deferral; JSON export has since been implemented in the desktop app |
-| PostgreSQL and SQLite transfers | Deferred with those engines' alpha status |
+| PostgreSQL and SQLite transfers | PostgreSQL was admitted to the beta: data-only SQL, CSV and JSON export and CSV import ship; PostgreSQL SQL import is not offered. SQLite transfers stay deferred |
 
-Files are reached only through native save/open dialogs that issue owner-scoped, one-shot grants; exports write to a temporary file beside the target and rename atomically, removing it on cancel or failure. File, record, batch and disk quotas are proposed for approval and are not yet set.
+Files are reached only through native save/open dialogs that issue owner-scoped, one-shot grants; exports write to a temporary file beside the target and rename atomically, removing it on cancel or failure. The implemented quotas (CSV import 64 MiB, SQL import 1 GiB, export batches and grant counts) were approved on 2026-11-17 (A18); the export free-space floor is not implemented yet.
 
 
 ## Pipeline
+
+The desktop app implements this pipeline for live export and import (native dialogs as the authorized source or sink); the server path is planned.
 
 ```mermaid
 flowchart LR

@@ -19,6 +19,6 @@ Use fenced `mermaid` blocks. The theme loads pinned Mermaid 11.12.0 from jsDeliv
 
 ## GitHub Pages
 
-The prepared workflow builds on documentation pull requests and manual dispatch. Deployment requires an explicit manual `deploy=true`; it has not been executed. Configure the GitHub Pages environment with required reviewers before use. Default base is `/REPOSITORY/`. For a future custom domain, configure DNS/Pages separately and supply `custom_domain`; the build uses `/` and creates CNAME. Local custom-domain builds use `DOCS_CUSTOM_DOMAIN` and `DOCS_BASE=/`.
+The workflow builds on documentation pull requests and manual dispatch. Deployment requires an explicit manual `deploy=true`; the site is published at <https://stoneace.github.io/stoneql/>. Configure the GitHub Pages environment with required reviewers before use. Default base is `/REPOSITORY/`. For a future custom domain, configure DNS/Pages separately and supply `custom_domain`; the build uses `/` and creates CNAME. Local custom-domain builds use `DOCS_CUSTOM_DOMAIN` and `DOCS_BASE=/`.
 
 Keep proposals labelled as awaiting approval. Do not publish `.ref/`, local progress, secrets or generated development artifacts. External reference links require periodic human review; source/build checks validate local targets only.

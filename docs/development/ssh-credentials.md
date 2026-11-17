@@ -59,7 +59,7 @@ SSH overhead was characterized against the Direct loopback baseline on Docker De
 - RSA user and host keys are unsupported until the `rsa` crate advisory ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071)) is resolved or explicitly risk-accepted.
 - `~/.ssh/known_hosts`, `~/.ssh/config`, jump hosts, keyboard-interactive/2FA, host certificates and agent confirmation prompts are not supported.
 - Key-file grants are session-only: choose the key again after restarting.
-- A tunnel whose SSH session dies (keepalive exhausted) is expected, from code reading, to make the handle report disconnected (not yet covered by a test); its registry slot is released only on explicit disconnect, reset or the one-hour expiry (as for a dead Direct pool).
+- A tunnel whose SSH session dies (keepalive exhausted) releases its handle through the same close path as expiry (F-03; see *Lifecycle* above).
 - Same-user reachability: the endpoint's 0700 directory keeps other users out, but any process running as the same user can connect to a live tunnel socket (no peer-process check yet). It still needs database credentials and must pass verified TLS.
 - A failed secret deletion is reported: removing a profile keeps it and offers **Remove anyway** (naming the Keychain service); a save warns with the number of old items left. A renderer timeout during `store_secret` can still leave an unreferenced Keychain item.
 - RSA agent identities are skipped silently and RSA-only host keys surface as a connection failure rather than an explicit unsupported error.

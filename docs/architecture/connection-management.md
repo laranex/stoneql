@@ -6,7 +6,7 @@
 
 Separate non-secret profile metadata (name, engine, group, color, environment) from transport configuration and secret references. A runtime connection handle belongs to one desktop session or authenticated server principal. Database/schema, credentials, endpoint and generation are part of its identity. Never reuse a pool across unrelated principals merely because hosts match.
 
-Proposed lifecycle:
+Lifecycle (implemented for desktop live connections; a future server host would follow the same states):
 
 ```mermaid
 stateDiagram-v2

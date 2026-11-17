@@ -36,6 +36,7 @@ These features are hidden for live connections rather than simulated:
 - table Operations (rename, copy, truncate, drop);
 - database objects: managing views, routines, triggers and events;
 - the database-level Structure overview;
+- switching to another database on PostgreSQL connections;
 - CSV import at database level, and SQL import for PostgreSQL;
 - exporting views, routines, triggers and events.
 

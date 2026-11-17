@@ -80,7 +80,7 @@ Golden DTO round-trips cover raw precision, NULL/default, multiple result sets, 
 
 | Command | v1 request → response | Boundary |
 | --- | --- | --- |
-| `connect_direct` | `DirectConnectionRequest` → `LiveConnection` | MySQL/MariaDB Direct, verified TLS; transient password/optional PEM CA |
+| `connect_direct` | `DirectConnectionRequest` → `LiveConnection` | MySQL/MariaDB/PostgreSQL, Direct or SSH; verified TLS (optional only for local MySQL/MariaDB); transient password or Keychain reference, optional PEM CA |
 | `read_only_query` | `LiveQueryRequest` → `ResultSet` | Owned handle, restricted SELECT, bounded rows/bytes (optional; default to runtime maximums) and three-second deadline |
 | `disconnect_database` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Remove owned handle and close pool |
 | `database_status` | `ConnectionHandleRequest` → `LiveConnectionStatus` | Registry/lease state; no network query |
@@ -90,7 +90,7 @@ Golden DTO round-trips cover raw precision, NULL/default, multiple result sets, 
 | `begin_transaction` | `ConnectionHandleRequest` → `TransactionLease` | Owned lease on a dedicated connection; handle exclusive while open |
 | `end_transaction` | `EndTransactionRequest` → `TransactionEnd` | COMMIT/ROLLBACK reported only as server-confirmed; otherwise `unknown` with `commitSent` |
 
-**M006 additions (PROPOSED, D003 versioning decision pending review).** The job/transaction DTOs above, an optional `access` (`read_only` default, `read_write`) on `DirectConnectionRequest`/`SqliteConnectionRequest`, a required `access` on the `LiveConnection` reply and the `BUSY` error code are additive to v1: new optional request fields are omitted (never `null`) and the closed decoder still rejects unknown fields, so older renderers keep working while newer renderers cannot be decoded by an older host. Outcome vocabulary: statements `not_run | running | succeeded | failed | unknown`, jobs `succeeded | failed | cancelled | unknown` (`cancelled` only when stopped before sending), `cancellation: none | requested | confirmed`, transactions `committed | rolled_back | unknown`. Details: [read-write SQL execution](../development/sql-execution.md).
+**M006 additions (additive v1 versioning approved 2026-11-17, D003).** The job/transaction DTOs above, an optional `access` (`read_only` default, `read_write`) on `DirectConnectionRequest`/`SqliteConnectionRequest`, a required `access` on the `LiveConnection` reply and the `BUSY` error code are additive to v1: new optional request fields are omitted (never `null`) and the closed decoder still rejects unknown fields, so older renderers keep working while newer renderers cannot be decoded by an older host. Outcome vocabulary: statements `not_run | running | succeeded | failed | unknown`, jobs `succeeded | failed | cancelled | unknown` (`cancelled` only when stopped before sending), `cancellation: none | requested | confirmed`, transactions `committed | rolled_back | unknown`. Details: [read-write SQL execution](../development/sql-execution.md).
 
 Every request includes the native session ID inside the strict v1 envelope; command envelopes are bounded to 64 KiB. Connection handles are opaque UUIDs, scoped to the host session. The host admits at most 16 active connect/query requests and eight logical pools, with one-hour leases. Secret-bearing DTOs intentionally do not derive Debug. PEM CA input is bounded to 16 KiB; private-key content is rejected. Renderer secrets are transient, with no credential vault or filesystem permission.
 

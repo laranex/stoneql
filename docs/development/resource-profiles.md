@@ -1,6 +1,6 @@
 # Runtime resource profiles
 
-M003 has an opt-in, disposable MySQL/MariaDB resource profile. It measures the current runtime; it does not impose a process-memory cap or complete a release gate. The proposed numerical budgets in the [roadmap](../architecture/roadmap.md) still need approval.
+M003 has an opt-in, disposable MySQL/MariaDB resource profile. It measures the current runtime; it does not impose a process-memory cap or complete a release gate. The numerical budgets in the [roadmap](../architecture/roadmap.md) were approved on 2026-11-17 (A3); this profile is local evidence, not a release measurement.
 
 ```sh
 npm run test:resources

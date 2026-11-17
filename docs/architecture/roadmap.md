@@ -2,7 +2,9 @@
 
 **Status: revised roadmap and continuation through milestones authorized on 2026-10-25.** M001 is committed. M002's macOS development host is implemented, with Linux dependency-audit and cross-OS gates open. M003 lifecycle/read-only evaluation passes local fixtures; the user approved the scoped SQLx receive-limit patch. Explicit native live SQL binding is implemented; full native GUI interaction and broader driver/OS/release acceptance remain open. M004 PostgreSQL/SQLite read-only adapters are implemented locally with owned-fixture evidence; cross-OS, native picker/GUI and budget gates remain open. M005 desktop SSH tunnels and OS secret references are implemented locally (macOS) with owned-fixture evidence; cross-OS keychain/agent, GUI, transport-budget and decision-review gates remain open. Other milestones are pending, not completed by this authorization. Signing, publishing and deployment remain separate decisions.
 
-**Approved product decision (2026-10-26, D021):** the first release is **StoneQL v0.1.0 Alpha for macOS only**. Apple Silicon (arm64) is the primary target; Intel (x86_64) is optional pending verification; Windows and Linux desktop are deferred; the Axum server is a separate future release. See [v0.1.0 Alpha (macOS)](#v0-1-0-alpha-macos) below. No release work is complete.
+**Published (2026-11-17):** the public beta **v0.1.0-beta.1** (tag → `970ade2`) is a GitHub [pre-release](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1): an ad-hoc signed, not notarized DMG for macOS arm64 with MySQL, MariaDB and PostgreSQL (Direct and SSH). The user approved the outstanding release decisions and signed off QA of `970ade2` on 2026-11-17; Developer ID signing and notarization are deferred. M002–M007 and M009 remain **open** with recorded engineering gaps; the beta does not complete them. Later sections keep the original v0.1.0 Alpha plan and its labels.
+
+**Approved product decision (2026-10-26, D021):** the first release is **StoneQL v0.1.0 Alpha for macOS only**. Apple Silicon (arm64) is the primary target; Intel (x86_64) is optional pending verification; Windows and Linux desktop are deferred; the Axum server is a separate future release. See [v0.1.0 Alpha (macOS)](#v0-1-0-alpha-macos) below. The ad-hoc beta above was published under this scope; the signed and notarized release work is not complete.
 
 **Approved product decision (2026-10-26, D022):** the alpha is a **usable MySQL/MariaDB client** on macOS Apple Silicon — live browsing, CRUD, safe SQL execution, SSH and basic SQL/CSV import/export. PostgreSQL is optional for the first alpha; Windows, Linux, SQLite, advanced database objects and XLSX import are deferred. Deferred is not removed: implemented PostgreSQL/SQLite code and tests stay, outside alpha support claims unless admitted.
 
@@ -71,26 +73,26 @@ The approved decision lists nine release requirements. Their current state:
 
 | Requirement | Current state | Label |
 | --- | --- | --- |
-| Native Tauri packaging (.app, distributable image) | `bundle.active` is `false` in the base config; `desktop:bundle:adhoc` builds an ad-hoc signed `.app` (the public beta); the DMG is being prepared | Unresolved release blocker |
-| macOS Keychain integration | Login-Keychain secret references through actual command handlers (MockRuntime) with fixture cleanup | Implemented and verified (fixtures only); real Keychain prompts, prompt-vs-8 s renderer timeout and behavior after signing are Unresolved release blockers |
+| Native Tauri packaging (.app, distributable image) | `bundle.active` is `false` in the base config; `desktop:bundle:adhoc` builds the ad-hoc signed `.app` and DMG published as v0.1.0-beta.1 (2026-11-17) with a SHA-256 file and SBOMs; minimum macOS version not set explicitly (Info.plist default 10.13; verified on 27.0.1 only) | Implemented for the ad-hoc beta; Developer ID-signed packaging remains an Unresolved release blocker |
+| macOS Keychain integration | Login-Keychain secret references through actual command handlers (MockRuntime) with fixture cleanup | Implemented and verified on fixtures; ships in the beta. On the ad-hoc beta a new build prompts twice for an item saved by an earlier build ([user steps](../getting-started/index.md#saved-passwords-and-the-keychain-prompt)); behavior after Developer ID signing is an Unresolved release blocker |
 | SSH authentication and tunnel reliability | Agent/password/key-file tunnels, enrolled host keys, 100 mixed cycles with zero orphans on macOS ARM fixtures | Implemented and verified (fixtures); graphical end-to-end and approved transport budget are Unresolved release blockers |
 | Real MySQL/MariaDB workflows | Bounded read-only SQL against MySQL 8.4.6 / MariaDB 11.4.8 fixtures through command handlers; live browsing, CRUD, read-write SQL and transfers implemented locally (see feature scope below) | Implemented and verified (fixtures) for read-only SQL; the other workflows are implemented but not accepted and remain Unresolved release blockers |
 | Application signing and notarization | Ad-hoc signature only; no Developer ID identity, entitlements or notarization configured | Unresolved release blocker; credentials need human approval |
-| Install/upgrade/uninstall behavior | Never executed; no upgrade/data-migration or uninstall cleanup policy | Unresolved release blocker |
-| Native end-to-end testing | Never executed: tests use MockRuntime handlers, browser shims and a startup-only WebView smoke | Unresolved release blocker |
-| Resource usage and startup performance | Debug WebView smoke (453–609 ms) and runtime-only RSS profiles; no release-build, whole-app profile | Unresolved release blocker; budgets are Proposed technical decisions |
-| Secure credential cleanup and session lifecycle | Profile removal deletes Keychain references best-effort (errors ignored); pools/tunnels close on disconnect/reset/shutdown; no purge-all and uninstall leaves Keychain items | Partially implemented; cleanup policy is an Unresolved release blocker |
+| Install/upgrade/uninstall behavior | Executed on the ad-hoc beta DMG (2026-11-17): drag-to-Applications install, upgrade over the previous build keeping profiles and saved-password references, uninstall/reinstall keeping data; [user steps](../getting-started/index.md). No data-migration policy | Executed for the ad-hoc beta; signed-build drills and policy remain Unresolved release blockers |
+| Native end-to-end testing | User QA of the packaged `970ade2` app against MySQL over Direct (signed off 2026-11-17); other engines and SSH only through MockRuntime handlers, browser shims and WebView smokes | Partially executed; MariaDB, PostgreSQL and SSH in the packaged app remain Unresolved release blockers |
+| Resource usage and startup performance | Beta DMG (2026-11-17): 30 cold launches, median 1.82 s, p95 2.79 s; idle whole-app RSS 191 MiB; budgets approved 2026-11-17 (A3). No 8-connection whole-app RSS yet | Partially executed; 8-connection RSS remains open |
+| Secure credential cleanup and session lifecycle | Profile removal deletes its Keychain item and reports a failed deletion (**Remove anyway**); pools/tunnels close on disconnect/reset/shutdown; no purge-all, and uninstall leaves Keychain items (documented) | Partially implemented; purge-all and sleep/wake/network-change orphan checks remain open |
 
 ### Feature scope (D022)
 
 | Capability | Alpha treatment | Current state |
 | --- | --- | --- |
-| Live browsing: database/table tree, paged browse with server-side sort and filter | Approved product decision (required) | Unresolved release blocker; implemented locally for MySQL/MariaDB/PostgreSQL (tables and views of the default database, server-side paging, sort, filter, exact count); not accepted |
-| CRUD: single-row insert/update/delete with primary-key-based optimistic checks and authoritative constraint errors; tables without a primary key browse-only | Approved (required); slice details are Proposed | Unresolved release blocker; implemented locally for tables with a primary key on read-write connections, statements fixture-verified (`test:execution`); not accepted |
+| Live browsing: database/table tree, paged browse with server-side sort and filter | Approved product decision (required) | Shipped in v0.1.0-beta.1 for MySQL/MariaDB/PostgreSQL (MySQL/MariaDB: every visible database with switching and Create database; PostgreSQL: current database and schema; server-side paging, sort, filter, exact count); milestone not accepted |
+| CRUD: single-row insert/update/delete with primary-key-based optimistic checks and authoritative constraint errors; tables without a primary key browse-only | Approved (required); slice details are Proposed | Shipped in v0.1.0-beta.1 for tables with a primary key on read-write connections, statements fixture-verified (`test:execution`); milestone not accepted |
 | Safe SQL execution: background jobs, `BUSY` instead of queuing, best-effort cancellation, no automatic retry of uncertain writes, outcomes reported as confirmed success, failure, cancellation or unknown, owned and expiring transactions | Approved principles; numeric limits and contract details Proposed | Read-only SQL implemented and verified; execution jobs, transactions and writes implemented with fixture evidence, not accepted. Read-write is enabled since A15 (2026-11-17) for MySQL/MariaDB over Direct and SSH and PostgreSQL over Direct; PostgreSQL over SSH stays read-only ([details](../development/sql-execution.md)) |
-| SSH and saved credentials | Approved (required); native host-key trust ownership approved; four review findings plus secret-deletion error handling are alpha blockers | Implemented and verified on fixtures; blockers open |
-| SQL and CSV import/export (MySQL/MariaDB) | Approved (required); GZIP export proposed, GZIP import proposed deferred | Unresolved release blocker; implemented locally: export (SQL/CSV/JSON, optional GZIP) and CSV and MySQL/MariaDB SQL import; not accepted |
-| PostgreSQL | Optional; admitted only if its alpha gates pass | Read-only adapter implemented and verified on fixtures; Browse, read-write over Direct and data-only export implemented locally, not accepted |
+| SSH and saved credentials | Approved (required); native host-key trust ownership approved; four review findings plus secret-deletion error handling are alpha blockers | Implemented and verified on fixtures; ships in the beta. The four review findings and secret-deletion reporting are fixed; open: native trust dialog in a real window, the approved RSA/keyboard-interactive policy (A12) and an SSH run of the packaged app |
+| SQL and CSV import/export (MySQL/MariaDB) | Approved (required); GZIP export proposed, GZIP import proposed deferred | Shipped in v0.1.0-beta.1: export (SQL/CSV/JSON, optional GZIP) and CSV and MySQL/MariaDB SQL import; milestone not accepted |
+| PostgreSQL | Optional; admitted only if its alpha gates pass | Admitted to the beta (A10, 2026-11-17): Browse, read-write over Direct (read-only over SSH), column/index changes and data-only export ship in v0.1.0-beta.1; no graphical run in the packaged app; milestone not accepted |
 | SQLite | **Deferred** (code kept, outside support claims) | Read-only adapter implemented and verified on fixtures |
 | Advanced objects (routines, triggers, events, materialized views, object DDL editing), XLSX import | **Deferred** | Mock screens only |
 | Windows, Linux | **Deferred** | — |
@@ -99,9 +101,11 @@ Anything excluded must be capability-gated and listed as an omission; acceptance
 
 ### Alpha dependency view
 
+Dashed boxes are not done yet; the published beta is shown separately.
+
 ```mermaid
 flowchart TD
-  M002["M002 Tauri host (macOS gates)"] --> E2E["Native macOS E2E with real MySQL/MariaDB and SSH"]
+  M002["M002 Tauri host (macOS gates)"] --> E2E["Native macOS E2E with real MySQL/MariaDB/PostgreSQL and SSH<br/>partial: user QA of MySQL Direct"]
   L["M003-L lifecycle"] --> M003["M003 read-only SQL (macOS)"]
   M003 --> M005["M005 SSH and Keychain (macOS)"]
   M003 --> E2E
@@ -110,12 +114,19 @@ flowchart TD
   M007A["M007 alpha slice: SQL/CSV transfers"] --> E2E
   M006A --> M007A
   M003 --> M006A
-  PG["M004 PostgreSQL — optional"] -.-> E2E
-  PKG["Signed, notarized, stapled .app/.dmg"] --> D["M010-D macOS evidence"]
+  PG["M004 PostgreSQL — admitted to the beta (A10)"] --> E2E
+  M005 --> BETA["v0.1.0-beta.1 — published 2026-11-17<br/>ad-hoc signed DMG, not notarized"]
+  M006A --> BETA
+  M007A --> BETA
+  PG --> BETA
+  PKG["Signed, notarized, stapled .app/.dmg<br/>planned · Developer ID deferred"] --> D["M010-D macOS evidence"]
   E2E --> D
-  D --> A["M009: StoneQL v0.1.0 Alpha (macOS)"]
+  D --> A["M009: StoneQL v0.1.0 Alpha (macOS)<br/>planned"]
+  BETA -.->|precedes| A
   WL["Windows / Linux desktop — deferred"] -.->|does not block| A
   SRV["M008 / M011 server — separate release"] -.->|does not block| A
+  classDef planned stroke-dasharray: 6 4
+  class E2E,PKG,D,A,WL,SRV planned
 ```
 
 Deferred items keep their open gates for later releases: SQLite live support, advanced database objects, XLSX import, Linux GTK dependency advisories, Windows SSH endpoint and agent, Windows/Linux credential stores, Windows SQLite path handling, and executed cross-OS CI. The internal decision register records them as deferred non-blockers for the alpha, never as passed; a deferred security advisory still needs an explicit human risk acceptance before sign-off.
@@ -141,9 +152,9 @@ Every relevant milestone must carry these gates and its own feature-specific tes
 | G5 Reliability | Timeout/disconnect/shutdown/failure injection; bounded cleanup, no cross-session leaks or automatic mutation retry; accurate partial/unknown outcomes |
 | G6 Packaging | Per-track artifact checksums, install/upgrade/rollback/uninstall, applicable signing/notarization verification, SBOM/license and secret scans; restore/rollback drills |
 
-### Proposed release measurement profile — numerical budgets not approved
+### Release measurement profile
 
-These are reviewable starting budgets, not existing product guarantees. Local M003 [runtime resource profiles](../development/resource-profiles.md) now measure a subset; they exclude native IPC/renderer overhead and do not satisfy the full release gates. M001 first records the exact reference OS/CPU (at least 4 cores), RAM (8 GiB), SSD, toolchain/engine versions and local disposable DB RTT (at most 5 ms). Cross-OS runners are separately recorded. No production credentials or databases are used.
+These are starting budgets, not existing product guarantees. On 2026-11-17 the user approved the desktop budgets and the M002–M005 matrix (A3); the server candidate row is still unapproved. Local M003 [runtime resource profiles](../development/resource-profiles.md) now measure a subset; they exclude native IPC/renderer overhead and do not satisfy the full release gates. M001 first records the exact reference OS/CPU (at least 4 cores), RAM (8 GiB), SSD, toolchain/engine versions and local disposable DB RTT (at most 5 ms). Cross-OS runners are separately recorded. No production credentials or databases are used.
 
 | Measurement | Proposed threshold / reproducible workload | First owner |
 | --- | --- | --- |

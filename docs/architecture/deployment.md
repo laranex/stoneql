@@ -1,6 +1,6 @@
 # Deployment proposal
 
-**Status: Proposed / awaiting approval.** No production packaging, signing, infrastructure or deployment exists. The platform scope of the first release, StoneQL v0.1.0 Alpha for macOS, is an **Approved product decision** (2026-10-26), and so is its feature scope and release direction: a usable MySQL/MariaDB client distributed as a **signed and notarized DMG**, with separate desktop and server release gates and a Rust core independent of macOS host APIs (D022, 2026-10-26). Every packaging, signing and lifecycle mechanism below is a **Proposed technical decision** or **Unresolved release blocker**, except items labelled **Implemented and verified**, which describe only the current unsigned development host and fixture-level behavior.
+**Status: Proposed / awaiting approval.** The ad-hoc signed public beta **v0.1.0-beta.1** (macOS arm64 DMG) was published as a GitHub pre-release on 2026-11-17 ([release](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1)); no Developer ID signing, notarization, server infrastructure or server deployment exists. The platform scope of the first release, StoneQL v0.1.0 Alpha for macOS, is an **Approved product decision** (2026-10-26), and so is its feature scope and release direction: a usable MySQL/MariaDB client distributed as a **signed and notarized DMG**, with separate desktop and server release gates and a Rust core independent of macOS host APIs (D022, 2026-10-26). Every packaging, signing and lifecycle mechanism below is a **Proposed technical decision** or **Unresolved release blocker**, except items labelled **Implemented and verified**, which describe only the current unsigned development host and fixture-level behavior.
 
 ## Independent release gates
 
@@ -14,11 +14,11 @@ Tauri 2 packages the shared frontend and IPC adapter. The architecture stays cro
 
 ### Current host configuration — Implemented and verified
 
-Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `StoneQL`, version `0.1.0`, identifier `me.thixpin.stoneql`, `bundle.active: false` and an empty `bundle.icon` list (only a PNG source icon exists); `tauri.macos-adhoc.conf.json` turns bundling on for an ad-hoc signed `.app` (`npm run desktop:bundle:adhoc`). No Developer ID identity, entitlements file, minimum macOS version or updater plugin is configured. The CSP limits renderer connections to IPC; all database and SSH networking happens in the Rust host. `security-framework` is a macOS-only target dependency of the desktop host, not of shared crates. Only debug development builds, a startup smoke and the ad-hoc signed bundle have run.
+Observed in `apps/desktop/src-tauri/tauri.conf.json` and `Cargo.toml`: product `StoneQL`, version `0.1.0`, identifier `me.thixpin.stoneql`, `bundle.active: false` and an empty `bundle.icon` list (only a PNG source icon exists); `tauri.macos-adhoc.conf.json` turns bundling on for an ad-hoc signed `.app` (`npm run desktop:bundle:adhoc`). No Developer ID identity, entitlements file, minimum macOS version or updater plugin is configured. The CSP limits renderer connections to IPC; all database and SSH networking happens in the Rust host. `security-framework` is a macOS-only target dependency of the desktop host, not of shared crates. Debug development builds, a startup smoke and the ad-hoc signed bundle and DMG (the published beta) have run.
 
 ### Current public beta build
 
-The public beta is the ad-hoc signed `.app` above: it is **not notarized**, so Gatekeeper warns on first launch and users open it with Control-click → **Open** (or **Open Anyway** in System Settings → Privacy & Security). A DMG installer is being prepared. SQLite is excluded from release builds (A5). This beta does not meet the signed-and-notarized release gates below, which remain open.
+The public beta is **v0.1.0-beta.1** (tag → `970ade2`), published 2026-11-17 as a GitHub pre-release: `StoneQL-0.1.0-beta-970ade2.dmg` (arm64 only) with a `.sha256` file, built by `npm run desktop:bundle:adhoc` (the `.app` above inside a DMG with a drag-to-Applications layout). It is ad-hoc signed with Hardened Runtime and **not notarized**: the first launch of a downloaded copy is blocked (“StoneQL” Not Opened, with only Move to Trash and Done), and users choose **Open Anyway** in System Settings → Privacy & Security ([install guide](../getting-started/index.md#first-launch-of-the-downloaded-beta)). `Info.plist` declares macOS 10.13 as minimum (Tauri default; not decided), but the build was verified on macOS 27.0.1 only. SQLite is excluded from release builds (A5). Release-candidate checks on the DMG (checksum, `hdiutil verify`, `codesign --verify`, content scan, install/upgrade over the previous build, 30 cold launches, uninstall/reinstall, quarantined first launch) passed; Open Anyway was not exercised. This beta does not meet the signed-and-notarized release gates below, which remain open.
 
 ### v0.1.0 Alpha (macOS) packaging and lifecycle requirements
 
@@ -31,12 +31,12 @@ The public beta is the ad-hoc signed `.app` above: it is **not notarized**, so G
 | Notarization | Submit with `notarytool` using credentials held outside the repository (CI secret store or release workstation keychain), staple the ticket to the DMG/app and verify with `stapler validate` and a quarantined first launch on a clean machine | Unresolved release blocker; credential custody needs approval |
 | Hardened Runtime entitlements | Start with no exception entitlements (no JIT, unsigned executable memory, library-validation or dyld-environment exceptions); add one only with evidence that the signed app fails without it | Proposed technical decision |
 | App Sandbox | Not proposed for Developer ID distribution in the alpha. If adopted, it would need at least network client, user-selected read-only file access and a review of SSH-agent socket and temporary Unix-socket tunnel paths, which a sandbox container may block | Proposed technical decision; sandbox yes/no needs approval |
-| Keychain | Generic-password items in the login Keychain under service `me.thixpin.stoneql.credentials`; item access control follows the code signature, so the signed build must be tested for first-use and post-upgrade prompts, including the prompt racing the renderer's 8 s connect timeout | Implemented and verified for unsigned fixture runs only; signed behavior is an Unresolved release blocker |
+| Keychain | Generic-password items in the login Keychain under service `me.thixpin.stoneql.credentials`; item access control follows the code signature, so the signed build must be tested for first-use and post-upgrade prompts, including the prompt racing the renderer's 8 s connect timeout | Implemented and verified for unsigned fixture runs; on the ad-hoc beta, a new build reading an item saved by an earlier build triggers two login-password prompts for that item; Always Allow did not persist for a new ad-hoc identity, while re-saving the password from the installed build made later reads silent (observed 2026-11-17). Developer ID-signed behavior is an Unresolved release blocker |
 | Bundle identifier | `me.thixpin.stoneql` (approved 2026-11-16, A14), changed from `app.dbadmin.desktop` before the first Developer ID build. Observed: the bundled app keys its WebView store by the identifier (`~/Library/WebKit/<id>`, `~/Library/Caches/<id>`); the app data directory (`~/Library/Application Support/<id>`: SSH host keys, outcome journal) uses the identifier for bundled and unbundled runs; unbundled runs key WebView data by executable name. The Keychain service `me.thixpin.stoneql.credentials` moved with it. Impact on earlier developer data: [branding](../development/branding.md#bundle-identifier-change-2026-11-16). Freeze at the first public alpha | Approved; implemented |
 | Updater | No auto-updater in v0.1.0 Alpha; users install a newer notarized DMG manually. A later updater requires a signed update feed, pinned public key and tamper/downgrade tests | Proposed technical decision |
-| Install | Drag-to-Applications from the DMG; first launch passes Gatekeeper without user overrides | Unresolved release blocker (never executed) |
-| Upgrade | Replacing the app preserves non-secret profiles and Keychain references, keeps the same identifier and signing team, and is tested from each prior alpha build; schema changes to stored profiles need a reversible migration | Unresolved release blocker; policy not written |
-| Uninstall and credential cleanup | Dragging the app to the Trash leaves Keychain items and WebView data behind. Proposed: an in-app "remove all saved secrets" action, documented manual cleanup of remaining data, and surfacing (not ignoring) failed `delete_secret` calls on profile removal | Unresolved release blocker; today profile removal deletes references best-effort and ignores errors |
+| Install | Drag-to-Applications from the DMG; first launch passes Gatekeeper without user overrides | Drag-to-Applications executed on the ad-hoc beta DMG (2026-11-17); passing Gatekeeper without overrides needs notarization and remains an Unresolved release blocker |
+| Upgrade | Replacing the app preserves non-secret profiles and Keychain references, keeps the same identifier and signing team, and is tested from each prior alpha build; schema changes to stored profiles need a reversible migration | Replacing the previous ad-hoc build kept profiles and saved-password references (2026-11-17); each ad-hoc build is a new code identity, so macOS asks again for Keychain access ([user steps](../getting-started/index.md#saved-passwords-and-the-keychain-prompt)). Signed-build behaviour and the migration policy remain Unresolved release blockers |
+| Uninstall and credential cleanup | Dragging the app to the Trash leaves Keychain items and WebView data behind. Proposed: an in-app "remove all saved secrets" action, documented manual cleanup of remaining data, and surfacing (not ignoring) failed `delete_secret` calls on profile removal | Uninstall/reinstall drill executed on the beta DMG; manual cleanup is [documented](../getting-started/index.md#uninstall) and failed deletions are reported (**Remove anyway**). The in-app "remove all saved secrets" action is not implemented: Unresolved release blocker |
 | Session lifecycle | Pools, tunnels, key-file/SQLite grants close on disconnect, expiry, renderer reload and shutdown | Implemented and verified with command-handler fixtures; graphical and signed-artifact verification unresolved |
 
 ### Signed and notarized DMG release gates (v0.1.0 Alpha)
@@ -55,7 +55,7 @@ All steps are **Unresolved release blockers** until executed on the actual relea
 10. Credential cleanup and session lifecycle: failed secret deletion reported; no orphan tunnels, pools, grants or temporary transfer files after quit, crash relaunch, sleep/wake or network change.
 11. Checksums, SBOM/license report and an artifact secret scan.
 
-### Proposed alpha budgets (not approved)
+### Alpha budgets (approved 2026-11-17)
 
 | Budget | Proposed value |
 | --- | --- |
@@ -66,7 +66,7 @@ All steps are **Unresolved release blockers** until executed on the actual relea
 | Transfers | One million 1 KiB rows with a slow consumer within 256 MiB additional memory; temporary files removed within 30 s of cancellation |
 | SSH transport | Connect p95 at most 6 s; per-query overhead at most 50 ms above Direct on the loopback reference |
 
-These are review inputs recorded for approval, not measured guarantees; the [roadmap measurement profile](./roadmap.md#gates-applied-throughout) remains the shared definition.
+The user approved these values on 2026-11-17 (A3, blanket approval); they are release targets, not measured guarantees. The beta DMG met the cold-launch budget (p95 2.79 s) and idle memory (191 MiB); the eight-connection memory, transfer and release-build SSH measurements are not done yet; the [roadmap measurement profile](./roadmap.md#gates-applied-throughout) remains the shared definition.
 
 ### Deferred desktop platforms
 
@@ -84,7 +84,7 @@ Package the same server binary with a non-root identity, minimal runtime, read-o
 
 ## Documentation hosting
 
-The VitePress workflow is prepared separately. It builds pull requests and deploys only on explicit manual dispatch with deployment selected. Repository subpaths and custom domains are configurable. It has not been published. See [website maintenance](../development/documentation.md).
+The VitePress workflow builds pull requests and deploys only on explicit manual dispatch with deployment selected. Repository subpaths and custom domains are configurable. The site is published at <https://stoneace.github.io/stoneql/>. See [website maintenance](../development/documentation.md).
 
 ## Release gates and unknowns
 

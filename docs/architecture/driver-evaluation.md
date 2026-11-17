@@ -1,6 +1,6 @@
 # M001 driver evaluation
 
-**Status: evaluation implemented; completion review pending. SQLx is not production-approved.** User approval on 2026-10-25 authorizes foundation and isolated spikes only. No frontend mock, production connection service, Tauri, Axum, SSH or credential store is replaced or implemented.
+**Status: evaluation implemented; completion review pending. SQLx is not production-approved.** User approval on 2026-10-25 authorizes foundation and isolated spikes only. At the time of this evaluation no frontend mock, production connection service, Tauri, Axum, SSH or credential store was replaced or implemented. This page is the historical M001 record; later milestones adopted SQLx (with reviewed vendor patches) for the desktop app and the v0.1.0-beta.1 release, see [database adapters](./database-adapters.md).
 
 ## Reproducible environment and evidence
 

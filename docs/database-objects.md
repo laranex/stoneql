@@ -1,6 +1,6 @@
 # Database object management
 
-> **Scope:** this page describes the **browser demo** (sample data, simulated operations). In the desktop app, views can be browsed, but managing views, routines, triggers and events, and changing columns or indexes, are not available for live connections yet; see [not yet available](./user-guide/index.md#not-yet-available-in-the-desktop-app).
+> **Scope:** this page describes the **browser demo** (sample data, simulated operations). In the desktop app, views can be browsed and columns and indexes of base tables can be changed on read-write connections (see [Structure](./user-guide/index.md#structure-and-database-objects)), but managing views, routines, triggers and events is not available for live connections yet; see [not yet available](./user-guide/index.md#not-yet-available-in-the-desktop-app).
 
 Repository layout note: frontend source and tests now live under `apps/frontend/`. Root npm commands delegate to that workspace. The [migration verification report](./development/verification.md) distinguishes current executed checks from blocked browser workflows.
 
