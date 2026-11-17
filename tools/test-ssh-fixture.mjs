@@ -127,6 +127,9 @@ for (const engine of engines) {
   const sshA = join(temp, 'ssh-a'), sshB = join(temp, 'ssh-b'), client = join(temp, 'client');
   const endpoints = join(temp, 't');
   for (const directory of [tls, init, exposed, sshA, sshB, client, endpoints]) mkdirSync(directory, { mode: 0o700 });
+  // Mounted into containers whose servers run as their own users: native Linux Docker keeps host
+  // ownership and modes (Docker Desktop does not). The mkdtemp parent stays owner-only.
+  for (const directory of [init, exposed]) chmodSync(directory, 0o755);
   const project = `stoneql-m005-${randomBytes(6).toString('hex')}`;
   const dbPassword = randomBytes(24).toString('hex');
   const sshPassword = randomBytes(24).toString('hex');
