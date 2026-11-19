@@ -59,7 +59,7 @@ The installer and the app were tested on GitHub's Windows Server 2025 machines, 
 
 ### Run the installer
 
-1. Double-click the `.exe` installer you downloaded.
+1. Right-click the `.zip` you downloaded and choose **Extract All…**, then double-click the `.exe` installer inside it.
 2. Windows shows a blue **Windows protected your PC** window, because the installer is not signed. If the [checksum matched](./download.md#check-the-download), choose **More info**, then **Run anyway**.
 3. Follow the installer's steps. If Microsoft Edge WebView2 is missing, the installer downloads and installs it; this needs an internet connection.
 4. Open **StoneQL** from the Start menu.
@@ -68,9 +68,9 @@ StoneQL opens on a **Welcome to StoneQL** screen. Continue with [Connect to a da
 
 ### Update on Windows
 
-Not yet tried: beta.2 is the first Windows build, so there is no earlier version to update from.
+Not yet tried on a real PC: updating from beta 2 to beta 3.
 
-1. Download the newer installer and [check its checksum](./download.md#check-the-download).
+1. Download the newer `.zip`, [check its checksum](./download.md#check-the-download) and extract the installer.
 2. Quit StoneQL.
 3. Run the new installer, choosing **More info → Run anyway** again if SmartScreen asks.
 
@@ -114,7 +114,7 @@ If no desktop keyring is running, StoneQL asks you to choose a master password t
 
 ### Update on Linux
 
-Not yet tried: beta.2 is the first Linux build, so there is no earlier version to update from.
+Not yet tried on a real desktop: updating from beta 2 to beta 3.
 
 1. Download the newer `.deb` and [check its checksum](./download.md#check-the-download).
 2. Quit StoneQL.

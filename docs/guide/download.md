@@ -1,16 +1,16 @@
 # Download
 
-StoneQL **v0.1.0-beta.2** is a public beta for macOS, Windows and Linux. Every file in it was built from the same release commit.
+StoneQL **v0.1.0-beta.3** is a public beta for macOS, Windows and Linux. Every file in it was built from the same release commit.
 
 ## Choose your file
 
-Open the release page for **[StoneQL v0.1.0-beta.2](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.2)**. Later builds appear on the [releases page](https://github.com/stoneAce/stoneql/releases). Under **Assets**, download the file for your computer, plus `SHA256SUMS`. The release notes list each file name with its platform.
+Open the release page for **[StoneQL v0.1.0-beta.3](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.3)**. Later builds appear on the [releases page](https://github.com/stoneAce/stoneql/releases). Under **Assets**, download the file for your computer, plus `SHA256SUMS`. The release notes list each file name with its platform.
 
 | Your computer | File | Tested on |
 | --- | --- | --- |
 | Mac with Apple Silicon (M-series) | macOS Apple Silicon (arm64) `.dmg` | macOS 27.0.1 |
 | Mac with an Intel processor | macOS Intel (x86_64) `.dmg` | Built for Intel; not yet tested on an Intel Mac |
-| Windows 10 or 11, 64-bit (x64) | Windows x64 installer (`.exe`) | GitHub's Windows Server 2025 machines; not yet tested on a real Windows 10 or 11 PC |
+| Windows 10 or 11, 64-bit (x64) | Windows x64 installer (`.exe` inside a `.zip`) | GitHub's Windows Server 2025 machines; not yet tested on a real Windows 10 or 11 PC |
 | Ubuntu 22.04 or later, Debian 12 or later, 64-bit (x86_64) | Linux x64 `.deb` | Ubuntu 26.04, plus install and launch on Ubuntu 22.04 and Debian 12 |
 
 Not sure which Mac you have? Open the Apple menu → **About This Mac**: **Chip** with an *Apple M…* name means Apple Silicon; **Processor** with an *Intel* name means Intel.
@@ -55,14 +55,14 @@ It must print your file name followed by `: OK`.
 Windows has no built-in command that reads `SHA256SUMS`, so compare by hand.
 
 1. Open **PowerShell** (Start menu → type *PowerShell*).
-2. Run, with the name of the installer you downloaded:
+2. Run, with the name of the `.zip` you downloaded:
 
    ```powershell
    cd $HOME\Downloads
-   Get-FileHash .\<installer>.exe
+   Get-FileHash .\<installer>.zip
    ```
 
-3. Open `SHA256SUMS` in Notepad and find the line that ends with the installer's name. The long value under **Hash** must match the checksum at the start of that line, character for character. Upper or lower case does not matter.
+3. Open `SHA256SUMS` in Notepad and find the line that ends with the `.zip` file's name. The long value under **Hash** must match the checksum at the start of that line, character for character. Upper or lower case does not matter.
 
 If the check fails, **do not open the file**: delete it and download it again.
 

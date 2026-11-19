@@ -43,7 +43,7 @@ Set **Environment** to **Production** for servers that matter. These connections
 
 ## TLS and certificates
 
-> **Newer than beta 2.** Turning TLS off for another computer and **Password without TLS** come after v0.1.0-beta.2. In beta 2, TLS can be turned off only for this computer, and after a MySQL restart you sign in once with the `mysql` command-line client before connecting without TLS.
+> **New in beta 3.** **Use TLS** off for new connections (including other computers) and **Password without TLS**. In beta 2, TLS could be turned off only for this computer, and after a MySQL restart you signed in once with the `mysql` command-line client before connecting without TLS.
 
 - **Use TLS on:** StoneQL verifies the server's certificate and host name. It never falls back to an unencrypted connection.
 - **MySQL or MariaDB over Direct** shows **Use TLS**, off for new connections. Without TLS, queries, results and the server's identity are unprotected on the network; for a server on another computer the dialog warns about this. Turn **Use TLS** on whenever the server has a certificate you can trust. Connections saved before this option for another computer keep TLS on. StoneQL never switches between TLS and no TLS by itself.

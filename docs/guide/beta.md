@@ -1,6 +1,14 @@
 # What's in the beta
 
-StoneQL **v0.1.0-beta.2** is a public beta, published as a [GitHub pre-release](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.2). It follows [v0.1.0-beta.1](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1), which was for Apple Silicon Macs only.
+StoneQL **v0.1.0-beta.3** is a public beta, published as a [GitHub pre-release](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.3). It follows [v0.1.0-beta.2](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.2), the first build for Windows and Linux, and [v0.1.0-beta.1](https://github.com/stoneAce/stoneql/releases/tag/v0.1.0-beta.1), which was for Apple Silicon Macs only.
+
+## What's new in beta.3
+
+- **Use TLS is off for new MySQL and MariaDB connections over Direct**, for this computer and others, with a warning for other computers. Connections saved earlier keep their setting. See [TLS and certificates](./connect.md#tls-and-certificates).
+- **Password without TLS:** after a MySQL restart, sign in without TLS by encrypting the password with the server's RSA public key, either one you trust or, as an explicit choice, one fetched from the server. RSA protects only the password; queries and results stay unencrypted.
+- **Clearer errors** when a server accepts only TLS, or a sign-in without TLS fails.
+- **Fix:** sign-in without TLS to MySQL servers whose default sign-in method is `mysql_native_password` (common on MySQL 8.0).
+- **Windows:** the installer now comes inside a `.zip`.
 
 ## What's new in beta.2
 
@@ -24,7 +32,7 @@ Developer ID signing and notarization for macOS, and code signing for Windows, a
 ## What works
 
 - **Databases:** MySQL, MariaDB and PostgreSQL, live. SQLite is not included in the beta app.
-- **Connections:** Direct, or through an SSH tunnel on macOS and Linux (SSH agent, password or Ed25519/ECDSA private key) with explicitly trusted host keys. Verified TLS for other computers; TLS optional for MySQL/MariaDB on this computer. Passwords can be saved: see [Saved passwords](./connect.md#saved-passwords). See [Connect to a database](./connect.md).
+- **Connections:** Direct, or through an SSH tunnel on macOS and Linux (SSH agent, password or Ed25519/ECDSA private key) with explicitly trusted host keys. **Use TLS** for MySQL/MariaDB over Direct (off for new connections), always verified TLS for PostgreSQL and SSH tunnels. Passwords can be saved: see [Saved passwords](./connect.md#saved-passwords). See [Connect to a database](./connect.md).
 - **Access:** read-write by default (MySQL/MariaDB Direct and SSH, PostgreSQL Direct), with a saved **Read-only connection** option. PostgreSQL over SSH is always read-only. PROD connections ask for confirmation.
 - **Browsing and editing:** server-side paging, sort and filter; insert, edit and delete rows in tables with a primary key. See [Browse and edit tables](./browse-and-edit.md).
 - **Databases (MySQL/MariaDB):** list every database the account can see, switch between them and create databases.
