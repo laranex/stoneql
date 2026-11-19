@@ -9,6 +9,7 @@ const files=[
   'experiments/sqlx-receive-limit/upstream.json',
   'experiments/sqlx-receive-limit/receive-limit.patch',
   'experiments/sqlx-metadata-limit/metadata-limit.patch',
+  'experiments/sqlx-rsa-key/rsa-key.patch',
   'experiments/sqlx-pg-message-limit/upstream.json',
   'experiments/sqlx-pg-message-limit/message-limit.patch',
 ];
@@ -18,6 +19,7 @@ const drifts={
   'mysql provenance':['sqlx-mysql',(temp)=>{const path=join(temp,'experiments/sqlx-receive-limit/upstream.json');const metadata=JSON.parse(readFileSync(path,'utf8'));metadata.patchSha256='0'.repeat(64);writeFileSync(path,JSON.stringify(metadata));}],
   'mysql receive-limit patch':['sqlx-mysql',(temp)=>appendFileSync(join(temp,'experiments/sqlx-receive-limit/receive-limit.patch'),'\n# synthetic drift\n')],
   'mysql metadata-limit patch':['sqlx-mysql',(temp)=>appendFileSync(join(temp,'experiments/sqlx-metadata-limit/metadata-limit.patch'),'\n# synthetic drift\n')],
+  'mysql rsa-key patch':['sqlx-mysql',(temp)=>appendFileSync(join(temp,'experiments/sqlx-rsa-key/rsa-key.patch'),'\n# synthetic drift\n')],
   'postgres source':['sqlx-postgres',(temp)=>appendFileSync(join(temp,'vendor/sqlx-postgres/src/connection/stream.rs'),'\n// synthetic unreviewed change\n')],
   'postgres message-limit patch':['sqlx-postgres',(temp)=>appendFileSync(join(temp,'experiments/sqlx-pg-message-limit/message-limit.patch'),'\n# synthetic drift\n')],
 };

@@ -63,7 +63,7 @@ impl<'a> DoHandshake<'a> {
         let handshake: Handshake = stream.recv_packet().await?.decode()?;
 
         let mut plugin = handshake.auth_plugin;
-        let nonce = handshake.auth_plugin_data;
+        let mut nonce = handshake.auth_plugin_data;
 
         // FIXME: server version parse is a bit ugly
         // expecting MAJOR.MINOR.PATCH
@@ -130,7 +130,9 @@ impl<'a> DoHandshake<'a> {
                         packet.decode_with(self.options.enable_cleartext_plugin)?;
 
                     plugin = Some(switch.plugin);
-                    let nonce = switch.data.chain(Bytes::new());
+                    // The switched plugin's later steps (caching_sha2_password full
+                    // authentication) must use the switch's nonce, not the handshake's.
+                    nonce = switch.data.chain(Bytes::new());
 
                     let response = switch
                         .plugin

@@ -21,6 +21,8 @@ pub struct MySqlStream<S = Box<dyn Socket>> {
     pub(crate) is_tls: bool,
     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
     pub(crate) max_result_metadata: Option<super::ResultMetadataLimit>,
+    pub(crate) server_public_key: Option<std::sync::Arc<[u8]>>,
+    pub(crate) allow_public_key_retrieval: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +68,8 @@ impl<S: Socket> MySqlStream<S> {
             is_tls: false,
             max_receive_packet_size: options.max_receive_packet_size,
             max_result_metadata: options.max_result_metadata,
+            server_public_key: options.server_public_key.clone(),
+            allow_public_key_retrieval: options.allow_public_key_retrieval,
         }
     }
 
@@ -226,6 +230,8 @@ impl<S: Socket> MySqlStream<S> {
             is_tls: self.is_tls,
             max_receive_packet_size: self.max_receive_packet_size,
             max_result_metadata: self.max_result_metadata,
+            server_public_key: self.server_public_key,
+            allow_public_key_retrieval: self.allow_public_key_retrieval,
         }
     }
 }

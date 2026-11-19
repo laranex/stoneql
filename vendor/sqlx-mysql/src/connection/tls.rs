@@ -14,6 +14,8 @@ struct MapStream {
     waiting: VecDeque<Waiting>,
     max_receive_packet_size: Option<std::num::NonZeroUsize>,
     max_result_metadata: Option<super::ResultMetadataLimit>,
+    server_public_key: Option<std::sync::Arc<[u8]>>,
+    allow_public_key_retrieval: bool,
 }
 
 pub(super) async fn maybe_upgrade<S: Socket>(
@@ -85,6 +87,8 @@ pub(super) async fn maybe_upgrade<S: Socket>(
             waiting: stream.waiting,
             max_receive_packet_size: stream.max_receive_packet_size,
             max_result_metadata: stream.max_result_metadata,
+            server_public_key: stream.server_public_key,
+            allow_public_key_retrieval: stream.allow_public_key_retrieval,
         },
     )
     .await
@@ -103,6 +107,8 @@ impl WithSocket for MapStream {
             is_tls: true,
             max_receive_packet_size: self.max_receive_packet_size,
             max_result_metadata: self.max_result_metadata,
+            server_public_key: self.server_public_key,
+            allow_public_key_retrieval: self.allow_public_key_retrieval,
         }
     }
 }

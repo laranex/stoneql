@@ -40,6 +40,8 @@ verify({
     ['experiments/sqlx-receive-limit/receive-limit.patch', 'patch', (approved) => approved.patchSha256],
     // Second reviewed delta (A6, 2026-11-16): result-metadata column/byte limit.
     ['experiments/sqlx-metadata-limit/metadata-limit.patch', 'metadata-limit patch', (_, provenance) => provenance.metadataLimitPatchSha256],
+    // Third reviewed delta (2026-11-19): trusted RSA key / explicit retrieval, switch nonce.
+    ['experiments/sqlx-rsa-key/rsa-key.patch', 'rsa-key patch', (_, provenance) => provenance.rsaKeyPatchSha256],
   ],
 });
 verify({

@@ -136,13 +136,24 @@ async fn encrypt_rsa<'s>(
         return Ok(to_asciz(password));
     }
 
-    // client sends a public key request
-    stream.write_packet(&[public_key_request_id][..])?;
-    stream.flush().await?;
+    // A trusted key is used as is and never requested; otherwise the server's key is requested
+    // only if retrieval (unverified) is allowed.
+    let packet;
+    let rsa_pub_key: &[u8] = if let Some(key) = &stream.server_public_key {
+        key
+    } else if stream.allow_public_key_retrieval {
+        // client sends a public key request
+        stream.write_packet(&[public_key_request_id][..])?;
+        stream.flush().await?;
 
-    // server sends a public key response
-    let packet = stream.recv_packet().await?;
-    let rsa_pub_key = &packet[1..];
+        // server sends a public key response
+        packet = stream.recv_packet().await?;
+        &packet[1..]
+    } else {
+        return Err(Error::Configuration(
+            "RSA public key retrieval is not allowed; set a trusted server public key, allow retrieval or use TLS.".into(),
+        ));
+    };
 
     // xor the password with the given nonce
     let mut pass = to_asciz(password);
@@ -178,7 +189,7 @@ fn to_asciz(s: &str) -> Vec<u8> {
 
 #[cfg(feature = "rsa")]
 mod rsa_backend {
-    use rsa::{pkcs8::DecodePublicKey, Oaep, RsaPublicKey};
+    use rsa::{pkcs8::DecodePublicKey, Oaep, PublicKey};
 
     use super::Error;
 
@@ -190,14 +201,17 @@ mod rsa_backend {
     }
 
     // https://docs.rs/rsa/0.3.0/rsa/struct.RSAPublicKey.html?search=#example-1
-    fn parse_rsa_pub_key(key: &[u8]) -> Result<RsaPublicKey, Error> {
+    fn parse_rsa_pub_key(key: &[u8]) -> Result<PublicKey, Error> {
         let pem = std::str::from_utf8(key).map_err(Error::protocol)?;
+        // MySQL's key (its public_key.pem and the key it sends) can end with a NUL byte, which
+        // the strict PEM parser rejects.
+        let pem = pem.trim_end_matches(|c: char| c == '\0' || c.is_ascii_whitespace());
 
         // This takes advantage of the knowledge that we know
         // we are receiving a PKCS#8 RSA Public Key at all
         // times from MySQL
 
-        RsaPublicKey::from_public_key_pem(pem).map_err(Error::protocol)
+        PublicKey::from_public_key_pem(pem).map_err(Error::protocol)
     }
 }
 

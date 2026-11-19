@@ -13,18 +13,18 @@
   "files": {
     "Cargo.toml": "28603df61d4ec46d668bc8bc43b2324e5ecb27f13e02876f5822f4a0053c59c6",
     "Cargo.toml.orig": "f68374a926b7a8b9af4526e6c4460438904f9c8fcafd291d54159775a208ad45",
-    "DBADMIN.md": "5e9de7e2a7969e86a251cdc94ca8294cd13b467ba1f55006faa2932f6a78c8b1",
+    "DBADMIN.md": "e9732bcdc28636d6d4f25550ffdc842c49efc6cce0cb79bd80e0b61e71fb76ce",
     "LICENSE-MIT": "5abbdd842310c8f1650fcde3a5a51a3e09412b9e5a6eea87519e0db9e32b339d",
     "src/any.rs": "68eb9fc074f44b4acec06ce8f1348fc742f2ec817db306b22ce2b5455f00515a",
     "src/arguments.rs": "71a253d195aad8d8f1ec75bb484a6295059e96588c608e2ad96324b37e09cf64",
     "src/collation.rs": "7066b423724d4a997941fdee347171b759564522425bf7f696c9eac0e4d0911d",
     "src/column.rs": "56485876607f2fd2170bdd28e082c42ebfa2be952b166d36f3f828cdb4930630",
-    "src/connection/auth.rs": "b7f2d2a7fe030800bebb57d138097b3c52ca2805c1e17de0f89dcd3d9451cc46",
-    "src/connection/establish.rs": "7bc8d80265e9675851bfbe7773bc0a71124b31b03ee6e139440c54060109e0ef",
+    "src/connection/auth.rs": "4d0b3bdd333bcdaea80d0fec652ef93a9e381d4cbb1ef61f7179c9c849e0a7f1",
+    "src/connection/establish.rs": "cb063bfef45e46439c49fa931866ac99912d78fb73f77e4f0bd8c6fd34d5fb12",
     "src/connection/executor.rs": "9c9aad486ebb7aca11e83ecfacfaf89a6ab787031c2317c3a43a3a29e69f6b6d",
     "src/connection/mod.rs": "d067f7f51dfd7f6100bc71cb367b9378f9f9ab44c9435b3f92729dcc13e65623",
-    "src/connection/stream.rs": "49350ccdad38ebb7c6d4b74951b2e87c9fff2f46c408f317a99712fa49ab6908",
-    "src/connection/tls.rs": "5faca3f9bc3ba87331a6421d43660b84d0e5ef282088a6c023d3c64aa5e53df6",
+    "src/connection/stream.rs": "49c10746aa2277e19ba6ae491d27c18c8a58593edc6823760a669272b78e09cf",
+    "src/connection/tls.rs": "c20169a4d44c9ea865eef9e5d78c5df231d0c82bbfc03a232c653137fecb5688",
     "src/database.rs": "c2b0325eff4c79ceb2f3dc884c043fbb2ca3cf7835835c9332fea7fe78af82de",
     "src/error.rs": "a74555bb775c564411324b6f4f5b50c60f3c29b870ac46ef5d61ba1dcac92e00",
     "src/io/buf.rs": "6fd459a7f98d55c7ab193b045ecf7abb236f97f0a1d4cbcb658d98c869f4ff9f",
@@ -33,7 +33,7 @@
     "src/lib.rs": "bb81380c88f13b5d79229430744871a59284ece6a8accc96e184619a1e239834",
     "src/migrate.rs": "fcf60a7a57fac8a88f51473bd47bdc6f5e9ae6c7f46009f76142fc81062b98e4",
     "src/options/connect.rs": "879d8744d1fb5a42951b5ca47ea2b5a1bdef55a33e7db9adb51b4a6e43d0548d",
-    "src/options/mod.rs": "b89e3a5bfeabe5ab50f636e32be88b5e24a84adc69af924be9d1dcb116e51214",
+    "src/options/mod.rs": "abcae6e765a71d89e78ec49137d2abfc035c999bafd54836a44c0d3a63a85fd3",
     "src/options/parse.rs": "0c0ba730de258af1f9c3469d780307231c3e4a303d5f1262f639bd2785d4431f",
     "src/options/ssl_mode.rs": "561df19ec075ff80927115c7cf824c7da5584019506b1fcf5b20b5045b9fba20",
     "src/protocol/auth.rs": "819aa9120d66c01a67e1daa19f78d6a68b6854ad7860c2defc66f77b6e9d1f3b",
@@ -89,5 +89,7 @@
     "src/value.rs": "99a5ef78c7e1586071badf4ace86bc3703599131d9a45254238ea8ec9e5dde77"
   },
   "metadataLimitPatchSha256": "4675a8b9664c10214a9461e16452254ec1008dfa546dc792a2d32a878a4297bd",
-  "metadataLimitApproval": "User 2026-11-16 (A6): approve 4,096 columns and 4 MiB of metadata; adopt the driver patch"
+  "metadataLimitApproval": "User 2026-11-16 (A6): approve 4,096 columns and 4 MiB of metadata; adopt the driver patch",
+  "rsaKeyPatchSha256": "509a64f43e6a4cb24bc5d0f02453f5ff9d8743381dc6f122bfd8ce20944c5603",
+  "rsaKeyApproval": "User 2026-11-19: approved the rsa dependency and driver patch; implement caching_sha2_password RSA authentication for TLS-off connections with a trusted key or explicit unverified retrieval"
 }

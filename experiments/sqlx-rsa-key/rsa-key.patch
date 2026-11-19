@@ -1,0 +1,191 @@
+diff -ruN a/src/connection/auth.rs b/src/connection/auth.rs
+--- a/src/connection/auth.rs	2026-11-19 14:43:27
++++ b/src/connection/auth.rs	2026-11-19 14:43:27
+@@ -136,13 +136,24 @@
+         return Ok(to_asciz(password));
+     }
+ 
+-    // client sends a public key request
+-    stream.write_packet(&[public_key_request_id][..])?;
+-    stream.flush().await?;
++    // A trusted key is used as is and never requested; otherwise the server's key is requested
++    // only if retrieval (unverified) is allowed.
++    let packet;
++    let rsa_pub_key: &[u8] = if let Some(key) = &stream.server_public_key {
++        key
++    } else if stream.allow_public_key_retrieval {
++        // client sends a public key request
++        stream.write_packet(&[public_key_request_id][..])?;
++        stream.flush().await?;
+ 
+-    // server sends a public key response
+-    let packet = stream.recv_packet().await?;
+-    let rsa_pub_key = &packet[1..];
++        // server sends a public key response
++        packet = stream.recv_packet().await?;
++        &packet[1..]
++    } else {
++        return Err(Error::Configuration(
++            "RSA public key retrieval is not allowed; set a trusted server public key, allow retrieval or use TLS.".into(),
++        ));
++    };
+ 
+     // xor the password with the given nonce
+     let mut pass = to_asciz(password);
+@@ -178,7 +189,7 @@
+ 
+ #[cfg(feature = "rsa")]
+ mod rsa_backend {
+-    use rsa::{pkcs8::DecodePublicKey, Oaep, RsaPublicKey};
++    use rsa::{pkcs8::DecodePublicKey, Oaep, PublicKey};
+ 
+     use super::Error;
+ 
+@@ -190,14 +201,17 @@
+     }
+ 
+     // https://docs.rs/rsa/0.3.0/rsa/struct.RSAPublicKey.html?search=#example-1
+-    fn parse_rsa_pub_key(key: &[u8]) -> Result<RsaPublicKey, Error> {
++    fn parse_rsa_pub_key(key: &[u8]) -> Result<PublicKey, Error> {
+         let pem = std::str::from_utf8(key).map_err(Error::protocol)?;
++        // MySQL's key (its public_key.pem and the key it sends) can end with a NUL byte, which
++        // the strict PEM parser rejects.
++        let pem = pem.trim_end_matches(|c: char| c == '\0' || c.is_ascii_whitespace());
+ 
+         // This takes advantage of the knowledge that we know
+         // we are receiving a PKCS#8 RSA Public Key at all
+         // times from MySQL
+ 
+-        RsaPublicKey::from_public_key_pem(pem).map_err(Error::protocol)
++        PublicKey::from_public_key_pem(pem).map_err(Error::protocol)
+     }
+ }
+ 
+diff -ruN a/src/connection/establish.rs b/src/connection/establish.rs
+--- a/src/connection/establish.rs	2026-11-19 14:43:27
++++ b/src/connection/establish.rs	2026-11-19 14:43:27
+@@ -63,7 +63,7 @@
+         let handshake: Handshake = stream.recv_packet().await?.decode()?;
+ 
+         let mut plugin = handshake.auth_plugin;
+-        let nonce = handshake.auth_plugin_data;
++        let mut nonce = handshake.auth_plugin_data;
+ 
+         // FIXME: server version parse is a bit ugly
+         // expecting MAJOR.MINOR.PATCH
+@@ -130,7 +130,9 @@
+                         packet.decode_with(self.options.enable_cleartext_plugin)?;
+ 
+                     plugin = Some(switch.plugin);
+-                    let nonce = switch.data.chain(Bytes::new());
++                    // The switched plugin's later steps (caching_sha2_password full
++                    // authentication) must use the switch's nonce, not the handshake's.
++                    nonce = switch.data.chain(Bytes::new());
+ 
+                     let response = switch
+                         .plugin
+diff -ruN a/src/connection/stream.rs b/src/connection/stream.rs
+--- a/src/connection/stream.rs	2026-11-19 14:43:27
++++ b/src/connection/stream.rs	2026-11-19 14:43:27
+@@ -21,6 +21,8 @@
+     pub(crate) is_tls: bool,
+     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
+     pub(crate) max_result_metadata: Option<super::ResultMetadataLimit>,
++    pub(crate) server_public_key: Option<std::sync::Arc<[u8]>>,
++    pub(crate) allow_public_key_retrieval: bool,
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+@@ -66,6 +68,8 @@
+             is_tls: false,
+             max_receive_packet_size: options.max_receive_packet_size,
+             max_result_metadata: options.max_result_metadata,
++            server_public_key: options.server_public_key.clone(),
++            allow_public_key_retrieval: options.allow_public_key_retrieval,
+         }
+     }
+ 
+@@ -226,6 +230,8 @@
+             is_tls: self.is_tls,
+             max_receive_packet_size: self.max_receive_packet_size,
+             max_result_metadata: self.max_result_metadata,
++            server_public_key: self.server_public_key,
++            allow_public_key_retrieval: self.allow_public_key_retrieval,
+         }
+     }
+ }
+diff -ruN a/src/connection/tls.rs b/src/connection/tls.rs
+--- a/src/connection/tls.rs	2026-11-19 14:43:27
++++ b/src/connection/tls.rs	2026-11-19 14:43:27
+@@ -14,6 +14,8 @@
+     waiting: VecDeque<Waiting>,
+     max_receive_packet_size: Option<std::num::NonZeroUsize>,
+     max_result_metadata: Option<super::ResultMetadataLimit>,
++    server_public_key: Option<std::sync::Arc<[u8]>>,
++    allow_public_key_retrieval: bool,
+ }
+ 
+ pub(super) async fn maybe_upgrade<S: Socket>(
+@@ -85,6 +87,8 @@
+             waiting: stream.waiting,
+             max_receive_packet_size: stream.max_receive_packet_size,
+             max_result_metadata: stream.max_result_metadata,
++            server_public_key: stream.server_public_key,
++            allow_public_key_retrieval: stream.allow_public_key_retrieval,
+         },
+     )
+     .await
+@@ -103,6 +107,8 @@
+             is_tls: true,
+             max_receive_packet_size: self.max_receive_packet_size,
+             max_result_metadata: self.max_result_metadata,
++            server_public_key: self.server_public_key,
++            allow_public_key_retrieval: self.allow_public_key_retrieval,
+         }
+     }
+ }
+diff -ruN a/src/options/mod.rs b/src/options/mod.rs
+--- a/src/options/mod.rs	2026-11-19 14:43:27
++++ b/src/options/mod.rs	2026-11-19 14:43:27
+@@ -82,6 +82,8 @@
+     pub(crate) set_names: bool,
+     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
+     pub(crate) max_result_metadata: Option<crate::connection::ResultMetadataLimit>,
++    pub(crate) server_public_key: Option<std::sync::Arc<[u8]>>,
++    pub(crate) allow_public_key_retrieval: bool,
+ }
+ 
+ impl Default for MySqlConnectOptions {
+@@ -112,6 +114,23 @@
+         self
+     }
+ 
++    /// Trusted RSA public key (PEM, `-----BEGIN PUBLIC KEY-----`) for the password exchange of
++    /// `caching_sha2_password` full authentication and `sha256_password` without TLS. When set,
++    /// the key is never requested from the server.
++    pub fn server_public_key_pem(mut self, pem: impl Into<Vec<u8>>) -> Self {
++        self.server_public_key = Some(pem.into().into());
++        self
++    }
++
++    /// Whether the RSA public key may be requested from the server, unverified, when no trusted
++    /// key is set and the connection has no TLS. `true` (the upstream default) retains the
++    /// original behavior; `false` fails such a sign-in with a configuration error starting
++    /// "RSA public key retrieval is not allowed".
++    pub fn allow_public_key_retrieval(mut self, allow: bool) -> Self {
++        self.allow_public_key_retrieval = allow;
++        self
++    }
++
+     /// Creates a new, default set of options ready for configuration
+     pub fn new() -> Self {
+         Self {
+@@ -136,6 +155,8 @@
+             set_names: true,
+             max_receive_packet_size: None,
+             max_result_metadata: None,
++            server_public_key: None,
++            allow_public_key_retrieval: true,
+         }
+     }
+ 

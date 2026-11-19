@@ -82,6 +82,8 @@ pub struct MySqlConnectOptions {
     pub(crate) set_names: bool,
     pub(crate) max_receive_packet_size: Option<std::num::NonZeroUsize>,
     pub(crate) max_result_metadata: Option<crate::connection::ResultMetadataLimit>,
+    pub(crate) server_public_key: Option<std::sync::Arc<[u8]>>,
+    pub(crate) allow_public_key_retrieval: bool,
 }
 
 impl Default for MySqlConnectOptions {
@@ -112,6 +114,23 @@ impl MySqlConnectOptions {
         self
     }
 
+    /// Trusted RSA public key (PEM, `-----BEGIN PUBLIC KEY-----`) for the password exchange of
+    /// `caching_sha2_password` full authentication and `sha256_password` without TLS. When set,
+    /// the key is never requested from the server.
+    pub fn server_public_key_pem(mut self, pem: impl Into<Vec<u8>>) -> Self {
+        self.server_public_key = Some(pem.into().into());
+        self
+    }
+
+    /// Whether the RSA public key may be requested from the server, unverified, when no trusted
+    /// key is set and the connection has no TLS. `true` (the upstream default) retains the
+    /// original behavior; `false` fails such a sign-in with a configuration error starting
+    /// "RSA public key retrieval is not allowed".
+    pub fn allow_public_key_retrieval(mut self, allow: bool) -> Self {
+        self.allow_public_key_retrieval = allow;
+        self
+    }
+
     /// Creates a new, default set of options ready for configuration
     pub fn new() -> Self {
         Self {
@@ -136,6 +155,8 @@ impl MySqlConnectOptions {
             set_names: true,
             max_receive_packet_size: None,
             max_result_metadata: None,
+            server_public_key: None,
+            allow_public_key_retrieval: true,
         }
     }
 
