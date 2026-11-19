@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {bootstrapNativeHost,NativeOperationError} from '../src/services/nativeHost.ts';
-import {openLive,queryLive,closeLive,isLoopbackHost,tlsOptional,usesTls,storeSecret,SECRET_STORE_MISSING,SECRET_STORE_REFUSED} from '../src/services/liveConnections.ts';
+import {openLive,queryLive,closeLive,isLoopbackHost,tlsOptional,usesTls,setTls,passwordRsa,setPasswordRsa,normalizePublicKey,storeSecret,SECRET_STORE_MISSING,SECRET_STORE_REFUSED} from '../src/services/liveConnections.ts';
 import {connectionSnapshot,loadConnectionPreferences} from '../src/services/connectionPreferences.ts';
 import {connections} from '../src/data/sample.ts';
 const profile={...connections[0]!,mode:'live' as const,password:'synthetic-password',rootCertificatePem:'synthetic-public-ca',transport:{type:'direct' as const}};
@@ -85,7 +85,7 @@ test('profile storage keeps secret references but drops secrets, grants, legacy 
  const mock=JSON.parse(JSON.stringify(connectionSnapshot([{...live,mode:'mock'}],[]))).connections[0];
  assert.equal(mock.passwordRef,undefined,'mock profiles never carry OS secret references');
 });
-test('Use TLS: off only when chosen for this computer; remote and saved profiles keep verified TLS; never sent without TLS otherwise',async()=>{
+test('Use TLS: off as chosen (for another computer only with remoteTlsOff, set by the dialog); older stored profiles keep verified TLS; never sent without TLS otherwise',async()=>{
  const f=fixture();await bootstrapNativeHost(f.global);
  const sent=()=>f.calls.filter(c=>c.command==='connect_direct').at(-1)!.payload;
  for(const host of ['localhost','127.0.0.1','::1']){
@@ -93,22 +93,68 @@ test('Use TLS: off only when chosen for this computer; remote and saved profiles
   assert.equal(tlsOptional(local),true);assert.equal(usesTls(local),false);
   await openLive(local);
   assert.equal(sent().tls,false);assert.equal(sent().rootCertificatePem,null,'no CA without TLS');
+  assert.equal('serverPublicKeyPem' in sent(),false);assert.equal('allowPublicKeyRetrieval' in sent(),false,'no RSA unless chosen');
  }
  // Loopback with TLS on (or a saved profile from before the option): verified TLS, CA kept.
  for(const local of [{...profile,host:'127.0.0.1',tls:true},{...profile,host:'127.0.0.1',tls:undefined}]){
   assert.equal(usesTls(local),true);await openLive(local);
   assert.equal('tls' in sent(),false);assert.equal(sent().rootCertificatePem,'synthetic-public-ca');
  }
- // Remote, PostgreSQL and SSH ignore a stored "off": TLS is required and nothing asks for plaintext.
- for(const other of [{...profile,host:'db.example.com',tls:false},{...profile,engine:'PostgreSQL' as const,port:5432,host:'127.0.0.1',tls:false},{...profile,host:'127.0.0.1',tls:false,transport:{type:'ssh' as const,host:'bastion',port:22,user:'deploy',auth:'agent' as const}}]){
+ // Another computer: a stored "off" alone (profiles saved before remote TLS off existed) keeps
+ // verified TLS; turning it off there is its own explicit choice.
+ const remote={...profile,host:'db.example.com',tls:false};
+ assert.equal(tlsOptional(remote),true);assert.equal(usesTls(remote),true);
+ await openLive(remote);assert.equal('tls' in sent(),false);
+ const chosen={...profile,host:'db.example.com'};setTls(chosen,false);
+ assert.deepEqual([chosen.tls,chosen.remoteTlsOff],[false,true]);assert.equal(usesTls(chosen),false);
+ await openLive(chosen);assert.equal(sent().tls,false);assert.equal(sent().rootCertificatePem,null);
+ setTls(chosen,true);assert.deepEqual([chosen.tls,chosen.remoteTlsOff],[undefined,undefined]);assert.equal(usesTls(chosen),true);
+ // TLS off chosen in the dialog holds for any host the profile is then given.
+ const moved={...profile,host:'127.0.0.1'};setTls(moved,false);assert.equal(usesTls(moved),false);
+ moved.host='db.example.com';assert.equal(usesTls(moved),false);
+ // PostgreSQL and SSH: TLS is required and nothing asks for plaintext.
+ for(const other of [{...profile,engine:'PostgreSQL' as const,port:5432,host:'127.0.0.1',tls:false},{...profile,host:'127.0.0.1',tls:false,transport:{type:'ssh' as const,host:'bastion',port:22,user:'deploy',auth:'agent' as const}}]){
   assert.equal(tlsOptional(other),false);assert.equal(usesTls(other),true);
   await openLive(other);assert.equal('tls' in sent(),false);
  }
  assert.equal(isLoopbackHost('LOCALHOST'),true);
  for(const host of ['127.0.0.2','localhost.example.com','[::1]','0.0.0.0'])assert.equal(isLoopbackHost(host),false,host);
- // Saved preferences keep an explicit "off" and nothing else.
- const saved=loadConnectionPreferences({getItem:()=>JSON.stringify(connectionSnapshot([{...profile,host:'127.0.0.1',tls:false},{...profile,id:'b',tls:true},{...profile,id:'c'}],[]))},[]).connections;
- assert.deepEqual(saved.map(c=>c.tls),[false,undefined,undefined]);
+ // Saved preferences keep an explicit "off" (and its remote choice) and nothing else.
+ const saved=loadConnectionPreferences({getItem:()=>JSON.stringify(connectionSnapshot([{...profile,host:'127.0.0.1',tls:false},{...profile,id:'b',tls:true},{...profile,id:'c'},{...chosen,id:'d',tls:false,remoteTlsOff:true},{...profile,id:'e',tls:true,remoteTlsOff:true}],[]))},[]).connections;
+ assert.deepEqual(saved.map(c=>[c.tls,c.remoteTlsOff]),[[false,undefined],[undefined,undefined],[undefined,undefined],[false,true],[undefined,undefined]]);
+ await bootstrapNativeHost({});
+});
+test('Password without TLS: RSA options are sent only with TLS off and only as chosen; a trusted key is checked and saved, never secrets',async()=>{
+ const f=fixture();await bootstrapNativeHost(f.global);
+ const sent=()=>f.calls.filter(c=>c.command==='connect_direct').at(-1)!.payload;
+ const key='-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsynthetic\n-----END PUBLIC KEY-----';
+ const local={...profile,engine:'MySQL' as const,host:'127.0.0.1',tls:false} as any;
+ assert.equal(passwordRsa(local),'none');
+ setPasswordRsa(local,'retrieve');assert.equal(passwordRsa(local),'retrieve');
+ await openLive(local);assert.equal(sent().allowPublicKeyRetrieval,true);assert.equal('serverPublicKeyPem' in sent(),false);
+ setPasswordRsa(local,'trusted');assert.equal(passwordRsa(local),'trusted');assert.equal(local.publicKeyRetrieval,undefined);
+ // An empty or non-public key is refused before anything is sent.
+ const calls=f.calls.length;
+ for(const pem of ['',`${key}\n-----BEGIN PRIVATE KEY-----`,'-----BEGIN CERTIFICATE-----']){
+  local.serverPublicKeyPem=pem;await assert.rejects(openLive(local),/Paste the server’s RSA public key/);
+ }
+ assert.equal(f.calls.length,calls);
+ // MySQL's own public_key.pem ends with a NUL byte; it is trimmed.
+ local.serverPublicKeyPem=`${key}\n\0`;await openLive(local);
+ assert.equal(sent().serverPublicKeyPem,key);assert.equal('allowPublicKeyRetrieval' in sent(),false);
+ assert.equal(normalizePublicKey(`  ${key}\n\0\n`),key);
+ // With TLS on nothing RSA-related is sent, whatever is stored.
+ await openLive({...local,tls:true});assert.equal('serverPublicKeyPem' in sent(),false);assert.equal('allowPublicKeyRetrieval' in sent(),false);
+ setPasswordRsa(local,'none');assert.deepEqual([local.serverPublicKeyPem,local.publicKeyRetrieval],[undefined,undefined]);
+ // Saved: the public key or the opt-in, only with TLS off; never a private key.
+ const save=(extra:object)=>loadConnectionPreferences({getItem:()=>JSON.stringify(connectionSnapshot([{...profile,host:'127.0.0.1',...extra} as any],[]))},[]).connections[0] as any;
+ assert.equal(save({tls:false,serverPublicKeyPem:`${key}\0`}).serverPublicKeyPem,key);
+ assert.equal(save({tls:false,publicKeyRetrieval:true}).publicKeyRetrieval,true);
+ assert.equal(save({tls:true,serverPublicKeyPem:key}).serverPublicKeyPem,undefined);
+ assert.equal(save({tls:true,publicKeyRetrieval:true}).publicKeyRetrieval,undefined);
+ assert.equal(save({tls:false,serverPublicKeyPem:`${key}-----BEGIN PRIVATE KEY-----`}).serverPublicKeyPem,undefined);
+ assert.equal(save({tls:false,serverPublicKeyPem:key,publicKeyRetrieval:true}).publicKeyRetrieval,undefined);
+ assert.equal(save({mode:'mock',tls:false,publicKeyRetrieval:true}).publicKeyRetrieval,undefined);
  await bootstrapNativeHost({});
 });
 test('A15: only an explicit read-only choice is saved with a live profile; read-write is the default',()=>{

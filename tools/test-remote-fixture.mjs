@@ -96,9 +96,15 @@ async function session(mode, binary, test) {
         STONEQL_LIFECYCLE_BAD_CA: secretFile(`${fixture.engine}-bad-ca.pem`, fixture.badCa),
         STONEQL_EXPORT_DIR: exports,
       };
-      const result = spawnSync(binary, ['--ignored', '--exact', test, '--nocapture'], { cwd: root, env, encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
+      // A further test named by the host (the RSA phases after a server restart).
+      if (fixture.test) {
+        if (fixture.test !== 'rsa_sign_in_without_tls_after_server_restart') throw Error('Unexpected fixture test');
+        env.STONEQL_RSA_PHASE = fixture.rsaPhase;
+        if (fixture.serverPublicKey) env.STONEQL_SERVER_PUBLIC_KEY = secretFile(`${fixture.engine}-${fixture.rsaPhase}-server-key.pem`, fixture.serverPublicKey);
+      }
+      const result = spawnSync(binary, ['--ignored', '--exact', fixture.test ?? test, '--nocapture'], { cwd: root, env, encoding: 'utf8', timeout: 600_000, maxBuffer: 64 * 1024 * 1024 });
       if (result.status === 0) {
-        reply = {
+        reply = fixture.test ? { passed: true, stdout: result.stdout } : {
           passed: true,
           stdout: result.stdout,
           exports: Object.fromEntries(['export_values.sql', 'export_values.csv'].map((name) => [name, readFileSync(join(exports, name)).toString('base64')])),

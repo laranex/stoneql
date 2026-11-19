@@ -13,6 +13,7 @@ Object.assign(globalThis, {
 const { useConnectionWorkflow } = await loadModule('../../src/composables/useConnectionWorkflow.ts');
 const { useWorkspace } = await loadModule('../../src/stores/workspace.ts');
 const { bootstrapNativeHost } = await loadModule('../../src/services/nativeHost.ts');
+const { setTls, setPasswordRsa } = await loadModule('../../src/services/liveConnections.ts');
 const HOST_KEY = { algorithm: 'ssh-ed25519', publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl', fingerprint: 'SHA256:9Xl0yQZzJ8m2kKpz1bq5N2f3S5gkT0r9u1g6vXy3K0M' };
 function nativeFixture(failConnect: boolean | string = false, pickerCancelled = false, hostKeys: { enrolled?: boolean; declineTrust?: boolean } = {}) {
   const calls: Array<{ command: string; payload: any }> = [];
@@ -79,12 +80,14 @@ test('new local drafts start with TLS off, connect without TLS, and a verified-T
   const { flow, notices } = await setup(native.global);
   flow.newConnection();
   assert.equal(flow.connectionDraft.value.tls, false);
+  // New connections start with TLS off for another computer too.
+  assert.equal(flow.connectionDraft.value.remoteTlsOff, true);
   Object.assign(flow.connectionDraft.value, { name: 'Local', user: 'root', database: 'acme_store', password: 'synthetic-password', host: 'localhost' });
   await flow.testConnection();
-  assert.match(flow.testMessage.value, /^Connected without TLS \(this computer only\)/);
+  assert.match(flow.testMessage.value, /^Connected without TLS \(this computer\)/);
   assert.equal(native.calls.find((c) => c.command === 'connect_direct')!.payload.tls, false);
   await flow.saveConnection();
-  assert.equal(notices.at(-1), 'success:Live read-only connection opened without TLS (this computer only).');
+  assert.equal(notices.at(-1), 'success:Live read-only connection opened without TLS (this computer).');
   // Editing the saved profile keeps TLS off; it is stored as an explicit choice.
   const saved = JSON.parse(preferences.get('stoneql-connections')!).connections.find((c: any) => c.name === 'Local');
   assert.equal(saved.tls, false);
@@ -99,6 +102,23 @@ test('a verified-TLS failure on loopback suggests turning TLS off; remote failur
   flow.connectionDraft.value.host = 'db.example.com';
   await flow.testConnection();
   assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability.');
+  // Without TLS (here chosen for another computer), the failure names the causes the server does
+  // not distinguish, and nothing is retried with TLS.
+  setTls(flow.connectionDraft.value, false);
+  await flow.testConnection();
+  assert.equal(flow.testMessage.value, 'Connection failed. Check authentication, TLS and availability. Without TLS this also happens when the account requires TLS (REQUIRE SSL); StoneQL does not switch to TLS by itself.');
+  setPasswordRsa(flow.connectionDraft.value, 'trusted');
+  flow.connectionDraft.value.serverPublicKeyPem = '-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----';
+  await flow.testConnection();
+  assert.match(flow.testMessage.value, /REQUIRE SSL\) or the trusted public key is not this server’s; StoneQL does not switch to TLS by itself\.$/);
+  const sent = native.calls.filter((c) => c.command === 'connect_direct');
+  assert.equal(sent.length, 4);
+  assert.deepEqual(sent.slice(2).map((c) => [c.payload.tls, c.payload.host]), [[false, 'db.example.com'], [false, 'db.example.com']]);
+  // Saving with "trusted" but no key is refused before anything is sent.
+  flow.connectionDraft.value.serverPublicKeyPem = '';
+  await flow.saveConnection();
+  assert.match(flow.connectionError.value, /^Paste the server’s RSA public key/);
+  assert.equal(native.calls.filter((c) => c.command === 'connect_direct').length, 4);
 });
 test('mock save validates required fields, then tests, stores and opens the connection', async () => {
   const { store, flow, manager, notices } = await setup();

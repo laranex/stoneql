@@ -22,6 +22,12 @@ const TRUST_VIEW_QUERIES: [&str; 3] = [
     "SELECT effect FROM trust_view_myisam",
     "SELECT effect FROM trust_nested_view",
 ];
+/// One `generate_context!` per test binary (it embeds a uniquely named symbol on macOS).
+fn build_app(journal: &common::TempJournal) -> tauri::App<tauri::test::MockRuntime> {
+    stoneql_desktop::app_builder_with(mock_builder(), false, journal.services())
+        .build(tauri::generate_context!())
+        .unwrap()
+}
 #[test]
 #[ignore = "run through npm run test:native-database with disposable TLS fixtures"]
 fn actual_database_commands_use_owned_tls_fixtures() {
@@ -113,9 +119,7 @@ fn actual_database_commands_use_owned_tls_fixtures() {
             .unwrap();
     });
     let journal = common::TempJournal::new();
-    let app = stoneql_desktop::app_builder_with(mock_builder(), false, journal.services())
-        .build(tauri::generate_context!())
-        .unwrap();
+    let app = build_app(&journal);
     let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
         .build()
         .unwrap();
@@ -404,14 +408,12 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         close(&admin);
         close(&writer);
     }
-    // Remote with TLS off: refused before any network or secret work.
+    // RSA options with TLS on are refused before any network or secret work.
     let started = std::time::Instant::now();
+    let mut rsa_with_tls = tls_mode("stoneql_plain", "127.0.0.1", true, Some(&ca));
+    rsa_with_tls["allowPublicKeyRetrieval"] = json!(true);
     assert_eq!(
-        invoke(
-            "connect_direct",
-            tls_mode("stoneql_plain", "192.0.2.1", false, None)
-        )
-        .unwrap_err()["code"],
+        invoke("connect_direct", rsa_with_tls).unwrap_err()["code"],
         "INVALID_REQUEST"
     );
     assert!(started.elapsed() < std::time::Duration::from_millis(500));
@@ -424,15 +426,21 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         .unwrap_err()["code"],
         "INVALID_REQUEST"
     );
-    // The fixture server starts with require_secure_transport=ON: plaintext is refused by the
-    // server and reported as ENCRYPTED_LOGIN_REQUIRED, never retried with or without TLS.
+    // The fixture server starts with require_secure_transport=ON: plaintext is refused and never
+    // retried with or without TLS. MariaDB reports it (SECURE_TRANSPORT_REQUIRED); MySQL first asks
+    // the uncached account for a full sign-in, which without RSA options stops before the password
+    // is sent (rsa_sign_in_without_tls_after_server_restart covers the RSA case).
     assert_eq!(
         invoke(
             "connect_direct",
             tls_mode("stoneql_plain", "127.0.0.1", false, None)
         )
         .unwrap_err()["code"],
-        "ENCRYPTED_LOGIN_REQUIRED"
+        if engine == "mysql" {
+            "ENCRYPTED_LOGIN_REQUIRED"
+        } else {
+            "SECURE_TRANSPORT_REQUIRED"
+        }
     );
     // The fixture administrator (verified TLS) relaxes it for the plaintext cases only.
     let secure_transport = |on: bool| {
@@ -455,8 +463,9 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         });
     };
     secure_transport(false);
-    // Loopback, TLS off, first sign-in: MariaDB's default mysql_native_password works over
-    // plaintext; MySQL's caching_sha2_password needs an encrypted first sign-in in this build.
+    // Loopback, TLS off, first sign-in without RSA options: MariaDB's default
+    // mysql_native_password works over plaintext; MySQL's caching_sha2_password full sign-in
+    // needs RSA (rsa_sign_in_without_tls_after_server_restart) or TLS, so nothing is sent.
     let cold = invoke(
         "connect_direct",
         tls_mode("stoneql_plain", "127.0.0.1", false, None),
@@ -839,5 +848,160 @@ fn actual_database_commands_use_owned_tls_fixtures() {
         .unwrap();
     println!(
         "STONEQL_NATIVE_RESULT {{\"realDatabase\":true,\"tauriMockRuntime\":true,\"strictIpc\":true,\"independentHandles\":true,\"exactValues\":true,\"readOnlyRefusal\":true,\"packetRecovery\":true,\"indirectWritesRejected\":true,\"definerPositiveControls\":true,\"nonTransactionalWritesRejected\":true,\"indirectLockReleased\":true,\"rendererReloadCleanup\":true,\"bootstrapRetryIdempotent\":true,\"reloadCapacityReused\":true,\"disconnect\":true,\"defaultQueryLimits\":true,\"tlsModes\":true}}"
+    );
+}
+/// TLS off with RSA password exchange, run by the harness right after it restarts the server, so
+/// MySQL's `caching_sha2_password` authentication cache is empty and the first sign-in is a full
+/// one. `STONEQL_RSA_PHASE` chooses how the server's key is obtained for that first sign-in:
+/// `trusted` (the server's own `public_key.pem`, given as a trusted key) or `retrieve` (explicit
+/// opt-in to fetch it). Never retried with or without TLS.
+#[test]
+#[ignore = "run through npm run test:native-database after the harness restarts the fixture"]
+fn rsa_sign_in_without_tls_after_server_restart() {
+    let engine = std::env::var("STONEQL_LIFECYCLE_ENGINE").unwrap();
+    let phase = std::env::var("STONEQL_RSA_PHASE").unwrap();
+    assert!(["trusted", "retrieve"].contains(&phase.as_str()));
+    let port: u16 = std::env::var("STONEQL_LIFECYCLE_PORT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let password = std::env::var("STONEQL_FIXTURE_PASSWORD").unwrap();
+    let ca = std::fs::read_to_string(std::env::var("STONEQL_LIFECYCLE_CA").unwrap()).unwrap();
+    let journal = common::TempJournal::new();
+    let app = build_app(&journal);
+    let window = WebviewWindowBuilder::new(&app, "main", WebviewUrl::App("index.html".into()))
+        .build()
+        .unwrap();
+    let invoke = |command: &str, payload: Value| -> Result<Value, Value> {
+        get_ipc_response(&window,InvokeRequest{cmd:command.into(),callback:CallbackFn(0),error:CallbackFn(1),url:LOCAL.parse().unwrap(),body:InvokeBody::Json(json!({"message":json!({"version":1,"requestId":"fixture_request","payload":payload}).to_string()})),headers:Default::default(),invoke_key:INVOKE_KEY.into()}).map(|body|body.deserialize().unwrap())
+    };
+    let session =
+        invoke("host_info", json!({"nonce":"fixture_nonce"})).unwrap()["payload"]["sessionId"]
+            .clone();
+    let connect = |user: &str, rsa: &Value| {
+        let mut payload = json!({"sessionId":session,"engine":engine,"host":"127.0.0.1","port":port,"username":user,"password":password,"database":"stoneql_m001_fixture","rootCertificatePem":null,"tls":false});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(rsa.as_object().unwrap().clone());
+        invoke("connect_direct", payload)
+    };
+    // The refusal code; a sign-in that unexpectedly succeeds names the failing call.
+    macro_rules! code {
+        ($result:expr) => {
+            match $result {
+                Err(error) => error["code"].clone(),
+                Ok(_) => panic!("signed in: {}", stringify!($result)),
+            }
+        };
+    }
+    // Opens, reads real rows and closes: the sign-in really completed.
+    let works = |user: &str, rsa: &Value| {
+        let handle = connect(user, rsa).unwrap()["payload"]["handle"].clone();
+        let rows = invoke(
+            "read_only_query",
+            json!({"sessionId":session,"handle":handle,"sql":"SELECT id FROM raw_values ORDER BY id"}),
+        )
+        .unwrap();
+        assert_eq!(rows["payload"]["rows"].as_array().unwrap().len(), 2);
+        invoke(
+            "disconnect_database",
+            json!({"sessionId":session,"handle":handle}),
+        )
+        .unwrap();
+    };
+    let secure_transport = |on: bool| {
+        let admin = MySqlConnectOptions::new()
+            .host("127.0.0.1")
+            .port(port)
+            .username("root")
+            .password(&password)
+            .ssl_mode(MySqlSslMode::VerifyIdentity)
+            .ssl_ca_from_pem(ca.as_bytes().to_vec())
+            .disable_statement_logging();
+        tauri::async_runtime::block_on(async {
+            let mut connection = MySqlConnection::connect_with(&admin)
+                .await
+                .map_err(|_| "fixture admin TLS failed")
+                .unwrap();
+            sqlx::raw_sql(if on {
+                "SET GLOBAL require_secure_transport = ON"
+            } else {
+                "SET GLOBAL require_secure_transport = OFF"
+            })
+            .execute(&mut connection)
+            .await
+            .map_err(|_| "fixture admin setting failed")
+            .unwrap();
+            connection.close().await.unwrap();
+        });
+    };
+    let none = json!({});
+    let retrieve = json!({"allowPublicKeyRetrieval":true});
+    // The server starts with require_secure_transport=ON: plaintext is refused and never retried
+    // with TLS. MySQL asks the uncached account for a full sign-in first, so without RSA options
+    // it stops there before the password is sent (and the cache stays empty).
+    assert_eq!(
+        code!(connect("stoneql_plain", &none)),
+        if engine == "mysql" {
+            "ENCRYPTED_LOGIN_REQUIRED"
+        } else {
+            "SECURE_TRANSPORT_REQUIRED"
+        }
+    );
+    secure_transport(false);
+    if engine == "mysql" {
+        let server_key =
+            std::fs::read_to_string(std::env::var("STONEQL_SERVER_PUBLIC_KEY").unwrap()).unwrap();
+        assert!(server_key.starts_with("-----BEGIN PUBLIC KEY-----"));
+        let first = if phase == "trusted" {
+            json!({"serverPublicKeyPem":server_key})
+        } else {
+            retrieve.clone()
+        };
+        // Empty cache: a full sign-in needs RSA; without a trusted key or the opt-in nothing is
+        // sent. A key that is not the server's fails the sign-in.
+        assert_eq!(
+            code!(connect("stoneql_plain", &none)),
+            "ENCRYPTED_LOGIN_REQUIRED"
+        );
+        let wrong =
+            include_str!("../../../../crates/stoneql-runtime/tests/fixtures/rsa-public-key.pem");
+        assert_eq!(
+            code!(connect(
+                "stoneql_plain",
+                &json!({"serverPublicKeyPem":wrong})
+            )),
+            "CONNECTION_UNAVAILABLE"
+        );
+        // First full sign-in after the restart, then reconnects: with the same choice, and
+        // without RSA (the server cached the sign-in, so no password exchange is needed).
+        works("stoneql_plain", &first);
+        works("stoneql_plain", &first);
+        works("stoneql_plain", &none);
+        // An account that requires TLS stays refused without TLS, even with RSA.
+        assert_eq!(
+            code!(connect("stoneql_reader", &first)),
+            "CONNECTION_UNAVAILABLE"
+        );
+    } else {
+        // MariaDB's mysql_native_password signs in without RSA; the opt-in changes nothing.
+        works("stoneql_plain", &none);
+        works("stoneql_plain", &retrieve);
+        assert_eq!(
+            code!(connect("stoneql_reader", &retrieve)),
+            "CONNECTION_UNAVAILABLE"
+        );
+    }
+    // With RSA the server's own refusal is reported. (Checked last: MySQL caches a sign-in whose
+    // password is verified, even when it then refuses the plaintext connection.)
+    secure_transport(true);
+    assert_eq!(
+        code!(connect("stoneql_plain", &retrieve)),
+        "SECURE_TRANSPORT_REQUIRED"
+    );
+    println!(
+        "STONEQL_RSA_RESULT {{\"engine\":\"{engine}\",\"phase\":\"{phase}\",\"secureTransportRefused\":true,\"emptyCacheRefusedWithoutKey\":{0},\"wrongKeyRefused\":{0},\"firstSignIn\":true,\"reconnect\":true,\"requireSslRefused\":true}}",
+        engine == "mysql"
     );
 }

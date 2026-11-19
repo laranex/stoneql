@@ -1,6 +1,6 @@
 import { ref, watch, type Ref } from 'vue';
 import { useWorkspace, LEASE_OUTCOME_UNREADABLE } from '../stores/workspace';
-import { openLive, closeLive, queryLive, readWriteRoute, liveSupported, tlsOptional, usesTls, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
+import { openLive, closeLive, queryLive, readWriteRoute, liveSupported, tlsOptional, usesTls, isLoopbackHost, passwordRsa, normalizePublicKey, pickSqliteFile, pickSshKeyFile, scanHostKey, hostKeyStatus, trustScannedHostKey, forgetTrustedHostKey, cancelConnect, storeSecret, deleteSecret, describeTransactionEnd } from '../services/liveConnections';
 import { hostState, mockConnectionsAvailable } from '../services/nativeHost';
 import { mockTransport } from '../services/mockTransport';
 import { referenceStore, secretStoreStatus } from '../services/secretStore';
@@ -145,8 +145,11 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
           user: demo ? 'root' : '',
           password: '',
           database: demo ? 'acme_store' : '',
-          // New connections to this computer start with TLS off; other hosts always verify TLS.
+          // New Direct MySQL/MariaDB connections start with TLS off, for this computer and others
+          // (approved 2026-11-19). Profiles saved earlier with only `tls: false` for another
+          // computer keep verified TLS: there TLS is off only together with remoteTlsOff.
           tls: false,
+          remoteTlsOff: true,
           color: connectionColors[0]!.value,
           environment: 'Development',
           customEnvironment: '',
@@ -336,10 +339,15 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     const enabled = nativeHostState.kind === 'desktop' && nativeHostState.info.readWriteSql === true;
     return enabled && readWriteRoute(draft) && !draft.readOnly ? 'read_write' : undefined;
   }
-  /** A verified-TLS failure to this computer says how to connect without TLS; never automatic. */
+  /**
+   * A verified-TLS failure to this computer says how to connect without TLS; a failure without
+   * TLS names the causes the server does not distinguish. Never retried automatically.
+   */
   function withTlsHint(error: unknown, draft?: Connection): string {
     const message = (error as Error).message;
-    return draft && (error as { code?: string }).code === 'CONNECTION_UNAVAILABLE' && tlsOptional(draft) && usesTls(draft)
+    if (!draft || (error as { code?: string }).code !== 'CONNECTION_UNAVAILABLE' || !tlsOptional(draft)) return message;
+    if (!usesTls(draft)) return `${message} Without TLS this also happens when the account requires TLS (REQUIRE SSL)${passwordRsa(draft) === 'trusted' ? ' or the trusted public key is not this server’s' : ''}; StoneQL does not switch to TLS by itself.`;
+    return isLoopbackHost(draft.host)
       ? `${message} If this local server has no certificate trusted for this host name, turn off Use TLS and try again.`
       : message;
   }
@@ -368,7 +376,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
         try{databaseOptions.value=draft.engine==='SQLite'?[]:toDatabaseNames(await queryLive(info.handle, liveDatabasesSql(draft.engine)));}
         catch{databaseOptions.value=[];}
         finally{await closeLive(info.handle);}
-        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':usesTls(connectionDraft.value)?'Verified TLS connection successful':'Connected without TLS (this computer only)'} · ${info.engineVersion} · Test session closed.${!chosen&&databaseOptions.value.length?' Choose the default database below.':''}`;
+        testMessage.value=`${connectionDraft.value.engine==='SQLite'?'Read-only file opened':ssh?'Verified SSH host key and TLS connection successful':usesTls(connectionDraft.value)?'Verified TLS connection successful':`Connected without TLS (${isLoopbackHost(connectionDraft.value.host)?'this computer':'unencrypted network'})`} · ${info.engineVersion} · Test session closed.${!chosen&&databaseOptions.value.length?' Choose the default database below.':''}`;
         testOk.value=true;
       } else {
         const result=await mockTransport.test(connectionDraft.value);
@@ -406,7 +414,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
       clearTransientSecrets(draft);draft.password='';connectionDraftInitial.value=JSON.stringify(draft);
       connectionDialog.value=false;if(connectNow)manager.value=false;
       const mode=access==='read_write'?'read-write':'read-only';
-      notify(connectNow?(draft.engine==='SQLite'?`Live ${mode} SQLite file opened.`:ssh?`Live ${mode} connection opened over SSH and verified TLS.`:usesTls(draft)?`Live ${mode} connection opened over verified TLS.`:`Live ${mode} connection opened without TLS (this computer only).`):'Live profile saved; connect explicitly before executing SQL.');
+      notify(connectNow?(draft.engine==='SQLite'?`Live ${mode} SQLite file opened.`:ssh?`Live ${mode} connection opened over SSH and verified TLS.`:usesTls(draft)?`Live ${mode} connection opened over verified TLS.`:`Live ${mode} connection opened without TLS (${isLoopbackHost(draft.host)?'this computer':'unencrypted network'}).`):'Live profile saved; connect explicitly before executing SQL.');
     }catch(error){connectionError.value=withTlsHint(error, draft);}
     finally{testing.value=false;attemptId.value='';}
   }
@@ -416,6 +424,7 @@ export function useConnectionWorkflow({ manager, notify, discard, askDiscard, co
     connectionError.value = '';
     testMessage.value = '';
     if (!draft.name.trim() || (draft.engine !== 'SQLite' && (!draft.host.trim() || !draft.user.trim()))) { connectionError.value = 'Name, host, and username are required.'; return; }
+    if (draft.mode === 'live' && !usesTls(draft) && passwordRsa(draft) === 'trusted' && !normalizePublicKey(draft.serverPublicKeyPem ?? '').startsWith('-----BEGIN PUBLIC KEY-----')) { connectionError.value = 'Paste the server’s RSA public key (-----BEGIN PUBLIC KEY-----), or choose another option under Password without TLS.'; return; }
     if (draft.environment === 'Custom' && !draft.customEnvironment?.trim()) { connectionError.value = 'Enter a custom environment label.'; return; }
     if (draft.transport.type === 'ssh' && (!draft.transport.host.trim() || !draft.transport.user.trim())) { connectionError.value = 'SSH host and username are required.'; return; }
     if(draft.mode==='live') return saveLiveConnection(draft, connectNow);

@@ -61,7 +61,7 @@ import {
   Sun,
   Square,
 } from 'lucide-vue-next';
-import { cancelLiveJob, readWriteRoute, tlsOptional, usesTls, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
+import { cancelLiveJob, readWriteRoute, tlsOptional, usesTls, setTls, tlsNote, tlsOffLabel, isLoopbackHost, passwordRsa, setPasswordRsa, normalizePublicKey, writeKeywords, describeJob, describeTransactionEnd, describeUnresolvedOutcome, describeJournalProblem } from './services/liveConnections';
 import { useWorkspace } from './stores/workspace';
 import { filterRows, selectQuery } from './services/mockTransport';
 import SqlEditor from './components/SqlEditor.vue';
@@ -2245,7 +2245,7 @@ onBeforeUnmount(() => {
           >
           <template v-else-if="w.view === 'SQL'">
             <div v-if="isLive" class="editor-toolbar">
-              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · ${store.connection && !usesTls(store.connection) ? 'TLS off (this computer only)' : 'Verified TLS'}` }}</span>
+              <span>{{ store.connection?.engine === 'SQLite' ? 'Live · SQLite file' : `Live · ${store.connection?.transport.type === 'ssh' ? 'SSH tunnel · Verified host key' : 'Direct'} · ${store.connection && !usesTls(store.connection) ? tlsOffLabel(store.connection) : 'Verified TLS'}` }}</span>
               <span class="access-badge" :class="{ 'read-write': liveReadWrite }" data-testid="live-access">{{ liveReadWrite ? 'Read-write' : 'Read-only' }}</span>
               <span class="toolbar-end">{{ liveSession?.status || 'disconnected' }}</span>
               <button v-if="liveSession?.status!=='connected'" class="button" :disabled="liveSession?.status==='connecting'" @click="newConnection(store.connection)">Connect</button>
@@ -2942,9 +2942,21 @@ onBeforeUnmount(() => {
           <div class="modal-body">
             <label v-if="demo" class="form-label">Connection mode<select :disabled="testing" v-model="connectionDraft.mode" aria-label="Connection mode"><option value="mock">Mock (session simulation)</option><option value="live" :disabled="nativeHostState.kind!=='desktop'">Live (desktop · Direct/SSH server or SQLite file)</option></select></label>
             <div v-if="connectionDraft.mode==='live'" class="form-label" data-testid="access-option"><label class="compact-choice"><input type="checkbox" :disabled="testing || !readWriteAvailable || !readWriteRoute(connectionDraft)" :checked="!readWriteAvailable || !readWriteRoute(connectionDraft) || connectionDraft.readOnly === true" @change="connectionDraft.readOnly = ($event.target as HTMLInputElement).checked ? true : undefined" /> Read-only connection</label><span class="muted">{{ !readWriteAvailable ? 'This build runs live connections read-only.' : !readWriteRoute(connectionDraft) ? 'PostgreSQL over an SSH tunnel is read-only for now.' : connectionDraft.readOnly ? 'Engine-enforced read-only SELECT subset. Saved with this connection.' : `Read-write: scripts, transactions and row edits can change data.${connectionDraft.environment==='Production' ? ' PROD asks for confirmation when connecting.' : ''}` }}</span></div>
-            <div v-if="connectionDraft.mode==='live' && (connectionDraft.engine==='MySQL' || connectionDraft.engine==='MariaDB') && connectionDraft.transport.type==='direct'" class="form-label" data-testid="tls-option">
-              <label v-if="tlsOptional(connectionDraft)" class="compact-choice"><input type="checkbox" :disabled="testing" :checked="connectionDraft.tls !== false" @change="connectionDraft.tls = ($event.target as HTMLInputElement).checked ? undefined : false" /> Use TLS</label>
-              <span class="muted">{{ !tlsOptional(connectionDraft) ? 'Verified TLS is required for connections to other computers.' : usesTls(connectionDraft) ? 'The server certificate and host name are verified.' : 'TLS off: traffic to this computer is not encrypted. Turn on to verify the certificate and host name.' }}</span>
+            <div v-if="tlsOptional(connectionDraft)" class="form-label" data-testid="tls-option">
+              <label class="compact-choice"><input type="checkbox" :disabled="testing" :checked="usesTls(connectionDraft)" @change="setTls(connectionDraft, ($event.target as HTMLInputElement).checked)" /> Use TLS</label>
+              <span :class="usesTls(connectionDraft) || isLoopbackHost(connectionDraft.host) ? 'muted' : 'tls-warning'">{{ tlsNote(connectionDraft) }}</span>
+            </div>
+            <div v-if="tlsOptional(connectionDraft) && !usesTls(connectionDraft)" class="form-label" role="radiogroup" aria-labelledby="rsa-option-title" data-testid="rsa-option">
+              <span id="rsa-option-title">Password without TLS</span>
+              <span class="muted">Used when the server asks for a full sign-in (MySQL caching_sha2_password, for example after it restarts). RSA encryption protects only the password; queries and results are still sent unencrypted.</span>
+              <label class="compact-choice"><input type="radio" name="password-rsa" :disabled="testing" :checked="passwordRsa(connectionDraft)==='none'" @change="setPasswordRsa(connectionDraft, 'none')" /> Don’t send it without TLS</label>
+              <label class="compact-choice"><input type="radio" name="password-rsa" :disabled="testing" :checked="passwordRsa(connectionDraft)==='trusted'" @change="setPasswordRsa(connectionDraft, 'trusted')" /> Encrypt it with the server’s public key (trusted)</label>
+              <template v-if="passwordRsa(connectionDraft)==='trusted'">
+                <textarea :disabled="testing" rows="4" spellcheck="false" placeholder="-----BEGIN PUBLIC KEY-----" aria-label="Server RSA public key" :value="connectionDraft.serverPublicKeyPem" @input="connectionDraft.serverPublicKeyPem = ($event.target as HTMLTextAreaElement).value" @change="connectionDraft.serverPublicKeyPem = normalizePublicKey(($event.target as HTMLTextAreaElement).value)"></textarea>
+                <span class="muted">Paste the server’s public_key.pem from its data directory, or ask its administrator. StoneQL never asks the server for it. Saved with this connection; it is not secret.</span>
+              </template>
+              <label class="compact-choice"><input type="radio" name="password-rsa" :disabled="testing" :checked="passwordRsa(connectionDraft)==='retrieve'" @change="setPasswordRsa(connectionDraft, 'retrieve')" /> Fetch the key from the server without verifying it</label>
+              <span v-if="passwordRsa(connectionDraft)==='retrieve'" class="tls-warning">The key is not verified: anyone who can impersonate this server on the network can send their own key and read your password. Prefer TLS or a trusted key.</span>
             </div>
             <label v-if="connectionDraft.mode==='live' && connectionDraft.engine!=='SQLite' && usesTls(connectionDraft)" class="form-label">Trusted CA certificate (optional, session only)<input :disabled="testing" type="file" accept=".pem,.crt,.cer" aria-label="Trusted CA certificate" @change="readCertificate"/><span class="muted">{{ connectionDraft.rootCertificatePem ? 'CA certificate loaded for this session.' : 'System trust roots. With TLS on, the certificate and host name are always verified.' }}</span><button v-if="connectionDraft.rootCertificatePem" type="button" class="button" @click="connectionDraft.rootCertificatePem=undefined">Use system trust roots</button></label>
             <div class="form-two">

@@ -24,6 +24,12 @@ export interface ConnectionPreferences {
 const text = (value: unknown, fallback = '') => (typeof value === 'string' ? value : fallback);
 const reference = (value: unknown) =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value) ? value : undefined;
+/** A server RSA public key (PEM): public material only, at most 16 KiB. */
+const publicKey = (value: unknown) => {
+  if (typeof value !== 'string' || value.length > 16_384 || value.includes('PRIVATE KEY')) return undefined;
+  const pem = value.replace(/[\0\s]+$/, '').trim();
+  return pem.startsWith('-----BEGIN PUBLIC KEY-----') ? pem : undefined;
+};
 /** Drops undefined members so serialized profiles never contain placeholder keys. */
 const defined = <T extends object>(value: T): T =>
   Object.fromEntries(Object.entries(value).filter(([, member]) => member !== undefined)) as T;
@@ -55,8 +61,14 @@ export function sanitizeConnection(value: Connection, groups: ConnectionGroup[])
     groupId: groups.some((g) => g.id === source.groupId) ? source.groupId : '',
     // Opaque OS secret reference only; the secret itself is never serialized.
     ...defined({ passwordRef: source.mode === 'live' ? reference(source.passwordRef) : undefined }),
-    // Only an explicit "TLS off" is stored; anything else means verified TLS.
+    // Only an explicit "TLS off" is stored; anything else means verified TLS. For another
+    // computer it counts only with `remoteTlsOff` (see usesTls).
     ...defined({ tls: source.mode === 'live' && source.tls === false ? (false as const) : undefined }),
+    ...defined({ remoteTlsOff: source.mode === 'live' && source.tls === false && source.remoteTlsOff === true ? (true as const) : undefined }),
+    // TLS off only: the server's RSA public key (public, not a secret) or the explicit opt-in to
+    // fetch it unverified.
+    ...defined({ serverPublicKeyPem: source.mode === 'live' && source.tls === false ? publicKey(source.serverPublicKeyPem) : undefined }),
+    ...defined({ publicKeyRetrieval: source.mode === 'live' && source.tls === false && source.serverPublicKeyPem === undefined && source.publicKeyRetrieval === true ? (true as const) : undefined }),
     ...defined({ readOnly: source.mode === 'live' && source.readOnly === true ? (true as const) : undefined }),
     // Deliberately reconstruct transport. Never serialize credential fields, grants or unknown
     // fields; only the enrolled public host key, its fingerprint, references and a file name.

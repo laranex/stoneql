@@ -938,6 +938,9 @@ code {
 .unsaved {
   color: var(--warning);
 }
+.tls-warning {
+  color: var(--warning);
+}
 .query-tabs {
   display: flex;
   align-items: center;

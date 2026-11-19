@@ -7,6 +7,7 @@ import { parseMaximumRss } from './resource-report.mjs';
 import { cpus, totalmem, release, arch } from 'node:os';
 import { fixtureEnvironment, assertLocalFixtureDocker } from './fixture-environment.mjs';
 import { runRemotely, endRemote } from './remote-fixture.mjs';
+const RSA_TEST = 'rsa_sign_in_without_tls_after_server_restart';
 const root = resolve(import.meta.dirname, '..');
 const base = fixtureEnvironment(process.env);
 const packetEvaluation = process.argv.slice(2).includes('--packet-limit');
@@ -276,6 +277,25 @@ INSERT INTO resource_rows SELECT 1+a.n+10*b.n+100*c.n+1000*d.n+10000*e.n,REPEAT(
       const restored = loaded.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/));
       report.exportRestore = { sql: restored[0], csv: restored[1] };
       if (JSON.stringify(restored) !== JSON.stringify([['5', '5'], ['5', '5']])) throw Error(`${engine}: exported files did not restore exactly: ${JSON.stringify(restored)}`);
+      // TLS off with RSA password exchange: each phase restarts the server first, so MySQL's
+      // caching_sha2_password authentication cache is empty (tmpfs data: a fresh server with its
+      // own new RSA key pair, from the same init scripts).
+      report.rsaAfterRestart = [];
+      for (const phase of ['trusted', 'retrieve']) {
+        run('docker', [...args, 'restart', engine], env);
+        await waitForFixture();
+        const phaseEnv = { ...env, STONEQL_RSA_PHASE: phase };
+        if (engine === 'mysql') {
+          const key = run('docker', [...args, 'exec', '-T', engine, 'cat', '/var/lib/mysql/public_key.pem'], env);
+          phaseEnv.STONEQL_SERVER_PUBLIC_KEY = join(temp, `server-public-key-${phase}.pem`);
+          writeFileSync(phaseEnv.STONEQL_SERVER_PUBLIC_KEY, key + '\n');
+        }
+        const stdout = remote ? await runRemotely(phaseEnv, engine, RSA_TEST) : run(nativeBinary, ['--ignored', '--exact', RSA_TEST, '--nocapture'], phaseEnv);
+        const line = stdout.split("\n").find((text) => text.startsWith("STONEQL_RSA_RESULT "));
+        if (!line) throw Error(`${engine}: RSA ${phase} report missing`);
+        report.rsaAfterRestart.push(JSON.parse(line.slice('STONEQL_RSA_RESULT '.length)));
+        console.log(`${engine}: TLS-off RSA sign-in after a server restart passed (${phase})`);
+      }
     }
     writeFileSync(join(output, `${executionEvaluation ? 'execution-' : resourceEvaluation ? 'resource-' : nativeEvaluation ? 'native-' : packetEvaluation ? 'packet-' : ''}${engine}.json`), JSON.stringify(report, null, 2) + '\n');
     console.log(executionEvaluation ? `${engine}: read-write execution checks passed (cancel p95 ${report.cancel.p95Ms.toFixed(1)} ms)` : resourceEvaluation ? `${engine}: resource and metadata profile passed` : nativeEvaluation ? `${engine}: real database IPC checks passed` : packetEvaluation ? `${engine}: TLS packet-bound and certificate checks passed` : `${engine}: ${report.lifecycleSamples} TLS lifecycle samples passed`);

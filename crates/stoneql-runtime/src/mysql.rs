@@ -1,6 +1,7 @@
 //! MySQL/MariaDB protocol options, identity check and lossless cell decoding.
 use super::{
-    DirectServer, LifecycleError, ReadError, connect_error, read_only::hex, ssh::Endpoint,
+    DirectServer, LifecycleError, PasswordRsaKey, ReadError, connect_error, read_only::hex,
+    ssh::Endpoint,
 };
 use sqlx::{
     ConnectOptions, MySqlPool, Row, TypeInfo, ValueRef,
@@ -25,8 +26,8 @@ pub(crate) fn options(
         .username(&config.username)
         .password(&config.password)
         .database(&config.database)
-        // Verified TLS, or (explicit, loopback only, validated above) no TLS at all: never
-        // `Preferred`, so a TLS failure cannot silently become plaintext.
+        // Verified TLS, or (explicit, validated above) no TLS at all: never `Preferred`, so a TLS
+        // failure cannot silently become plaintext.
         .ssl_mode(if config.tls {
             MySqlSslMode::VerifyIdentity
         } else {
@@ -49,8 +50,17 @@ pub(crate) fn options(
     if let Some(pem) = &config.root_certificate_pem {
         options = options.ssl_ca_from_pem(pem.clone());
     }
+    // Without TLS, the server's RSA key is used only if trusted, or fetched only on explicit
+    // opt-in; otherwise a full sign-in fails before the password is sent.
+    options = match &config.rsa_key {
+        PasswordRsaKey::Trusted(pem) => options
+            .server_public_key_pem(pem.clone())
+            .allow_public_key_retrieval(false),
+        PasswordRsaKey::RetrieveUnverified => options.allow_public_key_retrieval(true),
+        PasswordRsaKey::None => options.allow_public_key_retrieval(false),
+    };
     if let Some(endpoint) = endpoint {
-        // Plaintext is for this computer only; an SSH-tunnelled server is remote.
+        // TLS off is offered for Direct connections only; an SSH tunnel keeps verified TLS.
         if !config.tls {
             return Err(LifecycleError::InvalidConfiguration);
         }
@@ -65,7 +75,8 @@ pub(crate) async fn open(
     deadline: Duration,
 ) -> Result<(MySqlPool, String), LifecycleError> {
     let options = options(config, endpoint)?;
-    // Plaintext to `localhost` only if the name resolves to loopback addresses alone.
+    // `localhost` means this computer (the dialog treats it so, without the explicit choice
+    // needed for another host): plaintext to it only if it resolves to loopback addresses alone.
     if !config.tls && config.host.eq_ignore_ascii_case("localhost") {
         let resolved: Vec<_> = tokio::net::lookup_host((config.host.as_str(), config.port))
             .await

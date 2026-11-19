@@ -86,19 +86,31 @@ StoneQL could not open the connection. It deliberately does not show the server'
 
 1. **Server running and reachable:** the host name and port are correct, the server is running and no firewall blocks it.
 2. **Account:** the username and password are correct, and the account may connect from your computer.
-3. **TLS on a remote server:** StoneQL verifies the server certificate and that it names the host you typed. Use the host name in the certificate (not an IP address, unless the certificate includes it). If the certificate comes from a private certificate authority, add the CA's PEM file under **Trusted CA certificate (optional, session only)**. StoneQL never connects without TLS to another computer.
+3. **TLS on a remote server:** StoneQL verifies the server certificate and that it names the host you typed. Use the host name in the certificate (not an IP address, unless the certificate includes it). If the certificate comes from a private certificate authority, add the CA's PEM file under **Trusted CA certificate (optional, session only)**. StoneQL never falls back to a connection without TLS.
 4. **SSH tunnel:** TLS is verified against the database **Host** you entered (as the SSH server sees it), so that name must be covered by the database server's certificate.
 5. **TLS on this computer (MySQL/MariaDB):** if the message adds “If this local server has no certificate trusted for this host name, turn off Use TLS and try again.”, edit the connection, untick **Use TLS** and connect again. Local development servers often have a self-signed certificate.
-6. **PostgreSQL:** StoneQL refuses to start a PostgreSQL connection while the `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` or `PGOPTIONS` environment variables are set, and it does not accept Unix-socket hosts. Use a TCP host name and port.
+6. **TLS off (MySQL/MariaDB):** if the message adds “Without TLS this also happens when the account requires TLS (REQUIRE SSL)…”, the server may require TLS for this account. It reports that the same way as a wrong password. Turn **Use TLS** on. If you chose **Encrypt it with the server's public key (trusted)**, also check that the key is this server's: a server creates a new key pair when its data directory is created.
+7. **PostgreSQL:** StoneQL refuses to start a PostgreSQL connection while the `PGSSLROOTCERT`, `PGSSLCERT`, `PGSSLKEY` or `PGOPTIONS` environment variables are set, and it does not accept Unix-socket hosts. Use a TCP host name and port.
 
-### “The server requires an encrypted sign-in for this account…”
+### “The server asked for a full sign-in…”
 
-Full message: “The server requires an encrypted sign-in for this account. Turn on Use TLS with a trusted certificate, or (MySQL caching_sha2_password) sign in once with the mysql client since the server last started, then try again. Nothing was retried without TLS.”
+Full message: “The server asked for a full sign-in (MySQL caching_sha2_password, for example after a restart). Without TLS this needs the server’s RSA public key: turn on Use TLS, or under Password without TLS paste the server’s public key or allow fetching it. The password was not sent.”
 
-You connected to MySQL or MariaDB on this computer with **Use TLS** off, and the server needs an encrypted sign-in. This happens with MySQL 8 accounts using `caching_sha2_password` (the default), or when the server requires secure connections. Either:
+> In v0.1.0-beta.2 this message reads “The server requires an encrypted sign-in for this account…” and **Password without TLS** does not exist yet: turn **Use TLS** on, or sign in once with the `mysql` command-line client after the server starts, then connect again.
+
+You connected to MySQL with **Use TLS** off, and the server needs the password itself. MySQL 8 accounts using `caching_sha2_password` (the default) need this after every server restart, until the account has signed in once. Without TLS, StoneQL sends the password only encrypted with the server's RSA public key, and only as you chose. Edit the connection and either:
 
 - turn **Use TLS** on (the server needs a certificate trusted for the host name), or
-- sign in once with the `mysql` command-line client after the server starts, then connect again from StoneQL.
+- under **Password without TLS**, choose **Encrypt it with the server's public key (trusted)** and paste the server's public key (see [TLS and certificates](./connect.md#tls-and-certificates) for how to get it), or
+- choose **Fetch the key from the server without verifying it**, if you trust the network path to the server.
+
+RSA protects only the password; queries and results are still sent unencrypted. You no longer need to sign in once with the `mysql` client after a restart.
+
+### “The server accepts only TLS connections…”
+
+Full message: “The server accepts only TLS connections. Turn on Use TLS; StoneQL never switches between TLS and plaintext by itself.”
+
+The server is set to `require_secure_transport=ON`. Turn **Use TLS** on. For MySQL with an account that is not yet cached and no RSA option chosen, you see the full sign-in message above first; turning TLS on fixes both.
 
 ### SSH host key unknown or changed
 

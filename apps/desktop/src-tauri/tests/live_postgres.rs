@@ -229,6 +229,7 @@ fn postgres_commands_use_owned_tls_fixture() {
             database: "stoneql_m001_fixture".into(),
             root_certificate_pem: Some(fixture.ca.as_bytes().to_vec()),
             tls: true,
+            rsa_key: stoneql_runtime::PasswordRsaKey::None,
         };
         let leased = connections.connect(owner_id, config()).await.unwrap();
         settle_readers(&mut observer, 1).await;

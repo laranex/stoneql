@@ -180,6 +180,7 @@ async fn main() -> Result<(), Failure> {
                 database: database.into(),
                 root_certificate_pem: Some(ca.clone()),
                 tls: true,
+                rsa_key: stoneql_runtime::PasswordRsaKey::None,
             },
             None,
             None,

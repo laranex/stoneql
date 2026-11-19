@@ -77,12 +77,40 @@ pub struct DirectServer {
     pub password: String,
     pub database: String,
     pub root_certificate_pem: Option<Vec<u8>>,
-    /// Verified TLS (certificate chain and host name). `false` is accepted only for a direct
-    /// MySQL/MariaDB connection to this computer (`localhost`, `127.0.0.1`, `::1`), without a CA,
-    /// and then no TLS is attempted at all. A TLS failure never falls back to plaintext.
+    /// Verified TLS (certificate chain and host name). `false` is an explicit choice for a direct
+    /// MySQL/MariaDB connection, without a CA, and then no TLS is attempted at all. A TLS failure
+    /// never falls back to plaintext and plaintext is never upgraded.
     pub tls: bool,
+    /// TLS off only: how the password is protected when the server asks for a full sign-in.
+    pub rsa_key: PasswordRsaKey,
 }
-/// Loopback host names for which plaintext MySQL/MariaDB may be chosen explicitly.
+/// RSA protection of a MySQL/MariaDB password sent without TLS, when the server asks for a full
+/// sign-in (`caching_sha2_password` with an empty authentication cache, `sha256_password`). It
+/// protects only the password exchange; queries and results are not encrypted.
+#[derive(Clone, PartialEq, Eq)]
+pub enum PasswordRsaKey {
+    /// No RSA exchange: such a sign-in fails with [`LifecycleError::EncryptedLoginRequired`].
+    None,
+    /// A trusted RSA public key (PEM) supplied by the user; it is never requested from the server.
+    Trusted(Vec<u8>),
+    /// Explicit opt-in: the key is requested from the server unverified, so a server
+    /// impersonating the real one can supply its own key and read the password.
+    RetrieveUnverified,
+}
+impl PasswordRsaKey {
+    /// A PEM `PUBLIC KEY` that parses as an RSA key, at most 16 KiB, without private material.
+    /// Trailing NUL bytes and whitespace are ignored, as the driver does (MySQL's own
+    /// `public_key.pem` ends with a NUL byte).
+    pub fn is_valid_public_key_pem(pem: &[u8]) -> bool {
+        use rsa::pkcs8::DecodePublicKey;
+        pem.len() <= 16_384
+            && std::str::from_utf8(pem).is_ok_and(|pem| {
+                let pem = pem.trim_end_matches(|c: char| c == '\0' || c.is_ascii_whitespace());
+                !pem.contains("PRIVATE KEY") && rsa::PublicKey::from_public_key_pem(pem).is_ok()
+            })
+    }
+}
+/// Loopback host names (this computer).
 pub fn is_loopback_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
@@ -90,10 +118,18 @@ impl DirectServer {
     fn validate(&self) -> Result<(), LifecycleError> {
         if !self.tls
             && (!matches!(self.engine, Engine::MySql | Engine::MariaDb)
-                || !is_loopback_host(&self.host)
                 || self.root_certificate_pem.is_some())
         {
             return Err(LifecycleError::InvalidConfiguration);
+        }
+        // RSA options only apply without TLS, and a trusted key must be a valid RSA public key.
+        match &self.rsa_key {
+            PasswordRsaKey::None => {}
+            _ if self.tls => return Err(LifecycleError::InvalidConfiguration),
+            PasswordRsaKey::Trusted(pem) if !PasswordRsaKey::is_valid_public_key_pem(pem) => {
+                return Err(LifecycleError::InvalidConfiguration);
+            }
+            PasswordRsaKey::Trusted(_) | PasswordRsaKey::RetrieveUnverified => {}
         }
         if !matches!(
             self.engine,
@@ -140,10 +176,12 @@ pub enum LifecycleError {
     /// Recognized but unsupported on this host/build (for example RSA SSH keys).
     Unsupported,
     Cancelled,
-    /// Plaintext (TLS off) was refused: the server requires secure transport, or the account's
-    /// first sign-in needs an encrypted connection (`caching_sha2_password` full authentication,
-    /// which this build performs only over TLS).
+    /// TLS off: the server asked for a full sign-in (`caching_sha2_password` with an empty
+    /// authentication cache, `sha256_password`), which needs the server's RSA public key, and no
+    /// trusted key is set and fetching it was not allowed. Nothing was sent.
     EncryptedLoginRequired,
+    /// TLS off: the server accepts only secure transport (MySQL 3159). Never retried with TLS.
+    SecureTransportRequired,
     /// The handle is running a job or holds a transaction; nothing was changed.
     Busy,
     /// The server denied this account access to the requested database (MySQL 1044).
@@ -167,8 +205,9 @@ impl fmt::Display for LifecycleError {
             Self::Unsupported => "This transport option is not supported.",
             Self::Cancelled => "Connection setup was cancelled.",
             Self::EncryptedLoginRequired => {
-                "The server requires an encrypted sign-in for this account; use TLS."
+                "The server asked for a full sign-in, which without TLS needs its RSA public key."
             }
+            Self::SecureTransportRequired => "The server accepts only TLS connections.",
             Self::Busy => "The connection is busy; finish the running work or transaction first.",
             Self::DatabaseAccessDenied => "The server denied this account access to that database.",
             Self::UnknownDatabase => "That database does not exist on the server.",
@@ -179,10 +218,12 @@ impl std::error::Error for LifecycleError {}
 fn connect_error(error: sqlx::Error) -> LifecycleError {
     match &error {
         sqlx::Error::PoolTimedOut => LifecycleError::Timeout,
-        // The driver's fixed text when `caching_sha2_password` full authentication needs RSA
-        // over a plaintext connection (the RSA backend is not built).
+        // The vendored driver's fixed text when a full sign-in without TLS needs the server's RSA
+        // public key, no trusted key is set and retrieval is not allowed (nothing was sent).
         sqlx::Error::Configuration(message)
-            if message.to_string().starts_with("RSA auth backend disabled") =>
+            if message
+                .to_string()
+                .starts_with("RSA public key retrieval is not allowed") =>
         {
             LifecycleError::EncryptedLoginRequired
         }
@@ -192,7 +233,7 @@ fn connect_error(error: sqlx::Error) -> LifecycleError {
             .and_then(|error| error.try_downcast_ref::<sqlx::mysql::MySqlDatabaseError>())
             .is_some_and(|error| error.number() == 3159) =>
         {
-            LifecycleError::EncryptedLoginRequired
+            LifecycleError::SecureTransportRequired
         }
         _ => LifecycleError::Unavailable,
     }
@@ -962,18 +1003,31 @@ mod tests {
             database: "fixture".into(),
             root_certificate_pem: None,
             tls: true,
+            rsa_key: super::PasswordRsaKey::None,
         }
     }
+    /// A throwaway 2048-bit RSA public key (test data only).
+    const TEST_PUBLIC_KEY: &str = include_str!("../tests/fixtures/rsa-public-key.pem");
     #[test]
-    fn plaintext_is_only_an_explicit_loopback_mysql_choice_and_tls_options_never_fall_back() {
+    fn plaintext_is_an_explicit_mysql_choice_and_tls_options_never_fall_back() {
         let plain = |engine: Engine, host: &str| DirectServer {
             engine,
             host: host.into(),
             tls: false,
+            rsa_key: super::PasswordRsaKey::None,
             ..config()
         };
         for host in ["localhost", "LOCALHOST", "127.0.0.1", "::1"] {
             assert!(is_loopback_host(host));
+        }
+        // TLS off is an explicit choice for any host, local or remote.
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "::1",
+            "192.0.2.10",
+            "db.example.com",
+        ] {
             for engine in [Engine::MySql, Engine::MariaDb] {
                 assert_eq!(plain(engine, host).validate(), Ok(()), "{host}");
                 let options = mysql::options(&plain(engine, host), None).unwrap();
@@ -983,19 +1037,8 @@ mod tests {
                 ));
             }
         }
-        for host in [
-            "127.0.0.2",
-            "0.0.0.0",
-            "db.example.com",
-            "localhost.example.com",
-            "::ffff:127.0.0.1",
-            "[::1]",
-        ] {
-            assert_eq!(
-                plain(Engine::MySql, host).validate(),
-                Err(LifecycleError::InvalidConfiguration),
-                "{host}"
-            );
+        for host in ["127.0.0.2", "db.example.com", "[::1]"] {
+            assert!(!is_loopback_host(host));
         }
         assert_eq!(
             plain(Engine::PostgreSql, "127.0.0.1").validate(),
@@ -1023,11 +1066,45 @@ mod tests {
                 sqlx::mysql::MySqlSslMode::VerifyIdentity
             ));
         }
-        // The driver's plaintext-RSA refusal and secure-transport refusal are classified, not
-        // reported as a generic failure.
+        // RSA options: only without TLS, and a trusted key must be an RSA public key.
+        let with_key = |tls: bool, rsa_key: PasswordRsaKey| DirectServer {
+            tls,
+            rsa_key,
+            ..config()
+        };
+        let trusted = || PasswordRsaKey::Trusted(TEST_PUBLIC_KEY.as_bytes().to_vec());
+        assert_eq!(with_key(false, trusted()).validate(), Ok(()));
+        // MySQL's public_key.pem ends with a NUL byte.
+        let with_nul = PasswordRsaKey::Trusted(format!("{TEST_PUBLIC_KEY}\0").into_bytes());
+        assert_eq!(with_key(false, with_nul).validate(), Ok(()));
+        assert_eq!(
+            with_key(false, PasswordRsaKey::RetrieveUnverified).validate(),
+            Ok(())
+        );
+        for rsa_key in [trusted(), PasswordRsaKey::RetrieveUnverified] {
+            assert_eq!(
+                with_key(true, rsa_key).validate(),
+                Err(LifecycleError::InvalidConfiguration)
+            );
+        }
+        let with_private = format!("{TEST_PUBLIC_KEY}-----BEGIN PRIVATE KEY-----");
+        for pem in [
+            &b""[..],
+            b"-----BEGIN PUBLIC KEY-----\nnot base64\n-----END PUBLIC KEY-----\n",
+            b"-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n",
+            with_private.as_bytes(),
+            &[b'a'; 16_385][..],
+        ] {
+            assert_eq!(
+                with_key(false, PasswordRsaKey::Trusted(pem.to_vec())).validate(),
+                Err(LifecycleError::InvalidConfiguration)
+            );
+        }
+        // The driver's refusal to fetch the key and the secure-transport refusal are
+        // classified, not reported as a generic failure.
         assert_eq!(
             connect_error(sqlx::Error::Configuration(
-                "RSA auth backend disabled; enable feature `mysql-rsa` (or `rsa` if using sqlx-mysql directly) or use TLS.".into()
+                "RSA public key retrieval is not allowed; set a trusted server public key, allow retrieval or use TLS.".into()
             )),
             LifecycleError::EncryptedLoginRequired
         );

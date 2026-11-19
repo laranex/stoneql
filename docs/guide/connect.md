@@ -14,7 +14,7 @@ New connections are **read-write**: SQL scripts, row edits and structure changes
 4. **Optional: label it.** Choose an **Environment** (Local, Development, Staging, Production or Custom), a **Group** and a **Connection color**. Connections tagged **Production** show a **PROD** badge and ask for extra confirmation; see [Production connections](#production-connections).
 5. **Enter the server and account.** Keep **Direct** selected (or see [Connect through an SSH tunnel](#connect-through-an-ssh-tunnel)), then fill in **Host**, **Port**, **Username** and **Password**. These fields are used exactly as typed.
 6. **Choose read-write or read-only.** Leave **Read-only connection** unticked for full access, or tick it to allow only reading. The choice is saved with the connection. See [Read-only or read-write](#read-only-or-read-write).
-7. **Check encryption.** For a server on another computer, StoneQL always uses verified TLS, so there is nothing to choose. For MySQL or MariaDB on this computer, see [TLS and certificates](#tls-and-certificates).
+7. **Check encryption.** **Use TLS** is off for a new MySQL or MariaDB connection. Turn it on to encrypt the connection and verify the server; see [TLS and certificates](#tls-and-certificates).
 8. **Decide whether to remember the password.** **Remember database password** is ticked by default; the note under it says where the password will be saved. See [Saved passwords](#saved-passwords). Untick it to type the password each time you connect.
 9. **Test and choose a database.** Choose **Test connection**. A successful test shows the databases your account can see in **Databases on this server**: pick one. You can instead type a name in **Default database**. A default database is required to save.
 10. **Connect.** Choose **Save & connect**. (**Save** stores the connection without connecting.)
@@ -43,9 +43,22 @@ Set **Environment** to **Production** for servers that matter. These connections
 
 ## TLS and certificates
 
-- **Another computer:** StoneQL always uses TLS and verifies the server's certificate and host name. It never falls back to an unencrypted connection.
-- **MySQL or MariaDB on this computer** (host `localhost`, `127.0.0.1` or `::1`, Direct): the dialog shows **Use TLS**, off for new connections. Off sends traffic unencrypted and needs no certificate. On verifies the certificate and host name like any other connection. If a local TLS connection fails because the certificate does not match, turn **Use TLS** off and try again.
+> **Newer than beta 2.** Turning TLS off for another computer and **Password without TLS** come after v0.1.0-beta.2. In beta 2, TLS can be turned off only for this computer, and after a MySQL restart you sign in once with the `mysql` command-line client before connecting without TLS.
+
+- **Use TLS on:** StoneQL verifies the server's certificate and host name. It never falls back to an unencrypted connection.
+- **MySQL or MariaDB over Direct** shows **Use TLS**, off for new connections. Without TLS, queries, results and the server's identity are unprotected on the network; for a server on another computer the dialog warns about this. Turn **Use TLS** on whenever the server has a certificate you can trust. Connections saved before this option for another computer keep TLS on. StoneQL never switches between TLS and no TLS by itself.
 - **PostgreSQL** and SSH-tunnelled connections always use verified TLS.
+- **Password without TLS:** with **Use TLS** off, MySQL sometimes asks for a full sign-in, which sends the password itself: for `caching_sha2_password` accounts (the MySQL 8 default) after the server restarts, until the account has signed in once. Without TLS the password must then be encrypted with the server's RSA public key. Choose under **Password without TLS**:
+  - **Don't send it without TLS** (default): the sign-in stops before the password is sent. Accounts the server has already cached, and MariaDB accounts, still connect.
+  - **Encrypt it with the server's public key (trusted):** paste the server's public key (`-----BEGIN PUBLIC KEY-----`). StoneQL never asks the server for it. It is saved with the connection; it is not secret. To get it, ask the server's administrator, copy `public_key.pem` from the server's data directory, or run this once over a connection you trust:
+
+    ```sh
+    mysql --raw -N -B -e "SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Caching_sha2_password_rsa_public_key'"
+    ```
+
+  - **Fetch the key from the server without verifying it:** convenient, but anyone who can impersonate the server on the network can send their own key and read your password. Use it only when you trust the network path.
+
+  RSA protects only the password. Queries and results are still sent unencrypted; use TLS for that.
 - **Your own certificate authority:** if the server's certificate is issued by a private CA, choose its PEM file under **Trusted CA certificate (optional, session only)**. It is kept only until StoneQL quits (16 KiB maximum; private keys are rejected). **Use system trust roots** removes it.
 
 ## Saved passwords

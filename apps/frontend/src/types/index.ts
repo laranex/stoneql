@@ -36,10 +36,20 @@ export interface Connection {
   mode?: 'mock'|'live';
   rootCertificatePem?: string;
   /**
-   * Live direct MySQL/MariaDB to this computer only: `false` turns TLS off. Omitted means
-   * verified TLS, which saved profiles from before this option keep. Ignored for other hosts.
+   * Live direct MySQL/MariaDB: `false` turns TLS off. Omitted means verified TLS, which saved
+   * profiles from before this option keep. For a host other than this computer TLS is off only
+   * together with `remoteTlsOff`, so an older profile's stored `false` never turns it off.
    */
   tls?: boolean;
+  /** Explicit "TLS off" for a host other than this computer (with `tls: false`). */
+  remoteTlsOff?: boolean;
+  /**
+   * TLS off only: the server's RSA public key (PEM), trusted for the password exchange of a full
+   * sign-in. Public, saved with the profile. `''` while it is being pasted.
+   */
+  serverPublicKeyPem?: string;
+  /** TLS off only, explicit opt-in: fetch the server's RSA public key without verifying it. */
+  publicKeyRetrieval?: boolean;
   /** Session access for one connect, derived from `readOnly` and the transport; never persisted. */
   access?: 'read_only' | 'read_write';
   /**

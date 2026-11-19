@@ -54,22 +54,63 @@ function sshTunnel(connection: Connection): SshTunnelRequest | undefined {
   }
   return { host: transport.host, port: transport.port, username: transport.user, auth };
 }
-/** Hosts that mean this computer; only these may turn TLS off (the host enforces the same rule). */
+/** Hosts that mean this computer. */
 export function isLoopbackHost(host: string): boolean {
   return host.toLowerCase() === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
-/** "Use TLS" is offered only for a live direct MySQL/MariaDB connection to this computer. */
+/** "Use TLS" is offered for a live direct MySQL/MariaDB connection (the host enforces the same rule). */
 export function tlsOptional(connection: Connection): boolean {
   return connection.mode === 'live' && (connection.engine === 'MySQL' || connection.engine === 'MariaDB')
-    && connection.transport.type === 'direct' && isLoopbackHost(connection.host);
+    && connection.transport.type === 'direct';
+}
+/**
+ * "Use TLS" as chosen in the dialog, for any host. Off is recorded with `remoteTlsOff` so it also
+ * holds for another computer (a profile with only `tls: false` there predates the choice).
+ */
+export function setTls(connection: Connection, on: boolean): void {
+  connection.tls = on ? undefined : false;
+  connection.remoteTlsOff = on ? undefined : true;
+}
+export function tlsNote(connection: Connection): string {
+  if (usesTls(connection)) return 'The server certificate and host name are verified.';
+  return isLoopbackHost(connection.host)
+    ? 'TLS off: traffic to this computer is not encrypted. Turn on to verify the certificate and host name.'
+    : 'TLS off: queries, results and the server’s identity are not protected on the network. Turn on to verify the certificate and host name.';
+}
+/** How a password is protected without TLS when the server asks for a full sign-in. */
+export type PasswordRsa = 'none' | 'trusted' | 'retrieve';
+export function passwordRsa(connection: Connection): PasswordRsa {
+  return connection.serverPublicKeyPem !== undefined ? 'trusted' : connection.publicKeyRetrieval ? 'retrieve' : 'none';
+}
+export function setPasswordRsa(connection: Connection, choice: PasswordRsa): void {
+  connection.serverPublicKeyPem = choice === 'trusted' ? connection.serverPublicKeyPem ?? '' : undefined;
+  connection.publicKeyRetrieval = choice === 'retrieve' ? true : undefined;
+}
+/** A pasted or loaded key without MySQL's trailing NUL byte and surrounding whitespace. */
+export function normalizePublicKey(pem: string): string {
+  return pem.replace(/[\0\s]+$/, '').trim();
+}
+/** The RSA part of a TLS-off connect request; the host validates the key itself. */
+function passwordRsaRequest(connection: Connection): { serverPublicKeyPem?: string; allowPublicKeyRetrieval?: true } {
+  const choice = passwordRsa(connection);
+  if (choice === 'retrieve') return { allowPublicKeyRetrieval: true };
+  if (choice === 'none') return {};
+  const pem = normalizePublicKey(connection.serverPublicKeyPem!);
+  if (!pem.startsWith('-----BEGIN PUBLIC KEY-----') || pem.includes('PRIVATE KEY')) throw new Error('Paste the server’s RSA public key (-----BEGIN PUBLIC KEY-----), or choose another option under Password without TLS.');
+  return { serverPublicKeyPem: pem };
 }
 /** Read-write routes (A15): Direct, and SSH for MySQL/MariaDB; PostgreSQL over SSH is read-only. */
 export function readWriteRoute(connection: Connection): boolean {
   return connection.transport.type !== 'ssh' || connection.engine === 'MySQL' || connection.engine === 'MariaDB';
 }
-/** Verified TLS unless TLS was explicitly turned off for this computer. */
+/** Verified TLS unless explicitly turned off (for another computer, with `remoteTlsOff` too). */
 export function usesTls(connection: Connection): boolean {
-  return !tlsOptional(connection) || connection.tls !== false;
+  return !tlsOptional(connection) || connection.tls !== false
+    || (!isLoopbackHost(connection.host) && connection.remoteTlsOff !== true);
+}
+/** Status wording for a connection without TLS. */
+export function tlsOffLabel(connection: Connection): string {
+  return isLoopbackHost(connection.host) ? 'TLS off (this computer)' : 'TLS off (unencrypted network)';
 }
 /** Read-only unless `access` is `read_write` (a Direct profile not marked read-only, A15). */
 export async function openLive(connection: Connection, attemptId?: string, access: AccessModeDto = 'read_only'): Promise<LiveConnection> {
@@ -86,7 +127,7 @@ export async function openLive(connection: Connection, attemptId?: string, acces
     username: connection.user, password: connection.password || '', database: connection.database,
     // TLS off sends no CA (a CA has no meaning without TLS) and never falls back the other way.
     rootCertificatePem: tls ? connection.rootCertificatePem || null : null,
-    ...(tls ? {} : { tls: false }),
+    ...(tls ? {} : { tls: false, ...passwordRsaRequest(connection) }),
     ...(!connection.password && connection.passwordRef ? { passwordRef: connection.passwordRef } : {}),
     ...(ssh ? { ssh } : {}),
     ...(attemptId ? { attemptId } : {}),

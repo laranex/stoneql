@@ -190,6 +190,7 @@ pub enum ErrorCodeDto {
     UnresolvedOutcomes,
     OutcomeJournalUnavailable,
     EncryptedLoginRequired,
+    SecureTransportRequired,
     PermissionDenied,
     UnknownDatabase,
     SecretStoreLocked,
@@ -236,6 +237,7 @@ impl From<CoreError> for ErrorDto {
             ErrorCode::UnresolvedOutcomes => ErrorCodeDto::UnresolvedOutcomes,
             ErrorCode::OutcomeJournalUnavailable => ErrorCodeDto::OutcomeJournalUnavailable,
             ErrorCode::EncryptedLoginRequired => ErrorCodeDto::EncryptedLoginRequired,
+            ErrorCode::SecureTransportRequired => ErrorCodeDto::SecureTransportRequired,
             ErrorCode::PermissionDenied => ErrorCodeDto::PermissionDenied,
             ErrorCode::UnknownDatabase => ErrorCodeDto::UnknownDatabase,
             ErrorCode::SecretStoreLocked => ErrorCodeDto::SecretStoreLocked,
@@ -355,11 +357,21 @@ pub struct DirectConnectionRequest {
     pub database: String,
     pub root_certificate_pem: Option<String>,
     // Omitted or true: verified TLS (certificate chain and host name). False: no TLS at all,
-    // accepted only for direct MySQL/MariaDB to localhost, 127.0.0.1 or ::1 without a CA.
-    // A TLS failure is never retried without TLS.
+    // accepted only for direct MySQL/MariaDB (any host) without a CA or SSH tunnel. A TLS
+    // failure is never retried without TLS, and plaintext is never upgraded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tls: Option<bool>,
+    // TLS off only: trusted RSA public key (PEM `PUBLIC KEY`) that protects the password when
+    // the server asks for a full sign-in. It is never requested from the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub server_public_key_pem: Option<String>,
+    // TLS off only, explicit opt-in: request the server's RSA public key, unverified, when no
+    // trusted key is given. A server impersonating the real one could then read the password.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allow_public_key_retrieval: Option<bool>,
     // Opaque OS secret reference used when `password` is empty. Resolved only by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

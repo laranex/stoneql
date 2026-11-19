@@ -23,7 +23,7 @@ Verify on macOS with `shasum -a 256 -c --ignore-missing SHA256SUMS`, on Linux wi
 
 ## What the beta does
 
-- Live MySQL, MariaDB and PostgreSQL over Direct or SSH tunnel (SSH on macOS and Linux), with verified TLS (TLS is optional for MySQL/MariaDB on this computer). Passwords can be saved: macOS login Keychain; Windows DPAPI-encrypted files for the user account; Linux Secret Service, or without one StoneQL's master-password encrypted file.
+- Live MySQL, MariaDB and PostgreSQL over Direct or SSH tunnel (SSH on macOS and Linux), with verified TLS (MySQL/MariaDB over Direct can turn TLS off, with an RSA-protected password exchange as chosen). Passwords can be saved: macOS login Keychain; Windows DPAPI-encrypted files for the user account; Linux Secret Service, or without one StoneQL's master-password encrypted file.
 - Read-write by default (MySQL/MariaDB Direct and SSH, PostgreSQL Direct), with a saved **Read-only connection** option; PostgreSQL over SSH is read-only. PROD-tagged connections ask for confirmation.
 - Browse with server-side paging, sort and filter; insert, edit and delete rows of tables with a primary key; SQL scripts and transactions.
 - MySQL/MariaDB: the Explorer lists every database the account can see, switches between them and creates databases.

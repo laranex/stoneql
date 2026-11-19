@@ -137,6 +137,7 @@ async fn ssh_cancellation_uses_owned_fixture() {
                 database: "stoneql_m001_fixture".into(),
                 root_certificate_pem: Some(std::fs::read(var("STONEQL_LIFECYCLE_CA")).unwrap()),
                 tls: true,
+                rsa_key: crate::PasswordRsaKey::None,
             },
             Some(crate::SshConfig {
                 host: "127.0.0.1".into(),

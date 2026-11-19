@@ -94,9 +94,11 @@ pub enum ErrorCode {
     /// damaged journal awaits acknowledgement: new read-write work is refused before anything
     /// is sent.
     OutcomeJournalUnavailable,
-    /// A plaintext (TLS off) MySQL/MariaDB connection was refused because the server requires
-    /// secure transport or the account's first sign-in needs encryption. Never retried.
+    /// TLS off: the server asked for a full sign-in that needs its RSA public key, and no
+    /// trusted key is set and fetching it was not allowed. The password was not sent.
     EncryptedLoginRequired,
+    /// TLS off: the server accepts only secure transport. Never retried with TLS.
+    SecureTransportRequired,
     /// The server denied this account the requested database or action.
     PermissionDenied,
     /// The requested database does not exist on the server.
@@ -150,7 +152,10 @@ impl ErrorCode {
                 "Unknown outcomes cannot be saved durably right now; no new read-write work was started."
             }
             Self::EncryptedLoginRequired => {
-                "The server requires an encrypted sign-in for this account; nothing was retried without TLS."
+                "The server asked for a full sign-in, which without TLS needs its RSA public key; the password was not sent."
+            }
+            Self::SecureTransportRequired => {
+                "The server accepts only TLS connections; nothing was retried with TLS."
             }
             Self::PermissionDenied => "The server denied this account access; nothing was changed.",
             Self::UnknownDatabase => "That database does not exist on the server.",

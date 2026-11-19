@@ -13,7 +13,8 @@ futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # Runtime drivers are isolated here, never in core/contracts or host adapters.
-sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "mysql", "postgres"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "mysql", "mysql-rsa", "postgres"] }
+rsa = "=0.10.0"
 tokio = { workspace = true, features = ["net", "io-util"] }
 uuid.workspace = true
 # SSH transport (D016): pure-Rust client, ring backend, no RSA (RUSTSEC-2023-0071 is unpatched).

@@ -11,7 +11,9 @@ use stoneql_contracts::v1::{
     SwitchDatabaseRequest,
 };
 use stoneql_core::{CoreError, Engine, ErrorCode, Outcome};
-use stoneql_runtime::{Access, ConnectionId, DirectServer, LifecycleError, QueryLimits, ReadError};
+use stoneql_runtime::{
+    Access, ConnectionId, DirectServer, LifecycleError, PasswordRsaKey, QueryLimits, ReadError,
+};
 use tauri::{Runtime, State, WebviewWindow};
 pub(crate) fn authorize<R: Runtime>(
     window: &WebviewWindow<R>,
@@ -77,6 +79,7 @@ pub(crate) fn lifecycle(error: LifecycleError) -> ErrorDto {
         LifecycleError::Unsupported => ErrorCode::UnsupportedCapability,
         LifecycleError::Cancelled => ErrorCode::Cancelled,
         LifecycleError::EncryptedLoginRequired => ErrorCode::EncryptedLoginRequired,
+        LifecycleError::SecureTransportRequired => ErrorCode::SecureTransportRequired,
         LifecycleError::Busy => ErrorCode::Busy,
         LifecycleError::DatabaseAccessDenied => ErrorCode::PermissionDenied,
         LifecycleError::UnknownDatabase => ErrorCode::UnknownDatabase,
@@ -138,14 +141,27 @@ pub async fn connect_direct<R: Runtime>(
     {
         return Err(invalid());
     }
-    // TLS off is an explicit choice for this computer only, refused here before any secret is
-    // resolved or network I/O (the runtime checks the same rule again).
+    // TLS off is an explicit Direct MySQL/MariaDB choice; its RSA options apply only then. Both
+    // are refused here before any secret is resolved or network I/O (the runtime checks again).
     let tls = input.tls.unwrap_or(true);
-    if !tls
+    let rsa_key = match (
+        input.server_public_key_pem,
+        input.allow_public_key_retrieval,
+    ) {
+        (None, None | Some(false)) => PasswordRsaKey::None,
+        (None, Some(true)) => PasswordRsaKey::RetrieveUnverified,
+        (Some(pem), None | Some(false))
+            if PasswordRsaKey::is_valid_public_key_pem(pem.as_bytes()) =>
+        {
+            PasswordRsaKey::Trusted(pem.into_bytes())
+        }
+        _ => return Err(invalid()),
+    };
+    if (!tls
         && (input.ssh.is_some()
             || !matches!(engine, Engine::MySql | Engine::MariaDb)
-            || !stoneql_runtime::is_loopback_host(&input.host)
-            || input.root_certificate_pem.is_some())
+            || input.root_certificate_pem.is_some()))
+        || (tls && rsa_key != PasswordRsaKey::None)
     {
         return Err(invalid());
     }
@@ -210,6 +226,7 @@ pub async fn connect_direct<R: Runtime>(
                 database: input.database,
                 root_certificate_pem: input.root_certificate_pem.map(String::into_bytes),
                 tls,
+                rsa_key,
             },
             tunnel,
             attempt,

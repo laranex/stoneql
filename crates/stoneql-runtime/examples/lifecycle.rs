@@ -20,6 +20,7 @@ fn config(engine: Engine, port: u16, password: String, ca: Vec<u8>) -> DirectSer
         database: "stoneql_m001_fixture".into(),
         root_certificate_pem: Some(ca),
         tls: true,
+        rsa_key: stoneql_runtime::PasswordRsaKey::None,
     }
 }
 fn certificate_failure(error: &sqlx::Error) -> Option<String> {

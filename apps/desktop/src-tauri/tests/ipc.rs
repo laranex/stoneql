@@ -1350,10 +1350,11 @@ fn sql_import_grants_are_native_and_commands_refuse_before_reading() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Use TLS: turning TLS off is accepted only for direct MySQL/MariaDB to this computer without a
-/// CA. Every other request is refused before secrets, SSH or network work (no timeout).
+/// Use TLS: turning TLS off is accepted only for direct MySQL/MariaDB without a CA, and the RSA
+/// password options only with TLS off and a valid RSA public key. Every other request is refused
+/// before secrets, SSH or network work (no timeout).
 #[test]
-fn plaintext_is_refused_natively_except_for_direct_loopback_mysql() {
+fn plaintext_and_rsa_options_are_refused_natively_unless_valid() {
     let (app, _journal) = app();
     let webview = window(&app, "main");
     let session = bootstrap(&webview).payload.session_id;
@@ -1366,10 +1367,17 @@ fn plaintext_is_refused_natively_except_for_direct_loopback_mysql() {
             .extend(changes.as_object().unwrap().clone());
         payload
     };
+    let key = include_str!("../../../../crates/stoneql-runtime/tests/fixtures/rsa-public-key.pem");
     for payload in [
-        base.clone(),
-        with(json!({"host":"localhost.example.com"})),
         with(json!({"engine":"postgresql","host":"127.0.0.1","port":5432})),
+        with(json!({"tls":true,"allowPublicKeyRetrieval":true})),
+        with(json!({"tls":true,"serverPublicKeyPem":key})),
+        with(json!({"serverPublicKeyPem":key,"allowPublicKeyRetrieval":true})),
+        with(
+            json!({"serverPublicKeyPem":"-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----"}),
+        ),
+        with(json!({"serverPublicKeyPem":format!("{key}-----BEGIN PRIVATE KEY-----")})),
+        with(json!({"engine":"postgresql","port":5432,"allowPublicKeyRetrieval":true})),
         with(
             json!({"host":"127.0.0.1","rootCertificatePem":"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----"}),
         ),
